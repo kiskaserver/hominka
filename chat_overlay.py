@@ -149,6 +149,21 @@ class DragBar(QFrame):
         self.pct.setStyleSheet("color:#a1a1aa; font:11px 'Segoe UI';")
         lay.addWidget(self.pct)
 
+        # Размер текста (зум страницы чата).
+        font_minus = QPushButton("A−", self)
+        font_minus.setToolTip("Уменьшить текст")
+        font_minus.setFixedSize(26, 24)
+        font_minus.setStyleSheet(BTN_CSS)
+        font_minus.clicked.connect(win.zoom_out)
+        lay.addWidget(font_minus)
+
+        font_plus = QPushButton("A+", self)
+        font_plus.setToolTip("Увеличить текст")
+        font_plus.setFixedSize(26, 24)
+        font_plus.setStyleSheet(BTN_CSS)
+        font_plus.clicked.connect(win.zoom_in)
+        lay.addWidget(font_plus)
+
         self.lock_btn = QPushButton("🔓", self)
         self.lock_btn.setToolTip("Клік-крізь: миша піде в гру (Ctrl+Alt+Space)")
         self.lock_btn.setFixedSize(26, 24)
@@ -192,6 +207,7 @@ class Overlay(QMainWindow):
     def __init__(self, url: str):
         super().__init__()
         self.click_through = False
+        self.zoom = 1.0  # масштаб текста чата
 
         self.setWindowFlags(
             Qt.Window | Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint | Qt.Tool
@@ -214,6 +230,8 @@ class Overlay(QMainWindow):
         self.view = QWebEngineView(self)
         self.view.page().setBackgroundColor(QColor(0, 0, 0, 0))
         self.view.setAttribute(Qt.WA_TranslucentBackground, True)
+        # Масштаб (размер текста) переживает перезагрузку страницы.
+        self.view.loadFinished.connect(lambda ok: self.view.setZoomFactor(self.zoom))
         self.view.load(QUrl(url))
         vbox.addWidget(self.view, 1)
 
@@ -248,6 +266,17 @@ class Overlay(QMainWindow):
             print("[chat-overlay] УВАГА: не вдалося виключити з захоплення "
                   "(потрібна Windows 10 2004+/11). OBS може бачити вікно.")
         self._register_hotkey()
+
+    def zoom_in(self):
+        self.set_zoom(self.zoom + 0.1)
+
+    def zoom_out(self):
+        self.set_zoom(self.zoom - 0.1)
+
+    def set_zoom(self, z: float):
+        self.zoom = max(0.5, min(3.0, round(z, 2)))
+        self.view.setZoomFactor(self.zoom)
+        self.save_config()
 
     def toggle_click_through(self):
         self.click_through = not self.click_through
@@ -285,6 +314,8 @@ class Overlay(QMainWindow):
         op = cfg.get("opacity", 0.94)
         self.setWindowOpacity(op)
         self.bar.opacity.setValue(int(op * 100))
+        self.zoom = float(cfg.get("zoom", 1.0))
+        self.view.setZoomFactor(self.zoom)
 
     def save_config(self):
         try:
@@ -292,6 +323,7 @@ class Overlay(QMainWindow):
                 json.dump({
                     "geometry": {"x": self.x(), "y": self.y(), "w": self.width(), "h": self.height()},
                     "opacity": round(self.windowOpacity(), 2),
+                    "zoom": self.zoom,
                 }, f)
         except Exception:
             pass
