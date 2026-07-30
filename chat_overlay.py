@@ -288,11 +288,9 @@ class SettingsPanel(QFrame):
         )
         self.setAttribute(Qt.WA_TranslucentBackground, True)
         self.setObjectName("panel")
-        self.setStyleSheet(
-            "#panel { background: rgba(18,16,24,0.98);"
-            " border: 1px solid rgba(168,85,247,0.40); border-radius: 12px; }"
-            "QLabel { color: #d4d4d8; font: 11px 'Segoe UI'; }"
-        )
+        # Фон малюємо у paintEvent (надійніше за стиль на верхньому вікні —
+        # інакше фон не прокрашувався і текст висів на білому). Тут лише текст.
+        self.setStyleSheet("QLabel { color: #d4d4d8; font: 11px 'Segoe UI'; }")
         self.setFixedWidth(288)
 
         lay = QVBoxLayout(self)
@@ -401,6 +399,15 @@ class SettingsPanel(QFrame):
     def showEvent(self, e):
         super().showEvent(e)
         exclude_from_capture(self)  # OBS не бачить і панель налаштувань
+
+    def paintEvent(self, e):
+        # Гарантований тёмний фон із заокругленням та акцентною рамкою.
+        p = QPainter(self)
+        p.setRenderHint(QPainter.Antialiasing)
+        p.setPen(QPen(QColor(168, 85, 247, 120), 1))
+        p.setBrush(QColor(18, 16, 24, 252))
+        r = self.rect().adjusted(0, 0, -1, -1)
+        p.drawRoundedRect(r, 12, 12)
 
 
 class DragBar(QFrame):
