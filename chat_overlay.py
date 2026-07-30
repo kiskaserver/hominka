@@ -30,8 +30,8 @@ import re
 import sys
 from ctypes import wintypes
 
-from PySide6.QtCore import Qt, QUrl  # noqa
-from PySide6.QtGui import QColor, QPainter, QPen
+from PySide6.QtCore import Qt, QUrl, QTimer, QPoint  # noqa
+from PySide6.QtGui import QColor, QPainter, QPen, QIcon
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QFrame, QVBoxLayout, QHBoxLayout,
     QSizeGrip, QPushButton, QLabel, QSlider, QLineEdit,
@@ -39,7 +39,16 @@ from PySide6.QtWidgets import (
 from PySide6.QtWebEngineWidgets import QWebEngineView
 
 # === Налаштування за замовчуванням ==========================================
+APP_NAME = "Svitix"
+APP_VERSION = "1.0.0"
+APP_AUTHOR = "Mykyta Vinnyk"
 CHAT_URL = "https://stream.svitix.com/overlay/chat?lang=uk"
+
+
+def resource_path(name: str) -> str:
+    """Шлях до ресурсу (працює і в .exe через PyInstaller _MEIPASS)."""
+    base = getattr(sys, "_MEIPASS", os.path.dirname(os.path.abspath(__file__)))
+    return os.path.join(base, name)
 
 # config.json — поряд з .exe (або зі скриптом у dev-режимі), щоб налаштування
 # зберігались і в зібраній програмі.
@@ -125,12 +134,13 @@ YT_STYLE_JS = r"""
     yt-live-chat-message-input-renderer,
     yt-live-chat-ticker-renderer,
     yt-live-chat-banner-manager,
+    yt-live-chat-viewer-engagement-message-renderer,
     #ticker, #panel-pages, #action-panel, #separator,
     #input-panel, #live-chat-message-input,
     yt-live-chat-text-message-renderer #timestamp,
     tp-yt-paper-tooltip { display: none !important; }
 
-    /* повідомлення — м'які плашки */
+    /* звичайні повідомлення — м'які плашки */
     yt-live-chat-text-message-renderer {
       padding: 5px 10px !important;
       margin: 5px 7px !important;
@@ -152,16 +162,48 @@ YT_STYLE_JS = r"""
       font-weight: 800 !important;
       text-shadow: 0 1px 2px rgba(0, 0, 0, 0.6) !important;
     }
-    yt-live-chat-text-message-renderer #message,
-    yt-live-chat-text-message-renderer #message * {
+    yt-live-chat-text-message-renderer #message {
       color: #fdf2ff !important;
       font-weight: 500 !important;
       text-shadow: 0 1px 3px rgba(0, 0, 0, 0.75) !important;
     }
-    yt-live-chat-paid-message-renderer {
-      border-radius: 14px !important;
-      margin: 6px 7px !important;
+    /* емодзі (авторські та стандартні) — не ховаємо, гарний розмір */
+    yt-live-chat-text-message-renderer #message img,
+    #message img.emoji, img.emoji {
+      height: 1.3em !important; width: auto !important;
+      vertical-align: -0.28em !important; margin: 0 1px !important;
+    }
+    /* значки-бейджі учасника біля імені (кастомні емодзі каналу) */
+    yt-live-chat-author-badge-renderer img,
+    yt-live-chat-author-badge-renderer #image { height: 1em !important; width: auto !important; }
+
+    /* Super Chat / Super Sticker — лишаємо кольори YouTube, лише округлюємо */
+    yt-live-chat-paid-message-renderer,
+    yt-live-chat-paid-sticker-renderer {
+      border-radius: 14px !important; margin: 6px 7px !important;
+      overflow: hidden !important;
       box-shadow: 0 2px 12px rgba(0, 0, 0, 0.45) !important;
+    }
+    /* Нові учасники / етапи членства (зелений акцент) */
+    yt-live-chat-membership-item-renderer {
+      border-radius: 14px !important; margin: 6px 7px !important;
+      background: rgba(16, 185, 129, 0.32) !important;
+      box-shadow: 0 1px 10px rgba(0, 0, 0, 0.42) !important;
+    }
+    yt-live-chat-membership-item-renderer #header *,
+    yt-live-chat-membership-item-renderer #message {
+      color: #ecfdf5 !important; text-shadow: 0 1px 2px rgba(0, 0, 0, 0.6) !important;
+    }
+    /* Подаровані підписки — «X подарував N підписок» / «отримав подарунок» */
+    yt-live-chat-sponsorships-gift-purchase-announcement-renderer,
+    yt-live-chat-sponsorships-gift-redemption-announcement-renderer {
+      border-radius: 14px !important; margin: 6px 7px !important;
+      background: rgba(168, 85, 247, 0.32) !important;
+      box-shadow: 0 1px 10px rgba(0, 0, 0, 0.42) !important;
+    }
+    yt-live-chat-sponsorships-gift-purchase-announcement-renderer #content *,
+    yt-live-chat-sponsorships-gift-redemption-announcement-renderer * {
+      color: #faf5ff !important; text-shadow: 0 1px 2px rgba(0, 0, 0, 0.6) !important;
     }
     ::-webkit-scrollbar { width: 0 !important; background: transparent !important; }
   `;
@@ -237,8 +279,14 @@ class SettingsPanel(QFrame):
     """Випадна панель налаштувань (⚙): посилання, прозорість, тло, шрифт."""
 
     def __init__(self, win: "Overlay"):
-        super().__init__(win.frame)
+        # Окреме верхнє вікно — інакше нативний QWebEngineView малює поверх
+        # панелі і видно лише обрізаний край (звідси «порізане ОК»).
+        super().__init__(None)
         self.win = win
+        self.setWindowFlags(
+            Qt.Tool | Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint
+        )
+        self.setAttribute(Qt.WA_TranslucentBackground, True)
         self.setObjectName("panel")
         self.setStyleSheet(
             "#panel { background: rgba(18,16,24,0.98);"
@@ -350,6 +398,10 @@ class SettingsPanel(QFrame):
     def sync_zoom(self):
         self.zoom_lbl.setText(f"{int(self.win.zoom * 100)}%")
 
+    def showEvent(self, e):
+        super().showEvent(e)
+        exclude_from_capture(self)  # OBS не бачить і панель налаштувань
+
 
 class DragBar(QFrame):
     """Верхня панель: тягнемо вікно + ⚙ налаштування + Lock + закрити."""
@@ -432,11 +484,19 @@ class Overlay(QMainWindow):
         self.url = resolve_chat_url(url) if url else CHAT_URL
         self.is_yt = is_youtube(self.url)
 
+        # Збереження config з дебаунсом — щоб не писати на диск на кожен піксель
+        # під час зміни розміру (звідси мікрофрізи).
+        self._save_timer = QTimer(self)
+        self._save_timer.setSingleShot(True)
+        self._save_timer.setInterval(400)
+        self._save_timer.timeout.connect(self._write_config)
+
         self.setWindowFlags(
             Qt.Window | Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint | Qt.Tool
         )
         self.setAttribute(Qt.WA_TranslucentBackground, True)
-        self.setWindowTitle("Chat Overlay")
+        self.setWindowTitle(APP_NAME)
+        self.setWindowIcon(QIcon(resource_path("svitix.ico")))
 
         self.frame = QFrame(self)
         self.frame.setObjectName("frame")
@@ -492,18 +552,27 @@ class Overlay(QMainWindow):
             # гарний прозорий стиль поверх YouTube-чату
             self.view.page().runJavaScript(YT_STYLE_JS)
 
-    # --- налаштування панель ---
+    # --- налаштування панель (окреме верхнє вікно) ---
     def toggle_settings(self):
         if self.panel.isVisible():
             self.panel.hide()
         else:
+            self.panel.adjustSize()
             self._place_panel()
             self.panel.show()
             self.panel.raise_()
+            self.panel.activateWindow()
 
     def _place_panel(self):
-        x = max(4, self.frame.width() - self.panel.width() - 6)
-        self.panel.move(x, self.bar.height() + 5)
+        # під кнопкою ⚙, вирівняно по правому краю, у глобальних координатах
+        g = self.bar.gear
+        anchor = g.mapToGlobal(QPoint(g.width(), g.height()))
+        x, y = anchor.x() - self.panel.width(), anchor.y() + 6
+        scr = self.screen().availableGeometry() if self.screen() else None
+        if scr:
+            x = max(scr.left() + 4, min(x, scr.right() - self.panel.width() - 4))
+            y = max(scr.top() + 4, min(y, scr.bottom() - self.panel.height() - 4))
+        self.panel.move(x, y)
 
     # --- розмір тексту ---
     def zoom_in(self):
@@ -591,6 +660,10 @@ class Overlay(QMainWindow):
         self._apply_border(self.accent)
 
     def save_config(self):
+        # дебаунс: реальний запис — через таймер (не на кожен resize-евент)
+        self._save_timer.start()
+
+    def _write_config(self):
         try:
             # у config пишемо саме те, що ввів користувач (порожньо = свій чат)
             raw_url = self.panel.url_edit.text() if hasattr(self, "panel") else ""
@@ -606,7 +679,8 @@ class Overlay(QMainWindow):
             pass
 
     def closeEvent(self, e):
-        self.save_config()
+        self._write_config()
+        self.panel.close()
         try:
             user32.UnregisterHotKey(_hwnd(self), HOTKEY_ID)
         except Exception:
@@ -618,6 +692,11 @@ def main():
     url = sys.argv[1] if len(sys.argv) > 1 else None
     os.environ.setdefault("QTWEBENGINE_CHROMIUM_FLAGS", "--enable-features=TranslucentWindows")
     app = QApplication(sys.argv)
+    app.setApplicationName(APP_NAME)
+    app.setApplicationDisplayName(APP_NAME)
+    app.setApplicationVersion(APP_VERSION)
+    app.setOrganizationName(APP_AUTHOR)
+    app.setWindowIcon(QIcon(resource_path("svitix.ico")))
     app.setQuitOnLastWindowClosed(True)
     win = Overlay(url)
     win.show()
