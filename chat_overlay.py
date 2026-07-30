@@ -2,19 +2,23 @@
 Chat Overlay — прозорий оверлей чату поверх гри, НЕВИДИМИЙ для OBS.
 
 Навіщо: у тебе один монітор, і чат, який OBS накладає на трансляцію, ти сам не
-бачиш. Ця програма показує твою сторінку чату (/overlay/chat) окремим вікном
-поверх усіх ігор, але Windows приховує це вікно від будь-якого захоплення екрана
-(OBS Display/Window/Game Capture його НЕ бачить — WDA_EXCLUDEFROMCAPTURE,
-Windows 10 2004+ / Windows 11).
+бачиш. Ця програма показує сторінку чату окремим вікном поверх усіх ігор, але
+Windows приховує це вікно від будь-якого захоплення екрана (OBS Display/Window/
+Game Capture його НЕ бачить — WDA_EXCLUDEFROMCAPTURE, Windows 10 2004+ / 11).
 
-Можливості:
-  • рамка навколо — видно, де вікно на екрані (фіолетова = звичайний режим,
-    зелена = клік-крізь);
-  • перетягування — за верхню панель;
-  • зміна розміру — за куточок унизу праворуч (або край);
-  • прозорість — повзунок на панелі (зі значенням у %);
-  • клік-крізь (миша йде в гру) — кнопка або Ctrl+Alt+Space;
-  • запам'ятовує розмір/позицію/прозорість (config.json).
+Джерело чату (⚙ → «Посилання на чат»):
+  • порожньо / твоя сторінка stream.svitix.com — показуємо як є (без змін);
+  • посилання на YouTube (трансляція або чат) — вмикаємо гарний прозорий стиль
+    (м'які рожево-фіолетові плашки), ховаємо зайвий інтерфейс YouTube.
+
+Можливості (панель ⚙):
+  • посилання на чат (YouTube / свій сайт);
+  • прозорість вікна (повзунок);
+  • тло / затемнення підкладки під чатом (повзунок);
+  • розмір тексту (A− / A+);
+  • клік-крізь (миша йде в гру) — кнопка 🔓 або Ctrl+Alt+Space;
+  • зміна розміру — за помітний куточок унизу праворуч;
+  • запам'ятовує все у config.json (поряд з .exe).
 
 Запуск:  python chat_overlay.py  [URL]
 """
@@ -22,21 +26,28 @@ Windows 10 2004+ / Windows 11).
 import ctypes
 import json
 import os
+import re
 import sys
 from ctypes import wintypes
 
 from PySide6.QtCore import Qt, QUrl  # noqa
-from PySide6.QtGui import QColor
+from PySide6.QtGui import QColor, QPainter, QPen
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QFrame, QVBoxLayout, QHBoxLayout,
-    QSizeGrip, QPushButton, QLabel, QSlider,
+    QSizeGrip, QPushButton, QLabel, QSlider, QLineEdit,
 )
 from PySide6.QtWebEngineWidgets import QWebEngineView
 
 # === Налаштування за замовчуванням ==========================================
 CHAT_URL = "https://stream.svitix.com/overlay/chat?lang=uk"
 
-CONFIG_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config.json")
+# config.json — поряд з .exe (або зі скриптом у dev-режимі), щоб налаштування
+# зберігались і в зібраній програмі.
+if getattr(sys, "frozen", False):
+    BASE_DIR = os.path.dirname(sys.executable)
+else:
+    BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+CONFIG_PATH = os.path.join(BASE_DIR, "config.json")
 
 ACCENT_ACTIVE = "#a855f7"   # рамка у звичайному режимі (фіолетова)
 ACCENT_LOCKED = "#22c55e"   # рамка у режимі клік-крізь (зелена)
@@ -77,6 +88,87 @@ def set_click_through(win, enabled: bool):
     user32.SetWindowLongW(hwnd, GWL_EXSTYLE, ex)
 
 
+# === Розбір посилання на чат ================================================
+def is_youtube(url: str) -> bool:
+    return "youtube.com" in url or "youtu.be" in url
+
+
+def resolve_chat_url(raw: str) -> str:
+    """Порожньо → твоя сторінка. YouTube (будь-яка форма) → popout live_chat.
+    Інше — віддаємо як є."""
+    raw = (raw or "").strip()
+    if not raw:
+        return CHAT_URL
+    if "youtube.com/live_chat" in raw:
+        return raw
+    if is_youtube(raw):
+        m = re.search(r"(?:v=|youtu\.be/|/live/|/embed/|/shorts/)([A-Za-z0-9_-]{11})", raw)
+        if m:
+            return f"https://www.youtube.com/live_chat?v={m.group(1)}&is_popout=1"
+    return raw
+
+
+# Гарний прозорий стиль для чату YouTube (м'які рожево-фіолетові плашки).
+YT_STYLE_JS = r"""
+(function () {
+  var id = '__cuteChatStyle';
+  if (document.getElementById(id)) return;
+  var s = document.createElement('style');
+  s.id = id;
+  s.textContent = `
+    html, body, yt-live-chat-renderer, #chat, #contents, #item-list,
+    #items, #item-scroller, #item-offset, #content-pages,
+    tp-yt-app-drawer, #primary { background: transparent !important; }
+
+    /* прибираємо зайвий інтерфейс YouTube */
+    yt-live-chat-header-renderer,
+    yt-live-chat-message-input-renderer,
+    yt-live-chat-ticker-renderer,
+    yt-live-chat-banner-manager,
+    #ticker, #panel-pages, #action-panel, #separator,
+    #input-panel, #live-chat-message-input,
+    yt-live-chat-text-message-renderer #timestamp,
+    tp-yt-paper-tooltip { display: none !important; }
+
+    /* повідомлення — м'які плашки */
+    yt-live-chat-text-message-renderer {
+      padding: 5px 10px !important;
+      margin: 5px 7px !important;
+      background: rgba(30, 22, 42, 0.42) !important;
+      border-radius: 14px !important;
+      box-shadow: 0 1px 8px rgba(0, 0, 0, 0.35) !important;
+    }
+    yt-live-chat-text-message-renderer[author-type="owner"] {
+      background: rgba(236, 72, 153, 0.30) !important;
+    }
+    yt-live-chat-text-message-renderer[author-type="moderator"] {
+      background: rgba(99, 102, 241, 0.30) !important;
+    }
+    yt-live-chat-text-message-renderer[author-type="member"] {
+      background: rgba(16, 185, 129, 0.26) !important;
+    }
+    yt-live-chat-text-message-renderer #author-name {
+      color: #f9a8d4 !important;
+      font-weight: 800 !important;
+      text-shadow: 0 1px 2px rgba(0, 0, 0, 0.6) !important;
+    }
+    yt-live-chat-text-message-renderer #message,
+    yt-live-chat-text-message-renderer #message * {
+      color: #fdf2ff !important;
+      font-weight: 500 !important;
+      text-shadow: 0 1px 3px rgba(0, 0, 0, 0.75) !important;
+    }
+    yt-live-chat-paid-message-renderer {
+      border-radius: 14px !important;
+      margin: 6px 7px !important;
+      box-shadow: 0 2px 12px rgba(0, 0, 0, 0.45) !important;
+    }
+    ::-webkit-scrollbar { width: 0 !important; background: transparent !important; }
+  `;
+  (document.head || document.documentElement).appendChild(s);
+})();
+"""
+
 BTN_CSS = """
 QPushButton {
     background: rgba(255,255,255,0.06);
@@ -101,9 +193,166 @@ QSlider::handle:horizontal {
 }
 """
 
+INPUT_CSS = """
+QLineEdit {
+    background: rgba(255,255,255,0.07); color: #fafafa;
+    border: 1px solid rgba(255,255,255,0.14); border-radius: 6px;
+    padding: 4px 7px; font: 12px 'Segoe UI';
+    selection-background-color: #a855f7;
+}
+QLineEdit:focus { border: 1px solid #a855f7; }
+"""
+
+
+class SizeGrip(QSizeGrip):
+    """Помітний куточок для зміни розміру (три діагональні риски в акценті)."""
+
+    def __init__(self, parent, accent: str):
+        super().__init__(parent)
+        self.accent = accent
+        self.setFixedSize(22, 22)
+        self.setToolTip("Тягни, щоб змінити розмір")
+
+    def set_accent(self, c: str):
+        self.accent = c
+        self.update()
+
+    def paintEvent(self, e):
+        p = QPainter(self)
+        p.setRenderHint(QPainter.Antialiasing)
+        # ледь помітна підкладка, щоб куточок було видно на будь-якому фоні
+        p.setPen(Qt.NoPen)
+        p.setBrush(QColor(0, 0, 0, 70))
+        p.drawRoundedRect(self.rect().adjusted(4, 4, 0, 0), 5, 5)
+        pen = QPen(QColor(self.accent))
+        pen.setWidth(2)
+        pen.setCapStyle(Qt.RoundCap)
+        p.setPen(pen)
+        w, h = self.width(), self.height()
+        for off in (0, 5, 10):
+            p.drawLine(w - 3, h - 13 + off, w - 13 + off, h - 3)
+
+
+class SettingsPanel(QFrame):
+    """Випадна панель налаштувань (⚙): посилання, прозорість, тло, шрифт."""
+
+    def __init__(self, win: "Overlay"):
+        super().__init__(win.frame)
+        self.win = win
+        self.setObjectName("panel")
+        self.setStyleSheet(
+            "#panel { background: rgba(18,16,24,0.98);"
+            " border: 1px solid rgba(168,85,247,0.40); border-radius: 12px; }"
+            "QLabel { color: #d4d4d8; font: 11px 'Segoe UI'; }"
+        )
+        self.setFixedWidth(288)
+
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(12, 11, 12, 12)
+        lay.setSpacing(6)
+
+        # --- Посилання на чат ---
+        lay.addWidget(self._cap("Посилання на чат"))
+        urow = QHBoxLayout()
+        urow.setSpacing(6)
+        self.url_edit = QLineEdit(win.url, self)
+        self.url_edit.setStyleSheet(INPUT_CSS)
+        self.url_edit.setPlaceholderText("YouTube-посилання або порожньо = твій чат")
+        self.url_edit.returnPressed.connect(self._apply_url)
+        urow.addWidget(self.url_edit, 1)
+        ok = QPushButton("OK", self)
+        ok.setFixedSize(38, 28)
+        ok.setStyleSheet(BTN_CSS + "QPushButton{background:#a855f7;color:#fff;font-weight:600;}"
+                         "QPushButton:hover{background:#9333ea;}")
+        ok.clicked.connect(self._apply_url)
+        urow.addWidget(ok)
+        lay.addLayout(urow)
+        hint = QLabel("YouTube → гарний прозорий стиль. Порожньо/свій сайт → без змін.", self)
+        hint.setStyleSheet("color:#8b8b93; font:10px 'Segoe UI';")
+        hint.setWordWrap(True)
+        lay.addWidget(hint)
+
+        lay.addSpacing(4)
+
+        # --- Прозорість вікна ---
+        lay.addWidget(self._cap("Прозорість вікна"))
+        self.opacity, self.op_pct = self._slider_row(lay, 25, 100, int(win.windowOpacity() * 100),
+                                                     self._on_opacity)
+
+        # --- Тло (затемнення) ---
+        lay.addWidget(self._cap("Тло під чатом (затемнення)"))
+        self.bg, self.bg_pct = self._slider_row(lay, 0, 85, int(win.bg_alpha * 100),
+                                                self._on_bg)
+
+        lay.addSpacing(4)
+
+        # --- Розмір тексту ---
+        lay.addWidget(self._cap("Розмір тексту"))
+        frow = QHBoxLayout()
+        frow.setSpacing(6)
+        minus = QPushButton("A−", self)
+        minus.setFixedSize(34, 26)
+        minus.setStyleSheet(BTN_CSS)
+        minus.clicked.connect(win.zoom_out)
+        frow.addWidget(minus)
+        self.zoom_lbl = QLabel(f"{int(win.zoom * 100)}%", self)
+        self.zoom_lbl.setAlignment(Qt.AlignCenter)
+        self.zoom_lbl.setFixedWidth(46)
+        self.zoom_lbl.setStyleSheet("color:#a1a1aa; font:11px 'Segoe UI';")
+        frow.addWidget(self.zoom_lbl)
+        plus = QPushButton("A+", self)
+        plus.setFixedSize(34, 26)
+        plus.setStyleSheet(BTN_CSS)
+        plus.clicked.connect(win.zoom_in)
+        frow.addWidget(plus)
+        frow.addStretch(1)
+        lay.addLayout(frow)
+
+        self.hide()
+
+    def _cap(self, text: str) -> QLabel:
+        lab = QLabel(text, self)
+        lab.setStyleSheet("color:#e9d5ff; font:600 11px 'Segoe UI';")
+        return lab
+
+    def _slider_row(self, parent_lay, lo, hi, val, cb):
+        row = QHBoxLayout()
+        row.setSpacing(8)
+        sld = QSlider(Qt.Horizontal, self)
+        sld.setRange(lo, hi)
+        sld.setValue(val)
+        sld.setStyleSheet(SLIDER_CSS % ACCENT_ACTIVE)
+        sld.valueChanged.connect(cb)
+        row.addWidget(sld, 1)
+        pct = QLabel(f"{val}%", self)
+        pct.setFixedWidth(36)
+        pct.setStyleSheet("color:#a1a1aa; font:11px 'Segoe UI';")
+        row.addWidget(pct)
+        parent_lay.addLayout(row)
+        return sld, pct
+
+    def _apply_url(self):
+        self.win.set_url(self.url_edit.text())
+
+    def _on_opacity(self, v):
+        self.win.setWindowOpacity(v / 100)
+        self.op_pct.setText(f"{v}%")
+        self.win.save_config()
+
+    def _on_bg(self, v):
+        self.bg_pct.setText(f"{v}%")
+        self.win.set_bg_alpha(v)
+
+    def set_accent(self, c: str):
+        self.opacity.setStyleSheet(SLIDER_CSS % c)
+        self.bg.setStyleSheet(SLIDER_CSS % c)
+
+    def sync_zoom(self):
+        self.zoom_lbl.setText(f"{int(self.win.zoom * 100)}%")
+
 
 class DragBar(QFrame):
-    """Верхня панель: тягнемо вікно + прозорість + Lock + закрити."""
+    """Верхня панель: тягнемо вікно + ⚙ налаштування + Lock + закрити."""
 
     def __init__(self, win: "Overlay"):
         super().__init__(win)
@@ -126,43 +375,17 @@ class DragBar(QFrame):
         self.dot.setStyleSheet(f"color:{ACCENT_ACTIVE}; font:12px 'Segoe UI';")
         lay.addWidget(self.dot)
 
-        title = QLabel("Chat", self)
-        title.setStyleSheet("color:#fafafa; font:600 12px 'Segoe UI';")
-        lay.addWidget(title)
+        self.title = QLabel("Chat", self)
+        self.title.setStyleSheet("color:#fafafa; font:600 12px 'Segoe UI';")
+        lay.addWidget(self.title)
         lay.addStretch(1)
 
-        op_icon = QLabel("◐", self)
-        op_icon.setStyleSheet("color:#a1a1aa; font:12px 'Segoe UI';")
-        op_icon.setToolTip("Прозорість")
-        lay.addWidget(op_icon)
-
-        self.opacity = QSlider(Qt.Horizontal, self)
-        self.opacity.setFixedWidth(84)
-        self.opacity.setRange(25, 100)
-        self.opacity.setValue(int(win.windowOpacity() * 100))
-        self.opacity.setStyleSheet(SLIDER_CSS % ACCENT_ACTIVE)
-        self.opacity.valueChanged.connect(self._on_opacity)
-        lay.addWidget(self.opacity)
-
-        self.pct = QLabel(f"{self.opacity.value()}%", self)
-        self.pct.setFixedWidth(34)
-        self.pct.setStyleSheet("color:#a1a1aa; font:11px 'Segoe UI';")
-        lay.addWidget(self.pct)
-
-        # Размер текста (зум страницы чата).
-        font_minus = QPushButton("A−", self)
-        font_minus.setToolTip("Уменьшить текст")
-        font_minus.setFixedSize(26, 24)
-        font_minus.setStyleSheet(BTN_CSS)
-        font_minus.clicked.connect(win.zoom_out)
-        lay.addWidget(font_minus)
-
-        font_plus = QPushButton("A+", self)
-        font_plus.setToolTip("Увеличить текст")
-        font_plus.setFixedSize(26, 24)
-        font_plus.setStyleSheet(BTN_CSS)
-        font_plus.clicked.connect(win.zoom_in)
-        lay.addWidget(font_plus)
+        self.gear = QPushButton("⚙", self)
+        self.gear.setToolTip("Налаштування: посилання, прозорість, тло, шрифт")
+        self.gear.setFixedSize(26, 24)
+        self.gear.setStyleSheet(BTN_CSS)
+        self.gear.clicked.connect(win.toggle_settings)
+        lay.addWidget(self.gear)
 
         self.lock_btn = QPushButton("🔓", self)
         self.lock_btn.setToolTip("Клік-крізь: миша піде в гру (Ctrl+Alt+Space)")
@@ -178,15 +401,10 @@ class DragBar(QFrame):
         close.clicked.connect(win.close)
         lay.addWidget(close)
 
-    def _on_opacity(self, v):
-        self.win.setWindowOpacity(v / 100)
-        self.pct.setText(f"{v}%")
-
     def set_locked(self, locked: bool):
         self.lock_btn.setText("🔒" if locked else "🔓")
         c = ACCENT_LOCKED if locked else ACCENT_ACTIVE
         self.dot.setStyleSheet(f"color:{c}; font:12px 'Segoe UI';")
-        self.opacity.setStyleSheet(SLIDER_CSS % c)
 
     # перетягування вікна за панель
     def mousePressEvent(self, e):
@@ -204,10 +422,15 @@ class DragBar(QFrame):
 
 
 class Overlay(QMainWindow):
-    def __init__(self, url: str):
+    def __init__(self, url: str | None = None):
         super().__init__()
         self.click_through = False
-        self.zoom = 1.0  # масштаб текста чата
+        self.zoom = 1.0            # масштаб тексту чату
+        self.bg_alpha = 0.30       # затемнення підкладки під чатом
+        self.accent = ACCENT_ACTIVE
+        self._cli_url = url        # URL з аргументу командного рядка (пріоритет)
+        self.url = resolve_chat_url(url) if url else CHAT_URL
+        self.is_yt = is_youtube(self.url)
 
         self.setWindowFlags(
             Qt.Window | Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint | Qt.Tool
@@ -215,7 +438,6 @@ class Overlay(QMainWindow):
         self.setAttribute(Qt.WA_TranslucentBackground, True)
         self.setWindowTitle("Chat Overlay")
 
-        # Рамка навколо всього — видно, де вікно; колір показує режим.
         self.frame = QFrame(self)
         self.frame.setObjectName("frame")
         self._apply_border(ACCENT_ACTIVE)
@@ -230,43 +452,60 @@ class Overlay(QMainWindow):
         self.view = QWebEngineView(self)
         self.view.page().setBackgroundColor(QColor(0, 0, 0, 0))
         self.view.setAttribute(Qt.WA_TranslucentBackground, True)
-        # Масштаб (размер текста) переживает перезагрузку страницы.
-        self.view.loadFinished.connect(lambda ok: self.view.setZoomFactor(self.zoom))
-        self.view.load(QUrl(url))
+        self.view.loadFinished.connect(self._on_loaded)
         vbox.addWidget(self.view, 1)
 
         self.setCentralWidget(self.frame)
 
-        self.grip = QSizeGrip(self.frame)
-        self.grip.setFixedSize(18, 18)
-        self.grip.setStyleSheet("background: transparent;")
+        self.panel = SettingsPanel(self)
+
+        self.grip = SizeGrip(self.frame, ACCENT_ACTIVE)
 
         self._load_config()
+        self.view.load(QUrl(self.url))
 
     def _apply_border(self, accent: str):
-        # Напівпрозорий темний фон під чатом (краще видно на світлих іграх) + рамка.
+        self.accent = accent
         self.frame.setStyleSheet(
             "#frame {"
-            " background: rgba(12,12,15,0.30);"
+            f" background: rgba(12,12,15,{self.bg_alpha:.2f});"
             f" border: 2px solid {accent};"
             " border-radius: 11px;"
             " }"
         )
+        if hasattr(self, "grip"):
+            self.grip.set_accent(accent)
 
-    def resizeEvent(self, e):
-        super().resizeEvent(e)
-        self.grip.move(self.width() - self.grip.width() - 3,
-                       self.height() - self.grip.height() - 3)
-        self.grip.raise_()
+    # --- джерело чату ---
+    def set_url(self, raw: str):
+        self.url = resolve_chat_url(raw)
+        self.is_yt = is_youtube(self.url)
+        self.bar.title.setText("YouTube" if self.is_yt else "Chat")
+        if self.panel.url_edit.text() != raw:
+            self.panel.url_edit.setText(raw)
+        self.view.load(QUrl(self.url))
         self.save_config()
 
-    def showEvent(self, e):
-        super().showEvent(e)
-        if not exclude_from_capture(self):
-            print("[chat-overlay] УВАГА: не вдалося виключити з захоплення "
-                  "(потрібна Windows 10 2004+/11). OBS може бачити вікно.")
-        self._register_hotkey()
+    def _on_loaded(self, ok: bool):
+        self.view.setZoomFactor(self.zoom)
+        if ok and self.is_yt:
+            # гарний прозорий стиль поверх YouTube-чату
+            self.view.page().runJavaScript(YT_STYLE_JS)
 
+    # --- налаштування панель ---
+    def toggle_settings(self):
+        if self.panel.isVisible():
+            self.panel.hide()
+        else:
+            self._place_panel()
+            self.panel.show()
+            self.panel.raise_()
+
+    def _place_panel(self):
+        x = max(4, self.frame.width() - self.panel.width() - 6)
+        self.panel.move(x, self.bar.height() + 5)
+
+    # --- розмір тексту ---
     def zoom_in(self):
         self.set_zoom(self.zoom + 0.1)
 
@@ -276,12 +515,36 @@ class Overlay(QMainWindow):
     def set_zoom(self, z: float):
         self.zoom = max(0.5, min(3.0, round(z, 2)))
         self.view.setZoomFactor(self.zoom)
+        self.panel.sync_zoom()
         self.save_config()
+
+    # --- тло ---
+    def set_bg_alpha(self, v: int):
+        self.bg_alpha = max(0.0, min(0.85, v / 100))
+        self._apply_border(self.accent)
+        self.save_config()
+
+    def resizeEvent(self, e):
+        super().resizeEvent(e)
+        self.grip.move(self.width() - self.grip.width() - 3,
+                       self.height() - self.grip.height() - 3)
+        self.grip.raise_()
+        if self.panel.isVisible():
+            self._place_panel()
+        self.save_config()
+
+    def showEvent(self, e):
+        super().showEvent(e)
+        if not exclude_from_capture(self):
+            print("[chat-overlay] УВАГА: не вдалося виключити з захоплення "
+                  "(потрібна Windows 10 2004+/11). OBS може бачити вікно.")
+        self._register_hotkey()
 
     def toggle_click_through(self):
         self.click_through = not self.click_through
         set_click_through(self, self.click_through)
         self.bar.set_locked(self.click_through)
+        self.panel.set_accent(ACCENT_LOCKED if self.click_through else ACCENT_ACTIVE)
         self._apply_border(ACCENT_LOCKED if self.click_through else ACCENT_ACTIVE)
 
     def _register_hotkey(self):
@@ -313,17 +576,31 @@ class Overlay(QMainWindow):
             self.move(60, 60)
         op = cfg.get("opacity", 0.94)
         self.setWindowOpacity(op)
-        self.bar.opacity.setValue(int(op * 100))
         self.zoom = float(cfg.get("zoom", 1.0))
-        self.view.setZoomFactor(self.zoom)
+        self.bg_alpha = float(cfg.get("bg_alpha", 0.30))
+        # URL: аргумент командного рядка > config > дефолт
+        if not self._cli_url:
+            self.url = resolve_chat_url(cfg.get("url", "")) if cfg.get("url") else CHAT_URL
+            self.is_yt = is_youtube(self.url)
+        # синхронізуємо панель з завантаженими значеннями
+        self.panel.url_edit.setText(cfg.get("url", "") if not self._cli_url else (self._cli_url or ""))
+        self.panel.opacity.setValue(int(op * 100))
+        self.panel.bg.setValue(int(self.bg_alpha * 100))
+        self.panel.sync_zoom()
+        self.bar.title.setText("YouTube" if self.is_yt else "Chat")
+        self._apply_border(self.accent)
 
     def save_config(self):
         try:
+            # у config пишемо саме те, що ввів користувач (порожньо = свій чат)
+            raw_url = self.panel.url_edit.text() if hasattr(self, "panel") else ""
             with open(CONFIG_PATH, "w", encoding="utf-8") as f:
                 json.dump({
                     "geometry": {"x": self.x(), "y": self.y(), "w": self.width(), "h": self.height()},
                     "opacity": round(self.windowOpacity(), 2),
                     "zoom": self.zoom,
+                    "bg_alpha": round(self.bg_alpha, 2),
+                    "url": raw_url,
                 }, f)
         except Exception:
             pass
@@ -338,7 +615,7 @@ class Overlay(QMainWindow):
 
 
 def main():
-    url = sys.argv[1] if len(sys.argv) > 1 else CHAT_URL
+    url = sys.argv[1] if len(sys.argv) > 1 else None
     os.environ.setdefault("QTWEBENGINE_CHROMIUM_FLAGS", "--enable-features=TranslucentWindows")
     app = QApplication(sys.argv)
     app.setQuitOnLastWindowClosed(True)
