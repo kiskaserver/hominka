@@ -1,18 +1,17 @@
 @echo off
-REM Запуск оверлея чату. Перший запуск сам поставить залежності.
 cd /d "%~dp0"
+chcp 65001 >nul
 
 where py >nul 2>nul && (set PY=py) || (set PY=python)
 
 if not exist ".venv\" (
-  echo [chat-overlay] Створюю venv і ставлю PySide6 (одноразово, ~хвилина)...
-  %PY% -m venv .venv
-  call ".venv\Scripts\activate.bat"
-  python -m pip install --upgrade pip >nul
-  python -m pip install -r requirements.txt
+    echo [chat-overlay] Creating venv and installing PySide6...
+    %PY% -m venv .venv
+    call ".venv\Scripts\activate.bat"
+    python -m pip install --upgrade pip >nul
+    python -m pip install -r requirements.txt
 ) else (
-  call ".venv\Scripts\activate.bat"
+    call ".venv\Scripts\activate.bat"
 )
 
-REM pythonw = без чорного вікна консолі
 start "" ".venv\Scripts\pythonw.exe" chat_overlay.py %*
