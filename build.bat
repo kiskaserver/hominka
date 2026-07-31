@@ -1,5 +1,5 @@
 @echo off
-REM Збирає Svitix.exe (standalone) через PyInstaller.
+REM Збирає Hominka.exe (standalone) через PyInstaller.
 cd /d "%~dp0"
 chcp 65001 >nul
 
@@ -16,11 +16,11 @@ python -m pip install pyinstaller pillow >nul
 echo [build] Генерую іконку...
 python make_icon.py
 
-echo [build] Збираю Svitix.exe (кілька хвилин)...
-pyinstaller --noconfirm --clean --windowed --name Svitix ^
-  --icon svitix.ico --version-file version_info.txt --add-data "svitix.ico;." ^
+echo [build] Збираю Hominka.exe (кілька хвилин)...
+pyinstaller --noconfirm --clean --windowed --name Hominka ^
+  --icon hominka.ico --version-file version_info.txt --add-data "hominka.ico;." ^
   chat_overlay.py
 
 echo.
-echo [build] Готово. Запускай:  dist\Svitix\Svitix.exe
+echo [build] Готово. Запускай:  dist\Hominka\Hominka.exe
 pause

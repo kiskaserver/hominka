@@ -18,12 +18,12 @@ VSVersionInfo(
           '040904B0',
           [
             StringStruct('CompanyName', 'Mykyta Vinnyk'),
-            StringStruct('FileDescription', 'Svitix — chat overlay (invisible to OBS)'),
+            StringStruct('FileDescription', 'Hominka — chat overlay (invisible to OBS)'),
             StringStruct('FileVersion', '1.0.0'),
-            StringStruct('InternalName', 'Svitix'),
+            StringStruct('InternalName', 'Hominka'),
             StringStruct('LegalCopyright', '© Mykyta Vinnyk'),
-            StringStruct('OriginalFilename', 'Svitix.exe'),
-            StringStruct('ProductName', 'Svitix'),
+            StringStruct('OriginalFilename', 'Hominka.exe'),
+            StringStruct('ProductName', 'Hominka'),
             StringStruct('ProductVersion', '1.0.0')
           ]
         )

@@ -1,4 +1,4 @@
-"""Генерує svitix.ico — м'яка фіолетово-рожева плитка з чат-бульбашкою та
+"""Генерує hominka.ico — м'яка фіолетово-рожева плитка з чат-бульбашкою та
 іскоркою, у стилі stream.svitix.com. Запуск: python make_icon.py"""
 import os
 from PIL import Image, ImageDraw
@@ -71,10 +71,10 @@ def main():
     here = os.path.dirname(os.path.abspath(__file__))
     sizes = [256, 128, 64, 48, 32, 16]
     imgs = [make(s) for s in sizes]
-    out = os.path.join(here, "svitix.ico")
+    out = os.path.join(here, "hominka.ico")
     imgs[0].save(out, format="ICO", sizes=[(s, s) for s in sizes])
     # також PNG для перегляду
-    make(256).save(os.path.join(here, "svitix.png"))
+    make(256).save(os.path.join(here, "hominka.png"))
     print("written:", out)
 
 

@@ -39,7 +39,8 @@ from PySide6.QtWidgets import (
 from PySide6.QtWebEngineWidgets import QWebEngineView
 
 # === Налаштування за замовчуванням ==========================================
-APP_NAME = "Svitix"
+APP_NAME = "Hominka"          # від укр. «гомін» — гомін голосів у чаті
+APP_ICON = "hominka.ico"
 APP_VERSION = "1.0.0"
 APP_AUTHOR = "Mykyta Vinnyk"
 CHAT_URL = "https://stream.svitix.com/overlay/chat?lang=uk"
@@ -503,7 +504,7 @@ class Overlay(QMainWindow):
         )
         self.setAttribute(Qt.WA_TranslucentBackground, True)
         self.setWindowTitle(APP_NAME)
-        self.setWindowIcon(QIcon(resource_path("svitix.ico")))
+        self.setWindowIcon(QIcon(resource_path(APP_ICON)))
 
         self.frame = QFrame(self)
         self.frame.setObjectName("frame")
@@ -687,12 +688,25 @@ class Overlay(QMainWindow):
 
     def closeEvent(self, e):
         self._write_config()
-        self.panel.close()
         try:
             user32.UnregisterHotKey(_hwnd(self), HOTKEY_ID)
         except Exception:
             pass
+        # Явне прибирання — інакше вікно налаштувань (окреме верхнє вікно) та
+        # дочірній QtWebEngineProcess лишають процес висіти після закриття ✕.
+        try:
+            self.panel.close()
+            self.panel.deleteLater()
+        except Exception:
+            pass
+        try:
+            self.view.stop()
+            self.view.setParent(None)
+            self.view.deleteLater()
+        except Exception:
+            pass
         super().closeEvent(e)
+        QApplication.quit()
 
 
 def main():
@@ -703,7 +717,7 @@ def main():
     app.setApplicationDisplayName(APP_NAME)
     app.setApplicationVersion(APP_VERSION)
     app.setOrganizationName(APP_AUTHOR)
-    app.setWindowIcon(QIcon(resource_path("svitix.ico")))
+    app.setWindowIcon(QIcon(resource_path(APP_ICON)))
     app.setQuitOnLastWindowClosed(True)
     win = Overlay(url)
     win.show()
