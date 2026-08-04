@@ -41,12 +41,15 @@ from PySide6.QtWebEngineWidgets import QWebEngineView
 # === Налаштування за замовчуванням ==========================================
 APP_NAME = "Hominka"          # від укр. «гомін» — гомін голосів у чаті
 APP_ICON = "hominka.ico"
-APP_VERSION = "1.0.1"
+APP_VERSION = "1.0.2"
 APP_AUTHOR = "Mykyta Vinnyk"
 # Ключ доступу до оверлеїв (?key=) обовʼязковий: без нього сервер відповідає 403.
 # Перевипуск ключа в адмінці ламає це посилання — тоді треба оновити рядок нижче
 # (або просто вставити новий URL у полі налаштувань — воно має пріоритет).
-CHAT_URL = "https://stream.svitix.com/overlay/chat?lang=uk&key=YOUR_OVERLAY_KEY"
+# raw=1 — особисте вікно: показує повідомлення ДО автомодерації (вирізане
+# фільтром позначається червоним). Цей параметр НЕ можна ставити в OBS —
+# джерело з ним покаже глядачам те, що фільтр прибрав.
+CHAT_URL = "https://stream.svitix.com/overlay/chat?lang=uk&raw=1&key=YOUR_OVERLAY_KEY"
 
 
 def resource_path(name: str) -> str:
