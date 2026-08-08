@@ -32,18 +32,24 @@ import re
 import sys
 from ctypes import wintypes
 
+from urllib.parse import quote
+
 from PySide6.QtCore import Qt, QUrl, QTimer, QPoint  # noqa
 from PySide6.QtGui import QColor, QPainter, QPen, QIcon
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QFrame, QVBoxLayout, QHBoxLayout,
-    QSizeGrip, QPushButton, QLabel, QSlider, QLineEdit,
+    QSizeGrip, QPushButton, QLabel, QSlider, QLineEdit, QComboBox, QCheckBox,
+    QProgressBar,
 )
+from PySide6.QtWebEngineCore import QWebEngineProfile, QWebEnginePage
 from PySide6.QtWebEngineWidgets import QWebEngineView
+
+import updater
 
 # === Налаштування за замовчуванням ==========================================
 APP_NAME = "Hominka"          # від укр. «гомін» — гомін голосів у чаті
 APP_ICON = "hominka.ico"
-APP_VERSION = "1.0.3"
+APP_VERSION = "1.1.0"
 APP_AUTHOR = "Mykyta Vinnyk"
 # Ключ доступу до оверлеїв (?key=) обовʼязковий: без нього сервер відповідає 403.
 # Перевипуск ключа в адмінці ламає це посилання — тоді треба оновити рядок нижче
@@ -66,6 +72,30 @@ if getattr(sys, "frozen", False):
 else:
     BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 CONFIG_PATH = os.path.join(BASE_DIR, "config.json")
+# Профіль браузера — поряд із програмою, щоб вхід у YouTube пережив перезапуск
+# (див. build_profile).
+PROFILE_DIR = os.path.join(BASE_DIR, "profile")
+
+# UA звичайного Chrome. За замовчуванням QtWebEngine пише в UA сам себе, і на
+# такий рядок Google реагує окремо — аж до відмови у вході.
+CHROME_UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+             "(KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36")
+
+
+def build_profile(parent) -> QWebEngineProfile:
+    """Постійний профіль браузера.
+
+    Профіль за замовчуванням у Qt — «інкогніто»: куки не зберігаються, і кожен
+    запуск YouTube бачить анонімного гостя. Саме тому в чаті не було ні поля
+    вводу, ні панелі реакцій — YouTube показує їх лише тим, хто увійшов
+    («Sign in to chat» унизу чату). З іменованим профілем вхід робиться один раз.
+    """
+    prof = QWebEngineProfile("hominka", parent)
+    prof.setPersistentStoragePath(os.path.join(PROFILE_DIR, "storage"))
+    prof.setCachePath(os.path.join(PROFILE_DIR, "cache"))
+    prof.setPersistentCookiesPolicy(QWebEngineProfile.PersistentCookiesPolicy.ForcePersistentCookies)
+    prof.setHttpUserAgent(CHROME_UA)
+    return prof
 
 ACCENT_ACTIVE = "#a855f7"   # рамка у звичайному режимі (фіолетова)
 ACCENT_LOCKED = "#22c55e"   # рамка у режимі клік-крізь (зелена)
@@ -291,6 +321,51 @@ YT_ALL_MESSAGES_JS = r"""
 })();
 """
 
+# Панель реакцій YouTube.
+#
+# YouTube показує її лише тим, хто увійшов у свій акаунт (анонімному глядачеві
+# унизу чату написано «Sign in to chat», і ні поля вводу, ні реакцій немає) —
+# тому спершу потрібен вхід, див. build_profile і кнопку «Увійти в YouTube».
+#
+# Коли вхід зроблено, панель з'являється знизу — у тій самій смузі, де поле
+# вводу, яке ми ховаємо. Замість того щоб вгадувати, у якому саме контейнері
+# вона опиниться цього тижня, переносимо її у свій контейнер: тоді ніяке наше
+# приховування її вже не зачепить.
+YT_REACTIONS_JS = r"""
+(function () {
+  if (window.__ftsReactionsOn) return;
+  window.__ftsReactionsOn = true;
+
+  var SEL = 'yt-reaction-control-panel-view-model,' +
+            'yt-live-chat-reaction-control-panel-renderer,' +
+            '#reaction-control-panel-overlay';
+
+  function host() {
+    var box = document.getElementById('__ftsReactions');
+    if (box) return box;
+    box = document.createElement('div');
+    box.id = '__ftsReactions';
+    box.style.cssText = 'position:fixed;right:8px;bottom:8px;z-index:2147483000;' +
+      'display:flex;gap:6px;align-items:center;background:rgba(20,16,28,0.55);' +
+      'border-radius:14px;padding:2px 6px;backdrop-filter:blur(2px);';
+    document.body.appendChild(box);
+    return box;
+  }
+
+  function move() {
+    var panel = document.querySelector(SEL);
+    if (!panel) return;
+    var box = host();
+    if (panel.parentElement !== box) box.appendChild(panel);
+    panel.style.display = 'flex';
+    panel.style.visibility = 'visible';
+  }
+
+  move();
+  setInterval(move, 3000);
+})();
+"""
+
 # Підсвічування звертань «@нік».
 #
 # У чаті YouTube немає гілок відповідей: люди відповідають одне одному, пишучи
@@ -386,6 +461,35 @@ QSlider::handle:horizontal {
 }
 """
 
+COMBO_CSS = """
+QComboBox {
+    background: rgba(255,255,255,0.07); color: #fafafa;
+    border: 1px solid rgba(255,255,255,0.14); border-radius: 6px;
+    padding: 3px 7px; font: 12px 'Segoe UI';
+}
+QComboBox:hover { border: 1px solid #a855f7; }
+QComboBox::drop-down { border: none; width: 18px; }
+QComboBox QAbstractItemView {
+    background: #17131f; color: #fafafa; selection-background-color: #a855f7;
+    border: 1px solid rgba(255,255,255,0.14); outline: none;
+}
+"""
+
+CHECK_CSS = """
+QCheckBox { color: #d4d4d8; font: 11px 'Segoe UI'; spacing: 6px; }
+QCheckBox::indicator { width: 13px; height: 13px; border-radius: 3px;
+    border: 1px solid rgba(255,255,255,0.28); background: rgba(255,255,255,0.06); }
+QCheckBox::indicator:checked { background: #a855f7; border: 1px solid #a855f7; }
+"""
+
+PROGRESS_CSS = """
+QProgressBar {
+    background: rgba(255,255,255,0.10); border: none; border-radius: 4px;
+    height: 8px; text-align: center; color: transparent;
+}
+QProgressBar::chunk { background: #a855f7; border-radius: 4px; }
+"""
+
 INPUT_CSS = """
 QLineEdit {
     background: rgba(255,255,255,0.07); color: #fafafa;
@@ -470,6 +574,16 @@ class SettingsPanel(QFrame):
         hint.setWordWrap(True)
         lay.addWidget(hint)
 
+        # --- Вхід у YouTube ---
+        # Анонімному глядачеві YouTube не показує ні поля вводу, ні панелі
+        # реакцій — унизу чату замість них «Sign in to chat». Вхід зберігається
+        # у профілі поряд із програмою, тож робиться один раз.
+        signin = QPushButton("Увійти в YouTube (щоб бачити реакції)", self)
+        signin.setFixedHeight(26)
+        signin.setStyleSheet(BTN_CSS)
+        signin.clicked.connect(win.sign_in_youtube)
+        lay.addWidget(signin)
+
         lay.addSpacing(4)
 
         # --- Прозорість вікна ---
@@ -506,7 +620,47 @@ class SettingsPanel(QFrame):
         frow.addStretch(1)
         lay.addLayout(frow)
 
+        lay.addSpacing(6)
+
+        # --- Оновлення ---
+        lay.addWidget(self._cap("Оновлення"))
+        crow = QHBoxLayout()
+        crow.setSpacing(6)
+        self.channel = QComboBox(self)
+        self.channel.setStyleSheet(COMBO_CSS)
+        for cid, label, tip in updater.CHANNELS:
+            self.channel.addItem(label, cid)
+            self.channel.setItemData(self.channel.count() - 1, tip, Qt.ToolTipRole)
+        self.channel.currentIndexChanged.connect(self._on_channel)
+        crow.addWidget(self.channel, 1)
+        check = QPushButton("Перевірити", self)
+        check.setFixedHeight(26)
+        check.setStyleSheet(BTN_CSS)
+        check.clicked.connect(lambda: win.check_updates(manual=True))
+        crow.addWidget(check)
+        lay.addLayout(crow)
+
+        self.auto_upd = QCheckBox("Перевіряти автоматично", self)
+        self.auto_upd.setStyleSheet(CHECK_CSS)
+        self.auto_upd.toggled.connect(self._on_auto)
+        lay.addWidget(self.auto_upd)
+
+        self.upd_status = QLabel(f"Версія {APP_VERSION}", self)
+        self.upd_status.setStyleSheet("color:#8b8b93; font:10px 'Segoe UI';")
+        self.upd_status.setWordWrap(True)
+        lay.addWidget(self.upd_status)
+
         self.hide()
+
+    def _on_channel(self, _idx: int):
+        self.win.set_channel(self.channel.currentData())
+
+    def _on_auto(self, on: bool):
+        self.win.auto_update = bool(on)
+        self.win.save_config()
+
+    def set_status(self, text: str):
+        self.upd_status.setText(text)
 
     def _cap(self, text: str) -> QLabel:
         lab = QLabel(text, self)
@@ -632,6 +786,82 @@ class DragBar(QFrame):
         self.win.save_config()
 
 
+class UpdateBanner(QFrame):
+    """Смужка «є оновлення» під панеллю вікна.
+
+    Не діалог і не спливаюче вікно: програма висить поверх гри, і модальне
+    вікно посеред бою — гірше за будь-яке оновлення. Смужку видно, коли є що
+    ставити, і вона зникає, щойно користувач вирішив.
+    """
+
+    def __init__(self, win: "Overlay"):
+        super().__init__(win)
+        self.win = win
+        self.setObjectName("upd")
+        self.setStyleSheet(
+            "#upd { background: rgba(168,85,247,0.22);"
+            " border-bottom: 1px solid rgba(168,85,247,0.45); }"
+            "QLabel { color: #f5e9ff; font: 11px 'Segoe UI'; }"
+        )
+        lay = QHBoxLayout(self)
+        lay.setContentsMargins(10, 5, 6, 5)
+        lay.setSpacing(6)
+
+        self.text = QLabel("", self)
+        self.text.setWordWrap(True)
+        lay.addWidget(self.text, 1)
+
+        self.bar = QProgressBar(self)
+        self.bar.setStyleSheet(PROGRESS_CSS)
+        self.bar.setFixedWidth(90)
+        self.bar.hide()
+        lay.addWidget(self.bar)
+
+        self.go = QPushButton("Оновити", self)
+        self.go.setFixedHeight(24)
+        self.go.setStyleSheet(BTN_CSS + "QPushButton{background:#a855f7;color:#fff;font-weight:600;padding:0 8px;}"
+                              "QPushButton:hover{background:#9333ea;}")
+        self.go.clicked.connect(win.start_update)
+        lay.addWidget(self.go)
+
+        later = QPushButton("✕", self)
+        later.setToolTip("Пізніше")
+        later.setFixedSize(22, 22)
+        later.setStyleSheet(BTN_CSS)
+        later.clicked.connect(self.hide)
+        lay.addWidget(later)
+
+        self.hide()
+
+    def show_release(self, rel):
+        note = rel.notes.strip().replace("\n", " ")
+        if len(note) > 120:
+            note = note[:117] + "…"
+        self.text.setText("Є %s: %s%s" % (updater.kind_label(rel.kind), rel.version,
+                                          " — " + note if note else ""))
+        self.bar.hide()
+        self.go.setEnabled(True)
+        self.go.setText("Оновити")
+        self.show()
+
+    def show_progress(self, done: int, total: int):
+        self.bar.show()
+        self.go.setEnabled(False)
+        self.go.setText("Качаю…")
+        if total > 0:
+            self.bar.setRange(0, 100)
+            self.bar.setValue(int(done * 100 / total))
+        else:
+            self.bar.setRange(0, 0)  # невідомий розмір — «біжуча» смужка
+
+    def show_error(self, msg: str):
+        self.text.setText("Оновлення не вдалося: " + msg)
+        self.bar.hide()
+        self.go.setEnabled(True)
+        self.go.setText("Ще раз")
+        self.show()
+
+
 class Overlay(QMainWindow):
     def __init__(self, url: str | None = None):
         super().__init__()
@@ -642,6 +872,12 @@ class Overlay(QMainWindow):
         self._cli_url = url        # URL з аргументу командного рядка (пріоритет)
         self.url = resolve_chat_url(url) if url else CHAT_URL
         self.is_yt = is_youtube(self.url)
+
+        # Оновлення (див. updater.py).
+        self.channel = updater.DEFAULT_CHANNEL
+        self.installed_channel = ""   # з якого каналу стоїть поточна збірка
+        self.auto_update = True
+        self.pending = None           # Release, який чекає на згоду користувача
 
         # Збереження config з дебаунсом — щоб не писати на диск на кожен піксель
         # під час зміни розміру (звідси мікрофрізи).
@@ -668,7 +904,14 @@ class Overlay(QMainWindow):
         self.bar = DragBar(self)
         vbox.addWidget(self.bar)
 
+        self.banner = UpdateBanner(self)
+        vbox.addWidget(self.banner)
+
+        # Профіль тримаємо в полі: сторінка живе лише поки живий профіль, і без
+        # посилання Qt зносить його разом із входом у YouTube.
+        self.profile = build_profile(self)
         self.view = QWebEngineView(self)
+        self.view.setPage(QWebEnginePage(self.profile, self.view))
         self.view.page().setBackgroundColor(QColor(0, 0, 0, 0))
         self.view.setAttribute(Qt.WA_TranslucentBackground, True)
         self.view.loadFinished.connect(self._on_loaded)
@@ -683,6 +926,21 @@ class Overlay(QMainWindow):
         self._load_config()
         self.view.load(QUrl(self.url))
 
+        # Оновлювач. Перша перевірка — з затримкою: старт програми і так
+        # завантажує сторінку чату, лізти в мережу одночасно ні до чого.
+        self.updater = updater.Updater(APP_VERSION, os.path.dirname(sys.executable)
+                                       if getattr(sys, "frozen", False) else BASE_DIR, self)
+        self.updater.checked.connect(self._on_checked)
+        self.updater.progress.connect(self._on_progress)
+        self.updater.downloaded.connect(self._on_downloaded)
+        self.updater.failed.connect(self._on_update_failed)
+        self._upd_timer = QTimer(self)
+        self._upd_timer.setInterval(6 * 60 * 60 * 1000)   # раз на 6 годин
+        self._upd_timer.timeout.connect(lambda: self.check_updates(manual=False))
+        if self.auto_update:
+            QTimer.singleShot(15000, lambda: self.check_updates(manual=False))
+            self._upd_timer.start()
+
     def _apply_border(self, accent: str):
         self.accent = accent
         self.frame.setStyleSheet(
@@ -694,6 +952,87 @@ class Overlay(QMainWindow):
         )
         if hasattr(self, "grip"):
             self.grip.set_accent(accent)
+
+    # --- оновлення ---
+    def set_channel(self, channel: str):
+        """Зміна каналу оновлень. Перевіряємо одразу: людина щойно попросила
+        іншу гілку — вона й чекає результату, а не наступної перевірки за 6 годин."""
+        if not channel or channel == self.channel:
+            return
+        self.channel = channel
+        self.save_config()
+        self.check_updates(manual=True)
+
+    def check_updates(self, manual: bool = False):
+        if getattr(self, "updater", None) is None:
+            return
+        if not getattr(sys, "frozen", False):
+            # Запущено з коду — підміняти теку нічим і нема чого.
+            if manual:
+                self.panel.set_status("Запущено з коду — оновлення не застосовуються.")
+            return
+        if self.updater.busy:
+            return
+        self._manual_check = manual
+        self.panel.set_status("Перевіряю оновлення…")
+        self.updater.check(self.channel, self.installed_channel)
+
+    def _on_checked(self, rel, err: str):
+        if err:
+            self.panel.set_status("Не вдалося перевірити: " + err)
+            return
+        if rel is None:
+            self.pending = None
+            self.panel.set_status("Версія %s — актуальна (%s)."
+                                  % (APP_VERSION, updater.channel_label(self.channel)))
+            return
+        self.pending = rel
+        self.panel.set_status("Доступно: %s. Що нового: %s" % (rel.title, rel.notes or "—"))
+        self.banner.show_release(rel)
+        # Обов'язкове оновлення — це виправлення, без якого програма працює
+        # неправильно. Не ставимо мовчки, але й не даємо про нього забути.
+        if rel.mandatory and self.auto_update:
+            self.start_update()
+
+    def start_update(self):
+        if self.pending is None:
+            self.check_updates(manual=True)
+            return
+        self.banner.show_progress(0, self.pending.size)
+        self.updater.download(self.pending)
+
+    def _on_progress(self, done: int, total: int):
+        self.banner.show_progress(done, total)
+
+    def _on_downloaded(self, path: str):
+        try:
+            app_dir = os.path.dirname(sys.executable) if getattr(sys, "frozen", False) else BASE_DIR
+            # Канал запам'ятовуємо ДО перезапуску: після нього це вже інша збірка,
+            # і без запису вона не знала б, з якої гілки прийшла.
+            self.installed_channel = self.channel
+            self._write_config()
+            updater.install(path, app_dir)
+        except Exception as e:
+            self.banner.show_error(str(e))
+            return
+        # Підмінник чекає нашого виходу — виходимо.
+        self.close()
+
+    def _on_update_failed(self, msg: str):
+        self.banner.show_error(msg)
+        self.panel.set_status("Оновлення не вдалося: " + msg)
+
+    # --- вхід у YouTube ---
+    def sign_in_youtube(self):
+        """Відкриває сторінку входу Google у тому ж профілі.
+
+        Після входу YouTube починає показувати і поле вводу, і панель реакцій —
+        анонімному глядачеві він їх не дає взагалі. Повертаємось одразу на чат:
+        continue робить це сам Google.
+        """
+        back = self.url or CHAT_URL
+        self.view.load(QUrl("https://accounts.google.com/ServiceLogin?service=youtube&continue="
+                            + quote(back, safe="")))
 
     # --- джерело чату ---
     def set_url(self, raw: str):
@@ -712,8 +1051,10 @@ class Overlay(QMainWindow):
             self.view.page().runJavaScript(YT_STYLE_JS)
             # ...показуємо ВСІ повідомлення, а не «цікаві»...
             self.view.page().runJavaScript(YT_ALL_MESSAGES_JS)
-            # ...і підсвічуємо «@нік», щоб було видно, кому відповідають
+            # ...підсвічуємо «@нік», щоб було видно, кому відповідають...
             self.view.page().runJavaScript(YT_MENTIONS_JS)
+            # ...і витягуємо панель реакцій із прихованої смуги вводу
+            self.view.page().runJavaScript(YT_REACTIONS_JS)
 
     # --- налаштування панель (окреме верхнє вікно) ---
     def toggle_settings(self):
@@ -814,6 +1155,20 @@ class Overlay(QMainWindow):
         if not self._cli_url:
             self.url = resolve_chat_url(cfg.get("url", "")) if cfg.get("url") else CHAT_URL
             self.is_yt = is_youtube(self.url)
+        # Оновлення: канал, з якого читаємо, і чи перевіряти самим.
+        ch = cfg.get("channel", updater.DEFAULT_CHANNEL)
+        self.channel = ch if any(c[0] == ch for c in updater.CHANNELS) else updater.DEFAULT_CHANNEL
+        self.installed_channel = cfg.get("installedChannel", "")
+        self.auto_update = bool(cfg.get("autoUpdate", True))
+        idx = self.panel.channel.findData(self.channel)
+        if idx >= 0:
+            self.panel.channel.blockSignals(True)
+            self.panel.channel.setCurrentIndex(idx)
+            self.panel.channel.blockSignals(False)
+        self.panel.auto_upd.blockSignals(True)
+        self.panel.auto_upd.setChecked(self.auto_update)
+        self.panel.auto_upd.blockSignals(False)
+        self.panel.set_status("Версія %s (%s)" % (APP_VERSION, updater.channel_label(self.channel)))
         # синхронізуємо панель з завантаженими значеннями
         self.panel.url_edit.setText(cfg.get("url", "") if not self._cli_url else (self._cli_url or ""))
         self.panel.opacity.setValue(int(op * 100))
@@ -837,6 +1192,9 @@ class Overlay(QMainWindow):
                     "zoom": self.zoom,
                     "bg_alpha": round(self.bg_alpha, 2),
                     "url": raw_url,
+                    "channel": self.channel,
+                    "installedChannel": self.installed_channel,
+                    "autoUpdate": self.auto_update,
                 }, f)
         except Exception:
             pass
