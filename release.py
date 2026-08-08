@@ -92,6 +92,16 @@ def stamp_version(version: str):
     print("версію проставлено:", version)
 
 
+# Що НІКОЛИ не потрапляє в архів оновлення.
+#
+# Запуск зібраної програми з dist/ лишає поруч свої робочі файли, і спакувати
+# їх означало б: (1) затерти оновленням чужі налаштування — підмінник копіює
+# архів ПОВЕРХ встановленого; (2) роздати всім свій профіль браузера, тобто
+# власні куки входу в YouTube. Друге — вже не незручність, а видані ключі.
+PACK_SKIP_FILES = {"config.json"}
+PACK_SKIP_DIRS = {"profile"}
+
+
 def pack(version: str) -> str:
     """Пакує ВМІСТ dist/Hominka (без зайвої теки зверху) — так оновлювач просто
     кладе архів поверх встановленої програми."""
@@ -101,11 +111,18 @@ def pack(version: str) -> str:
     if os.path.exists(out):
         os.remove(out)
     print("пакую", out)
+    skipped = 0
     with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED, compresslevel=6) as z:
-        for root, _dirs, files in os.walk(DIST):
+        for root, dirs, files in os.walk(DIST):
+            dirs[:] = [d for d in dirs if d not in PACK_SKIP_DIRS]
             for name in files:
+                if name in PACK_SKIP_FILES:
+                    skipped += 1
+                    continue
                 full = os.path.join(root, name)
                 z.write(full, os.path.relpath(full, DIST))
+    if skipped:
+        print("не пакували робочих файлів:", skipped)
     return out
 
 

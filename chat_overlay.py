@@ -6,12 +6,16 @@ Chat Overlay — прозорий оверлей чату поверх гри, �
 Windows приховує це вікно від будь-якого захоплення екрана (OBS Display/Window/
 Game Capture його НЕ бачить — WDA_EXCLUDEFROMCAPTURE, Windows 10 2004+ / 11).
 
-Джерело чату (⚙ → «Посилання на чат»):
-  • порожньо / твоя сторінка stream.svitix.com — показуємо як є (без змін);
-  • посилання на YouTube (трансляція або чат) — вмикаємо гарний прозорий стиль
-    (м'які рожево-фіолетові плашки), ховаємо зайвий інтерфейс YouTube,
-    перемикаємо чат у режим «Чат наживо» (див. YT_ALL_MESSAGES_JS) і
-    підсвічуємо звертання «@нік» (див. YT_MENTIONS_JS).
+Джерело чату (за спаданням пріоритету, див. resolve_chat_url):
+  • посилання, вписане руками в ⚙, — явний вибір людини сильніший за автоматику;
+  • ВЛАСНА трансляція: після входу в YouTube (⚙ → «Увійти») канал відомий, і
+    програма сама знаходить активний ефір та відкриває його чат (див. LiveProbe);
+  • інакше — чат сайту (CHAT_URL).
+
+Для YouTube-чату: вмикаємо гарний прозорий стиль (м'які рожево-фіолетові
+плашки), ховаємо зайвий інтерфейс, перемикаємо чат у режим «Чат наживо»
+(YT_ALL_MESSAGES_JS), підсвічуємо звертання «@нік» (YT_MENTIONS_JS) і
+витягуємо панель реакцій (YT_REACTIONS_JS).
 
 Можливості (панель ⚙):
   • посилання на чат (YouTube / свій сайт);
@@ -30,11 +34,12 @@ import json
 import os
 import re
 import sys
+import tempfile
 from ctypes import wintypes
 
 from urllib.parse import quote
 
-from PySide6.QtCore import Qt, QUrl, QTimer, QPoint  # noqa
+from PySide6.QtCore import Qt, QUrl, QTimer, QPoint, QObject, Signal  # noqa
 from PySide6.QtGui import QColor, QPainter, QPen, QIcon
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QFrame, QVBoxLayout, QHBoxLayout,
@@ -49,7 +54,7 @@ import updater
 # === Налаштування за замовчуванням ==========================================
 APP_NAME = "Hominka"          # від укр. «гомін» — гомін голосів у чаті
 APP_ICON = "hominka.ico"
-APP_VERSION = "1.1.0"
+APP_VERSION = "1.2.0"
 APP_AUTHOR = "Mykyta Vinnyk"
 # Ключ доступу до оверлеїв (?key=) обовʼязковий: без нього сервер відповідає 403.
 # Перевипуск ключа в адмінці ламає це посилання — тоді треба оновити рядок нижче
@@ -72,9 +77,35 @@ if getattr(sys, "frozen", False):
 else:
     BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 CONFIG_PATH = os.path.join(BASE_DIR, "config.json")
-# Профіль браузера — поряд із програмою, щоб вхід у YouTube пережив перезапуск
-# (див. build_profile).
-PROFILE_DIR = os.path.join(BASE_DIR, "profile")
+
+
+def profile_dir() -> str:
+    """Тека профілю браузера — там лежить вхід у YouTube.
+
+    Поряд із програмою: копію можна перенести на іншу машину разом із входом,
+    і оновлення її не чіпає — підмінник копіює нове ПОВЕРХ старого, нічого не
+    видаляючи (див. updater._UPDATE_BAT).
+
+    Якщо туди не пишеться (розпакували в Program Files), відступаємо в
+    LOCALAPPDATA: інакше вхід мовчки не зберігався б, і кожен запуск був би
+    анонімним — рівно та біда, заради якої постійний профіль і робився.
+    """
+    here = os.path.join(BASE_DIR, "profile")
+    try:
+        os.makedirs(here, exist_ok=True)
+        probe = os.path.join(here, ".writable")
+        with open(probe, "w") as f:
+            f.write("1")
+        os.remove(probe)
+        return here
+    except OSError:
+        alt = os.path.join(os.environ.get("LOCALAPPDATA") or tempfile.gettempdir(),
+                           "Hominka", "profile")
+        os.makedirs(alt, exist_ok=True)
+        return alt
+
+
+PROFILE_DIR = profile_dir()
 
 # UA звичайного Chrome. За замовчуванням QtWebEngine пише в UA сам себе, і на
 # такий рядок Google реагує окремо — аж до відмови у вході.
@@ -136,23 +167,174 @@ def set_click_through(win, enabled: bool):
     user32.SetWindowLongW(hwnd, GWL_EXSTYLE, ex)
 
 
+# === Пошук власної трансляції ===============================================
+#
+# Програма — для стрімера, який читає СВІЙ чат. Тому, якщо вхід у YouTube
+# зроблено, посилання вставляти нема потреби: канал відомий із самого входу, а
+# трансляцію на ньому можна знайти тією ж сторінкою, що відкриває будь-який
+# глядач.
+#
+# Порядок пошуку:
+#   1. id каналу — сторінка youtube.com/account_advanced, вона так і показує
+#      «Channel ID: UC…». Не увійшли — Google відводить на вхід, UC там немає,
+#      і це наш спосіб дізнатися, що входу немає;
+#   2. трансляція — youtube.com/channel/<id>/live. Коли ефір іде, YouTube сам
+#      переадресовує на сторінку перегляду, і в ytInitialData лежить
+#      currentVideoEndpoint з id відео. Ефіру немає — це просто сторінка
+#      каналу, і поля немає.
+#
+# Ходимо звичайними сторінками в тому ж профілі — ніяких ключів і ніяких квот.
+
+# JS: дістати id каналу зі сторінки account_advanced.
+JS_CHANNEL_ID = r"""
+(function () {
+  var text = document.body ? document.body.innerText : '';
+  var m = text.match(/UC[0-9A-Za-z_\-]{22}/);
+  if (m) return m[0];
+  // Запасний шлях: посилання «Ваш канал» у шапці.
+  var a = document.querySelector('a[href*="/channel/UC"]');
+  if (a) { var mm = a.getAttribute('href').match(/UC[0-9A-Za-z_\-]{22}/); if (mm) return mm[0]; }
+  return '';
+})();
+"""
+
+# JS: дістати id живої трансляції зі сторінки каналу /live.
+JS_LIVE_VIDEO = r"""
+(function () {
+  var d = window.ytInitialData;
+  if (!d) return '';
+  var v = '';
+  try { v = d.currentVideoEndpoint.watchEndpoint.videoId || ''; } catch (e) { v = ''; }
+  if (!v) return '';
+  // Сторінка перегляду буває і в завершеного ефіру, і в анонса — беремо тільки
+  // те, що зараз в ефірі.
+  var live = JSON.stringify(d).indexOf('"isLive":true') >= 0;
+  // Назву каналу YouTube кладе по-різному: на сторінці каналу — в метаданих,
+  // на сторінці перегляду (куди веде /live під час ефіру) — біля відео.
+  var title = '';
+  try { title = d.metadata.channelMetadataRenderer.title || ''; } catch (e) {}
+  if (!title) {
+    try { title = window.ytInitialPlayerResponse.videoDetails.author || ''; } catch (e) {}
+  }
+  if (!title) {
+    var el = document.querySelector('ytd-video-owner-renderer #channel-name a, #owner #channel-name a');
+    if (el) title = (el.textContent || '').trim();
+  }
+  return JSON.stringify({video: live ? v : '', title: title});
+})();
+"""
+
+
+class LiveProbe(QObject):
+    """Тихо ходить по YouTube у профілі програми й шукає власну трансляцію.
+
+    Працює на прихованій сторінці — вікно чату при цьому нічого не перемальовує
+    і не смикається.
+    """
+
+    # id відео (порожньо = ефіру немає), id каналу (порожньо = не увійшли), назва каналу
+    result = Signal(str, str, str)
+
+    def __init__(self, profile: QWebEngineProfile, parent=None):
+        super().__init__(parent)
+        self.page = QWebEnginePage(profile, self)
+        self.page.loadFinished.connect(self._on_loaded)
+        self.channel_id = ""
+        self.channel_title = ""
+        self._step = ""      # "id" | "live" | "" (не зайняті)
+        self._guard = QTimer(self)
+        self._guard.setSingleShot(True)
+        self._guard.setInterval(30000)   # сторінка не відповіла — не висимо вічно
+        self._guard.timeout.connect(self._give_up)
+
+    @property
+    def busy(self) -> bool:
+        return bool(self._step)
+
+    def start(self, channel_id: str = ""):
+        if self._step:
+            return
+        self.channel_id = channel_id or self.channel_id
+        if self.channel_id:
+            self._step = "live"
+            self.page.setUrl(QUrl("https://www.youtube.com/channel/%s/live?hl=en" % self.channel_id))
+        else:
+            self._step = "id"
+            self.page.setUrl(QUrl("https://www.youtube.com/account_advanced?hl=en"))
+        self._guard.start()
+
+    def _give_up(self):
+        self._step = ""
+        self.result.emit("", self.channel_id, self.channel_title)
+
+    def _on_loaded(self, ok: bool):
+        if not self._step:
+            return
+        if not ok:
+            self._give_up()
+            return
+        if self._step == "id":
+            self.page.runJavaScript(JS_CHANNEL_ID, self._got_channel)
+        else:
+            self.page.runJavaScript(JS_LIVE_VIDEO, self._got_live)
+
+    def _got_channel(self, value):
+        cid = (value or "").strip()
+        if not cid:
+            # Немає id — значить, входу немає (нас відвели на сторінку Google).
+            self._guard.stop()
+            self._step = ""
+            self.channel_id = ""
+            self.channel_title = ""
+            self.result.emit("", "", "")
+            return
+        self.channel_id = cid
+        self._step = "live"
+        self.page.setUrl(QUrl("https://www.youtube.com/channel/%s/live?hl=en" % cid))
+        self._guard.start()
+
+    def _got_live(self, value):
+        self._guard.stop()
+        self._step = ""
+        video = ""
+        try:
+            data = json.loads(value) if value else {}
+            video = data.get("video") or ""
+            self.channel_title = data.get("title") or self.channel_title
+        except (ValueError, TypeError):
+            video = ""
+        self.result.emit(video, self.channel_id, self.channel_title)
+
+
 # === Розбір посилання на чат ================================================
 def is_youtube(url: str) -> bool:
     return "youtube.com" in url or "youtu.be" in url
 
 
-def resolve_chat_url(raw: str) -> str:
-    """Порожньо → твоя сторінка. YouTube (будь-яка форма) → popout live_chat.
-    Інше — віддаємо як є."""
+def popout_url(video_id: str) -> str:
+    """Посилання на окреме вікно чату конкретної трансляції."""
+    return f"https://www.youtube.com/live_chat?v={video_id}&is_popout=1"
+
+
+def resolve_chat_url(raw: str, auto_video: str = "") -> str:
+    """Куди дивитися вікну чату.
+
+    Порядок навмисне такий:
+      1. те, що людина вписала руками, — явний вибір сильніший за будь-яку
+         автоматику (наприклад, читати чужу трансляцію);
+      2. власна трансляція, знайдена після входу в YouTube, — головний режим:
+         програма для того й є, щоб стрімер читав СВІЙ чат;
+      3. чат сайту — коли входу немає або ефір не йде.
+    """
     raw = (raw or "").strip()
     if not raw:
-        return CHAT_URL
+        return popout_url(auto_video) if auto_video else CHAT_URL
     if "youtube.com/live_chat" in raw:
         return raw
     if is_youtube(raw):
         m = re.search(r"(?:v=|youtu\.be/|/live/|/embed/|/shorts/)([A-Za-z0-9_-]{11})", raw)
         if m:
-            return f"https://www.youtube.com/live_chat?v={m.group(1)}&is_popout=1"
+            return popout_url(m.group(1))
     return raw
 
 
@@ -568,21 +750,35 @@ class SettingsPanel(QFrame):
         ok.clicked.connect(self._apply_url)
         urow.addWidget(ok)
         lay.addLayout(urow)
-        hint = QLabel("YouTube → гарний прозорий стиль і всі повідомлення "
-                      "(не «цікавий чат»). Порожньо/свій сайт → без змін.", self)
+        hint = QLabel("Порожньо — програма сама знайде вашу трансляцію (після "
+                      "входу нижче), а поки ефіру немає, покаже чат сайту. "
+                      "Посилання тут перебиває автопошук.", self)
         hint.setStyleSheet("color:#8b8b93; font:10px 'Segoe UI';")
         hint.setWordWrap(True)
         lay.addWidget(hint)
 
-        # --- Вхід у YouTube ---
-        # Анонімному глядачеві YouTube не показує ні поля вводу, ні панелі
-        # реакцій — унизу чату замість них «Sign in to chat». Вхід зберігається
-        # у профілі поряд із програмою, тож робиться один раз.
-        signin = QPushButton("Увійти в YouTube (щоб бачити реакції)", self)
-        signin.setFixedHeight(26)
-        signin.setStyleSheet(BTN_CSS)
-        signin.clicked.connect(win.sign_in_youtube)
-        lay.addWidget(signin)
+        # --- Акаунт YouTube ---
+        # Вхід дає дві речі: панель реакцій із полем вводу (анонімному глядачеві
+        # YouTube їх не показує зовсім) і сам канал — після цього посилання на
+        # чат шукається саме, вставляти нічого не треба.
+        self.acc_status = QLabel("", self)
+        self.acc_status.setStyleSheet("color:#a1a1aa; font:10px 'Segoe UI';")
+        self.acc_status.setWordWrap(True)
+        lay.addWidget(self.acc_status)
+
+        arow = QHBoxLayout()
+        arow.setSpacing(6)
+        self.signin_btn = QPushButton("Увійти в YouTube", self)
+        self.signin_btn.setFixedHeight(26)
+        self.signin_btn.setStyleSheet(BTN_CSS)
+        self.signin_btn.clicked.connect(win.sign_in_youtube)
+        arow.addWidget(self.signin_btn, 1)
+        self.signout_btn = QPushButton("Вийти", self)
+        self.signout_btn.setFixedHeight(26)
+        self.signout_btn.setStyleSheet(BTN_CSS)
+        self.signout_btn.clicked.connect(win.sign_out_youtube)
+        arow.addWidget(self.signout_btn)
+        lay.addLayout(arow)
 
         lay.addSpacing(4)
 
@@ -661,6 +857,30 @@ class SettingsPanel(QFrame):
 
     def set_status(self, text: str):
         self.upd_status.setText(text)
+
+    def set_account(self, win: "Overlay"):
+        """Показує, під ким увійшли і що зараз показує вікно.
+
+        Без цього автоматика мовчазна: незрозуміло, чому чат такий, а не інший,
+        і що робити, щоб став іншим.
+        """
+        manual = self.url_edit.text().strip()
+        if not win.signed_in:
+            self.acc_status.setText("Не увійшли. Без входу немає ні реакцій, ні "
+                                    "автопошуку вашої трансляції — показуємо чат сайту.")
+        elif manual:
+            self.acc_status.setText("Увійшли%s. Показуємо посилання, вписане нижче — "
+                                    "очистіть поле, щоб знову шукати вашу трансляцію."
+                                    % (": " + win.yt_channel_title if win.yt_channel_title else ""))
+        elif win.auto_video:
+            self.acc_status.setText("Увійшли%s. Знайшли вашу трансляцію — показуємо її чат."
+                                    % (": " + win.yt_channel_title if win.yt_channel_title else ""))
+        else:
+            self.acc_status.setText("Увійшли%s. Трансляція не йде — показуємо чат сайту, "
+                                    "перемкнемось самі, щойно почнеться ефір."
+                                    % (": " + win.yt_channel_title if win.yt_channel_title else ""))
+        self.signin_btn.setText("Увійти в YouTube" if not win.signed_in else "Змінити акаунт")
+        self.signout_btn.setEnabled(win.signed_in)
 
     def _cap(self, text: str) -> QLabel:
         lab = QLabel(text, self)
@@ -873,6 +1093,12 @@ class Overlay(QMainWindow):
         self.url = resolve_chat_url(url) if url else CHAT_URL
         self.is_yt = is_youtube(self.url)
 
+        # Власна трансляція, знайдена після входу в YouTube (див. LiveProbe).
+        self.auto_video = ""
+        self.yt_channel_id = ""
+        self.yt_channel_title = ""
+        self.signed_in = False
+
         # Оновлення (див. updater.py).
         self.channel = updater.DEFAULT_CHANNEL
         self.installed_channel = ""   # з якого каналу стоїть поточна збірка
@@ -925,6 +1151,19 @@ class Overlay(QMainWindow):
 
         self._load_config()
         self.view.load(QUrl(self.url))
+
+        # Пошук власної трансляції: окрема прихована сторінка в тому ж профілі.
+        self.probe = LiveProbe(self.profile, self)
+        self.probe.result.connect(self._on_probe)
+        self._probe_burst = 0
+        self._probe_timer = QTimer(self)
+        self._probe_timer.setInterval(self._probe_interval())
+        self._probe_timer.timeout.connect(self.probe_live)
+        self.panel.set_account(self)
+        # Перша проба — після того, як вікно вже показало чат сайту: спершу
+        # картинка, потім мережа.
+        QTimer.singleShot(4000, self.probe_live)
+        self._probe_timer.start()
 
         # Оновлювач. Перша перевірка — з затримкою: старт програми і так
         # завантажує сторінку чату, лізти в мережу одночасно ні до чого.
@@ -1027,21 +1266,95 @@ class Overlay(QMainWindow):
         """Відкриває сторінку входу Google у тому ж профілі.
 
         Після входу YouTube починає показувати і поле вводу, і панель реакцій —
-        анонімному глядачеві він їх не дає взагалі. Повертаємось одразу на чат:
-        continue робить це сам Google.
+        анонімному глядачеві він їх не дає взагалі. А ще з входу стає відомий
+        канал, тож посилання на чат далі шукається саме (див. LiveProbe).
+        Повертаємось одразу на чат: continue робить це сам Google.
         """
         back = self.url or CHAT_URL
         self.view.load(QUrl("https://accounts.google.com/ServiceLogin?service=youtube&continue="
                             + quote(back, safe="")))
+        # Після входу канал треба знайти якнайшвидше, а не через звичайні
+        # п'ять хвилин: людина щойно натиснула кнопку і чекає результату.
+        self._probe_burst = 12          # ~3 хвилини по 15 с
+        self._probe_timer.start(15000)
+
+    def sign_out_youtube(self):
+        """Вихід: чистимо куки профілю й забуваємо канал.
+
+        Профіль спільний для вікна чату і для пошуку трансляції, тож достатньо
+        прибрати куки — YouTube одразу стає анонімним, а джерело чату
+        повертається до сайту (або до посилання, вписаного руками).
+        """
+        store = self.profile.cookieStore()
+        if store is not None:
+            store.deleteAllCookies()
+        self.profile.clearHttpCache()
+        self.yt_channel_id = ""
+        self.yt_channel_title = ""
+        self.auto_video = ""
+        self.signed_in = False
+        self.probe.channel_id = ""
+        self.probe.channel_title = ""
+        self.save_config()
+        self.refresh_source()
+        self.panel.set_account(self)
+
+    # --- пошук власної трансляції ---
+    def probe_live(self):
+        """Питає YouTube, чи йде ефір на каналі, під яким ми увійшли."""
+        if self.probe.busy:
+            return
+        self.probe.start(self.yt_channel_id)
+
+    def _on_probe(self, video: str, channel_id: str, title: str):
+        self.yt_channel_id = channel_id
+        self.yt_channel_title = title
+        self.signed_in = bool(channel_id)
+        if self.signed_in and self._probe_burst:
+            # Знайшли, кого шукали — повертаємось до спокійного ритму.
+            self._probe_burst = 0
+            self._probe_timer.start(self._probe_interval())
+        elif self._probe_burst:
+            self._probe_burst -= 1
+            if self._probe_burst == 0:
+                self._probe_timer.start(self._probe_interval())
+        changed = video != self.auto_video
+        self.auto_video = video
+        self.save_config()
+        self.panel.set_account(self)
+        if changed:
+            # Перезавантажуємо вікно, лише коли джерело справді змінилося:
+            # смикати чат кожні кілька хвилин — гірше, ніж будь-яка автоматика.
+            self.refresh_source()
+        self._probe_timer.setInterval(self._probe_interval())
+
+    def _probe_interval(self) -> int:
+        """Ефір знайдено — перевіряємо рідко (раптом почався інший).
+        Не знайдено — частіше, щоб чат з'явився невдовзі після старту стріму."""
+        return 10 * 60 * 1000 if self.auto_video else 3 * 60 * 1000
 
     # --- джерело чату ---
+    def refresh_source(self):
+        """Переобчислює адресу чату і, якщо вона змінилася, відкриває її."""
+        manual = self.panel.url_edit.text() if hasattr(self, "panel") else ""
+        url = resolve_chat_url(manual, self.auto_video)
+        self.is_yt = is_youtube(url)
+        self.bar.title.setText(self._title_for(manual))
+        if url != self.url:
+            self.url = url
+            self.view.load(QUrl(url))
+
+    def _title_for(self, manual: str) -> str:
+        if manual.strip():
+            return "YouTube" if self.is_yt else "Chat"
+        if self.auto_video:
+            return "Мій стрім"
+        return "Chat"
+
     def set_url(self, raw: str):
-        self.url = resolve_chat_url(raw)
-        self.is_yt = is_youtube(self.url)
-        self.bar.title.setText("YouTube" if self.is_yt else "Chat")
         if self.panel.url_edit.text() != raw:
             self.panel.url_edit.setText(raw)
-        self.view.load(QUrl(self.url))
+        self.refresh_source()
         self.save_config()
 
     def _on_loaded(self, ok: bool):
@@ -1155,6 +1468,11 @@ class Overlay(QMainWindow):
         if not self._cli_url:
             self.url = resolve_chat_url(cfg.get("url", "")) if cfg.get("url") else CHAT_URL
             self.is_yt = is_youtube(self.url)
+        # Канал YouTube, знайдений минулого разу: id не змінюється, тож не
+        # ходимо за ним щоразу. Саму трансляцію не запам'ятовуємо — вона
+        # застаріває швидше, ніж програма встигає закритися.
+        self.yt_channel_id = cfg.get("youtubeChannelId", "")
+        self.signed_in = bool(self.yt_channel_id)
         # Оновлення: канал, з якого читаємо, і чи перевіряти самим.
         ch = cfg.get("channel", updater.DEFAULT_CHANNEL)
         self.channel = ch if any(c[0] == ch for c in updater.CHANNELS) else updater.DEFAULT_CHANNEL
@@ -1174,7 +1492,7 @@ class Overlay(QMainWindow):
         self.panel.opacity.setValue(int(op * 100))
         self.panel.bg.setValue(int(self.bg_alpha * 100))
         self.panel.sync_zoom()
-        self.bar.title.setText("YouTube" if self.is_yt else "Chat")
+        self.bar.title.setText(self._title_for(self.panel.url_edit.text()))
         self._apply_border(self.accent)
 
     def save_config(self):
@@ -1192,6 +1510,7 @@ class Overlay(QMainWindow):
                     "zoom": self.zoom,
                     "bg_alpha": round(self.bg_alpha, 2),
                     "url": raw_url,
+                    "youtubeChannelId": self.yt_channel_id,
                     "channel": self.channel,
                     "installedChannel": self.installed_channel,
                     "autoUpdate": self.auto_update,
