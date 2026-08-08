@@ -57,7 +57,7 @@ import updater
 # === Налаштування за замовчуванням ==========================================
 APP_NAME = "Hominka"          # від укр. «гомін» — гомін голосів у чаті
 APP_ICON = "hominka.ico"
-APP_VERSION = "1.3.0"
+APP_VERSION = "1.3.1"
 APP_AUTHOR = "Mykyta Vinnyk"
 # Ключ доступу до оверлеїв (?key=) обовʼязковий: без нього сервер відповідає 403.
 # Перевипуск ключа в адмінці ламає це посилання — тоді треба оновити рядок нижче
@@ -466,7 +466,22 @@ YT_STYLE_JS = r"""
       height: 1.3em !important; width: auto !important;
       vertical-align: -0.28em !important; margin: 0 1px !important;
     }
-    /* значки-бейджі учасника біля імені (кастомні емодзі каналу) */
+    /* Значки біля імені (спонсорство, модератор, автор каналу).
+       YouTube ставить їм vertical-align: sub — тобто буквально опускає під
+       рядок, і значок висить нижче ніка. Вирівнюємо флексом по центру: у
+       рядку автора вже є flex-контейнер, лишається сказати обом коробкам
+       триматися середини. Заміряно на живому чаті: розбіжність центрів
+       значка й тексту стає 0.00 px (було 1.6). */
+    yt-live-chat-author-chip { align-items: center !important; }
+    #chat-badges {
+      display: inline-flex !important;
+      align-items: center !important;
+    }
+    yt-live-chat-author-badge-renderer {
+      display: inline-flex !important;
+      align-items: center !important;
+      vertical-align: middle !important;
+    }
     yt-live-chat-author-badge-renderer img,
     yt-live-chat-author-badge-renderer #image { height: 1em !important; width: auto !important; }
 
