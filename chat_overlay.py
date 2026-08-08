@@ -9,7 +9,9 @@ Game Capture його НЕ бачить — WDA_EXCLUDEFROMCAPTURE, Windows 10 2
 Джерело чату (⚙ → «Посилання на чат»):
   • порожньо / твоя сторінка stream.svitix.com — показуємо як є (без змін);
   • посилання на YouTube (трансляція або чат) — вмикаємо гарний прозорий стиль
-    (м'які рожево-фіолетові плашки), ховаємо зайвий інтерфейс YouTube.
+    (м'які рожево-фіолетові плашки), ховаємо зайвий інтерфейс YouTube,
+    перемикаємо чат у режим «Чат наживо» (див. YT_ALL_MESSAGES_JS) і
+    підсвічуємо звертання «@нік» (див. YT_MENTIONS_JS).
 
 Можливості (панель ⚙):
   • посилання на чат (YouTube / свій сайт);
@@ -41,7 +43,7 @@ from PySide6.QtWebEngineWidgets import QWebEngineView
 # === Налаштування за замовчуванням ==========================================
 APP_NAME = "Hominka"          # від укр. «гомін» — гомін голосів у чаті
 APP_ICON = "hominka.ico"
-APP_VERSION = "1.0.2"
+APP_VERSION = "1.0.3"
 APP_AUTHOR = "Mykyta Vinnyk"
 # Ключ доступу до оверлеїв (?key=) обовʼязковий: без нього сервер відповідає 403.
 # Перевипуск ключа в адмінці ламає це посилання — тоді треба оновити рядок нижче
@@ -136,16 +138,26 @@ YT_STYLE_JS = r"""
     #items, #item-scroller, #item-offset, #content-pages,
     tp-yt-app-drawer, #primary { background: transparent !important; }
 
-    /* прибираємо зайвий інтерфейс YouTube */
+    /* прибираємо зайвий інтерфейс YouTube.
+       #action-panel НЕ ховаємо: саме туди YouTube кладе панель реакцій, а поле
+       введення й так прибране своїми селекторами нижче. */
     yt-live-chat-header-renderer,
     yt-live-chat-message-input-renderer,
     yt-live-chat-ticker-renderer,
     yt-live-chat-banner-manager,
     yt-live-chat-viewer-engagement-message-renderer,
-    #ticker, #panel-pages, #action-panel, #separator,
+    #ticker, #panel-pages, #separator,
     #input-panel, #live-chat-message-input,
     yt-live-chat-text-message-renderer #timestamp,
     tp-yt-paper-tooltip { display: none !important; }
+
+    /* реакції (плаваючі емодзі та їхня панель) — лишаємо видимими, лише знімаємо
+       темну підкладку, щоб не було смуги на прозорому оверлеї */
+    #action-panel, #reaction-control-panel-overlay,
+    yt-reaction-control-panel-view-model,
+    yt-emoji-fountain-view-model, #emoji-fountain {
+      background: transparent !important;
+    }
 
     /* звичайні повідомлення — м'які плашки */
     yt-live-chat-text-message-renderer {
@@ -174,6 +186,15 @@ YT_STYLE_JS = r"""
       font-weight: 500 !important;
       text-shadow: 0 1px 3px rgba(0, 0, 0, 0.75) !important;
     }
+    /* звертання «@нік» — щоб було видно, кому відповідають (див. YT_MENTIONS_JS) */
+    .__ftsMention {
+      color: #fde68a !important;
+      background: rgba(250, 204, 21, 0.20) !important;
+      padding: 0 3px !important;
+      border-radius: 6px !important;
+      font-weight: 800 !important;
+    }
+
     /* емодзі (авторські та стандартні) — не ховаємо, гарний розмір */
     yt-live-chat-text-message-renderer #message img,
     #message img.emoji, img.emoji {
@@ -191,8 +212,10 @@ YT_STYLE_JS = r"""
       overflow: hidden !important;
       box-shadow: 0 2px 12px rgba(0, 0, 0, 0.45) !important;
     }
-    /* Нові учасники / етапи членства (зелений акцент) */
-    yt-live-chat-membership-item-renderer {
+    /* Нові учасники / етапи членства (зелений акцент).
+       legacy-paid — та сама подія у старому оформленні YouTube. */
+    yt-live-chat-membership-item-renderer,
+    yt-live-chat-legacy-paid-message-renderer {
       border-radius: 14px !important; margin: 6px 7px !important;
       background: rgba(16, 185, 129, 0.32) !important;
       box-shadow: 0 1px 10px rgba(0, 0, 0, 0.42) !important;
@@ -212,9 +235,130 @@ YT_STYLE_JS = r"""
     yt-live-chat-sponsorships-gift-redemption-announcement-renderer * {
       color: #faf5ff !important; text-shadow: 0 1px 2px rgba(0, 0, 0, 0.6) !important;
     }
+    /* Збори коштів у чаті (fundraiser) — той самий фіолетовий акцент */
+    yt-live-chat-donation-announcement-renderer {
+      border-radius: 14px !important; margin: 6px 7px !important;
+      background: rgba(168, 85, 247, 0.28) !important;
+      color: #faf5ff !important;
+    }
+    /* Службові повідомлення: увімкнено повільний режим, видалено модератором,
+       затримано автомодерацією. Це не «зайвий інтерфейс», а те, що стрімеру
+       треба бачити, тож не ховаємо — лише робимо тьмянішими за живий чат. */
+    yt-live-chat-mode-change-message-renderer,
+    yt-live-chat-moderation-message-renderer,
+    yt-live-chat-auto-mod-message-renderer {
+      margin: 4px 7px !important;
+      padding: 3px 8px !important;
+      border-radius: 12px !important;
+      background: rgba(63, 63, 70, 0.38) !important;
+      color: #e4e4e7 !important;
+      font-size: 0.92em !important;
+    }
     ::-webkit-scrollbar { width: 0 !important; background: transparent !important; }
   `;
   (document.head || document.documentElement).appendChild(s);
+})();
+"""
+
+# Перемикання чату YouTube у режим «Чат наживо».
+#
+# YouTube відкриває чат у режимі «Цікавий чат» (Top chat), а він показує НЕ ВСЕ:
+# ховає схожі повідомлення, повідомлення нових акаунтів і все, що вважає спамом.
+# Виглядає це як «чат майже мертвий», хоча люди пишуть. Сам перемикач лежить у
+# шапці чату, яку ми ховаємо стилем вище, — тобто вручну його ще й не дістати.
+#
+# Пункти меню завжди йдуть у порядку [Цікавий чат, Чат наживо], тож беремо
+# ОСТАННІЙ — це не залежить від мови інтерфейсу. Клік по вже вибраному пункту не
+# робимо, тому повтор нічого не ламає, а періодичний повтор потрібен: коли
+# YouTube перезавантажує чат, режим скидається назад на «цікавий».
+YT_ALL_MESSAGES_JS = r"""
+(function () {
+  if (window.__ftsAllMessages) return;
+  window.__ftsAllMessages = true;
+
+  function switchOnce() {
+    var box = document.querySelector('#view-selector');
+    if (!box) return;
+    var items = box.querySelectorAll('tp-yt-paper-listbox a');
+    if (items.length < 2) return;
+    var all = items[items.length - 1];
+    if (all.getAttribute('aria-selected') === 'true') return;  // вже все видно
+    all.click();
+  }
+
+  switchOnce();
+  setInterval(switchOnce, 5000);
+})();
+"""
+
+# Підсвічування звертань «@нік».
+#
+# У чаті YouTube немає гілок відповідей: люди відповідають одне одному, пишучи
+# «@vasya Привіт!». У суцільному потоці повідомлень це губиться — незрозуміло,
+# кому адресовано. Тому знаходимо звертання в тексті й загортаємо у span, який
+# стиль вище фарбує жовтим.
+#
+# Чому вручну, а не innerHTML: сторінки YouTube працюють під Trusted Types, і
+# присвоєння innerHTML там кидає помилку. Тому лише createElement/appendChild.
+#
+# Повідомлення додаються постійно, тож слухаємо MutationObserver. Вузли YouTube
+# перевикористовує під нові повідомлення, тому запам'ятовуємо текст, який уже
+# розмітили: змінився текст — розмічаємо заново.
+YT_MENTIONS_JS = r"""
+(function () {
+  if (window.__ftsMentionsOn) return;
+  window.__ftsMentionsOn = true;
+
+  // «@нік»: перед @ не має бути літери (щоб пошта a@b.com не рахувалась
+  // звертанням), а закінчуватись має літерою/цифрою (щоб кома чи крапка після
+  // ніка не потрапили всередину).
+  var RE = /(?<![\p{L}\p{N}_@.\-])@[\p{L}\p{N}_.\-]{0,31}[\p{L}\p{N}_]/gu;
+
+  function paint(msg) {
+    var text = msg.textContent || '';
+    if (msg.__ftsText === text) return;   // цей текст уже розмічено
+    msg.__ftsText = text;
+    if (text.indexOf('@') < 0) return;
+
+    var walker = document.createTreeWalker(msg, NodeFilter.SHOW_TEXT);
+    var nodes = [];
+    while (walker.nextNode()) nodes.push(walker.currentNode);
+
+    for (var i = 0; i < nodes.length; i++) {
+      var node = nodes[i], val = node.nodeValue || '';
+      if (val.indexOf('@') < 0) continue;
+      if (node.parentNode && node.parentNode.className === '__ftsMention') continue;
+
+      var frag = document.createDocumentFragment(), last = 0, m;
+      RE.lastIndex = 0;
+      while ((m = RE.exec(val))) {
+        if (m.index > last) frag.appendChild(document.createTextNode(val.slice(last, m.index)));
+        var span = document.createElement('span');
+        span.className = '__ftsMention';
+        span.textContent = m[0];
+        frag.appendChild(span);
+        last = m.index + m[0].length;
+      }
+      if (!last) continue;
+      if (last < val.length) frag.appendChild(document.createTextNode(val.slice(last)));
+      node.parentNode.replaceChild(frag, node);
+    }
+  }
+
+  function scan(root) {
+    if (root.nodeType !== 1) return;
+    if (root.id === 'message') paint(root);
+    var list = root.querySelectorAll ? root.querySelectorAll('#message') : [];
+    for (var i = 0; i < list.length; i++) paint(list[i]);
+  }
+
+  scan(document.documentElement);
+  new MutationObserver(function (muts) {
+    for (var i = 0; i < muts.length; i++) {
+      var added = muts[i].addedNodes;
+      for (var j = 0; j < added.length; j++) scan(added[j]);
+    }
+  }).observe(document.documentElement, { childList: true, subtree: true });
 })();
 """
 
@@ -320,7 +464,8 @@ class SettingsPanel(QFrame):
         ok.clicked.connect(self._apply_url)
         urow.addWidget(ok)
         lay.addLayout(urow)
-        hint = QLabel("YouTube → гарний прозорий стиль. Порожньо/свій сайт → без змін.", self)
+        hint = QLabel("YouTube → гарний прозорий стиль і всі повідомлення "
+                      "(не «цікавий чат»). Порожньо/свій сайт → без змін.", self)
         hint.setStyleSheet("color:#8b8b93; font:10px 'Segoe UI';")
         hint.setWordWrap(True)
         lay.addWidget(hint)
@@ -565,6 +710,10 @@ class Overlay(QMainWindow):
         if ok and self.is_yt:
             # гарний прозорий стиль поверх YouTube-чату
             self.view.page().runJavaScript(YT_STYLE_JS)
+            # ...показуємо ВСІ повідомлення, а не «цікаві»...
+            self.view.page().runJavaScript(YT_ALL_MESSAGES_JS)
+            # ...і підсвічуємо «@нік», щоб було видно, кому відповідають
+            self.view.page().runJavaScript(YT_MENTIONS_JS)
 
     # --- налаштування панель (окреме верхнє вікно) ---
     def toggle_settings(self):
