@@ -57,7 +57,7 @@ import updater
 # === Налаштування за замовчуванням ==========================================
 APP_NAME = "Hominka"          # від укр. «гомін» — гомін голосів у чаті
 APP_ICON = "hominka.ico"
-APP_VERSION = "1.3.1"
+APP_VERSION = "1.3.2"
 APP_AUTHOR = "Mykyta Vinnyk"
 # Ключ доступу до оверлеїв (?key=) обовʼязковий: без нього сервер відповідає 403.
 # Перевипуск ключа в адмінці ламає це посилання — тоді треба оновити рядок нижче
@@ -515,6 +515,52 @@ YT_STYLE_JS = r"""
     yt-live-chat-sponsorships-gift-redemption-announcement-renderer * {
       color: #faf5ff !important; text-shadow: 0 1px 2px rgba(0, 0, 0, 0.6) !important;
     }
+    /* Опитування від автора каналу.
+       Живе в #action-panel — тій самій смузі, де панель реакцій, тому й
+       лишилося без нашого оформлення, коли ми перестали її ховати. Своє
+       оформлення в опитування розраховане на СВІТЛУ тему: питання майже чорне
+       (#0f0f0f), підпис сірий — на прозорому оверлеї це нечитабельно. */
+    yt-live-chat-poll-renderer {
+      background: rgba(30, 22, 42, 0.55) !important;
+      border-radius: 14px !important;
+      margin: 6px 7px !important;
+      padding: 6px 8px !important;
+      box-shadow: 0 1px 10px rgba(0, 0, 0, 0.42) !important;
+    }
+    yt-live-chat-poll-renderer #poll-question {
+      color: #fdf2ff !important;
+      font-weight: 700 !important;
+      text-shadow: 0 1px 3px rgba(0, 0, 0, 0.75) !important;
+    }
+    yt-live-chat-poll-renderer yt-live-chat-poll-header-renderer yt-formatted-string,
+    yt-live-chat-poll-renderer #text-container,
+    yt-live-chat-poll-renderer tp-yt-paper-item {
+      color: #e9d5ff !important;
+    }
+    /* Смужка голосів — нашим фіолетовим, а не блакитним YouTube. */
+    yt-live-chat-poll-renderer #vote-percentage-bar {
+      background: rgba(168, 85, 247, 0.45) !important;
+      border-radius: 8px !important;
+    }
+    /* Відповісти все одно не вийде: голос вимагає входу, якого в програмі
+       немає. Клік лише відкинув би на сторінку входу — тож не приймаємо його
+       зовсім, а результати показуємо. */
+    yt-live-chat-poll-renderer #endpoint,
+    yt-live-chat-poll-renderer yt-live-chat-poll-choice {
+      pointer-events: none !important;
+      cursor: default !important;
+    }
+
+    /* Страховка на решту цієї смуги. YouTube кладе в #action-panel і те, чого
+       ми ще не бачили (Q&A, промо, покупки), і робить це у світлій темі —
+       текст виходить майже чорний на прозорому оверлеї. Дешевше один раз
+       сказати «тут текст світлий», ніж ловити кожну нову панель очима. */
+    #action-panel yt-formatted-string,
+    #action-panel yt-attributed-string,
+    #action-panel .yt-core-attributed-string {
+      color: #f0e6ff !important;
+    }
+
     /* Збори коштів у чаті (fundraiser) — той самий фіолетовий акцент */
     yt-live-chat-donation-announcement-renderer {
       border-radius: 14px !important; margin: 6px 7px !important;
