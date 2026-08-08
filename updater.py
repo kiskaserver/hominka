@@ -289,23 +289,42 @@ def install(zip_path: str, app_dir: str) -> str:
     bat = os.path.join(tempfile.gettempdir(), "hominka-update.bat")
     with open(bat, "w", encoding="cp1251", errors="replace") as f:
         f.write(_UPDATE_BAT)
-    cmd = ["cmd", "/c", bat, str(os.getpid()), src, app_dir.rstrip("\\/"), staging]
-    # DETACHED_PROCESS — щоб підмінник пережив наш вихід.
-    subprocess.Popen(cmd, creationflags=0x00000008 | 0x00000200, close_fds=True)
+    cmd = [os.path.join(os.environ.get("SystemRoot", r"C:\Windows"), "System32", "cmd.exe"),
+           "/c", bat, str(os.getpid()), src, app_dir.rstrip("\\/"), staging]
+    # CREATE_NO_WINDOW: підмінник переживає наш вихід і сам по собі (це окремий
+    # процес), а вікна консолі посеред гри користувачу не потрібно. Повне
+    # від'єднання (DETACHED_PROCESS) залишає його без консолі зовсім, і частина
+    # системних утиліт у такому оточенні поводиться інакше.
+    subprocess.Popen(cmd, creationflags=0x08000000 | 0x00000200, close_fds=True)
     return " ".join(cmd)
 
 
 # %1 — pid програми, %2 — тека з новою версією, %3 — тека програми,
 # %4 — тимчасова тека, яку треба прибрати.
+#
+# Усі команди — повними шляхами з System32. Інакше все залежить від PATH: у
+# системі з встановленим Git у PATH раніше трапляється його find.exe, який на
+# ті самі аргументи відповідає інакше, і чекання завершення програми ламається
+# мовчки — оновлення просто не встановлюється.
+#
+# ping замість timeout — у процесу без консолі timeout відмовляється працювати.
+#
+# Журнал у %TEMP%\hominka-update.log: підмінник працює вже після того, як вікно
+# закрилося, і показати помилку йому нікуди.
 _UPDATE_BAT = r"""@echo off
 setlocal
+set SYS=%SystemRoot%\System32
+set LOG=%TEMP%\hominka-update.log
+echo [%DATE% %TIME%] wait pid=%1 src=%2 dst=%3 >> "%LOG%"
 :wait
-tasklist /FI "PID eq %1" 2>nul | find "%1" >nul
+%SYS%\tasklist.exe /NH /FI "PID eq %1" 2>nul | %SYS%\find.exe "%1" >nul
 if not errorlevel 1 (
-  ping -n 2 127.0.0.1 >nul
+  %SYS%\ping.exe -n 2 127.0.0.1 >nul
   goto wait
 )
-robocopy %2 %3 /E /IS /IT /R:2 /W:1 /NFL /NDL /NJH /NJS >nul
+echo [%DATE% %TIME%] copying >> "%LOG%"
+%SYS%\robocopy.exe %2 %3 /E /IS /IT /R:2 /W:1 /NFL /NDL /NJH /NJS >> "%LOG%" 2>&1
+echo [%DATE% %TIME%] robocopy exit=%ERRORLEVEL% >> "%LOG%"
 start "" "%~3\Hominka.exe"
 rmdir /s /q %4
 (goto) 2>nul & del "%~f0"
