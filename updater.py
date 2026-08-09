@@ -50,6 +50,7 @@ update.svitix.com і на sha256 у маніфесті звідти ж. Хто �
 далі за коло своїх.
 """
 
+import glob
 import hashlib
 import json
 import os
@@ -257,6 +258,29 @@ class Updater(QObject):
             self._busy = False
 
 
+def cleanup_downloads(keep: str = ""):
+    """Прибирає завантажені архіви оновлень із тимчасової теки.
+
+    Кожен архів — це 220 МБ. Якщо користувач завантажив оновлення й не поставив
+    (закрив програму, передумав), файл лишиться лежати назавжди: тимчасову теку
+    Windows сама не чистить. Тому підчищаємо і чужі минулі завантаження, і своє
+    поточне — після встановлення воно вже ні до чого.
+
+    keep — файл, який чіпати не можна (той, що зараз ставимо).
+    """
+    removed = 0
+    pattern = os.path.join(tempfile.gettempdir(), "hominka-*.zip")
+    for path in glob.glob(pattern):
+        if keep and os.path.abspath(path) == os.path.abspath(keep):
+            continue
+        try:
+            os.remove(path)
+            removed += 1
+        except OSError:
+            pass          # файл ще тримає інший процес — приберемо наступного разу
+    return removed
+
+
 # --- встановлення ----------------------------------------------------------
 
 def install(zip_path: str, app_dir: str) -> str:
@@ -275,10 +299,13 @@ def install(zip_path: str, app_dir: str) -> str:
     os.makedirs(staging, exist_ok=True)
     with zipfile.ZipFile(zip_path) as z:
         z.extractall(staging)
+    # Розпакували — архів більше не потрібен, як і все, що лишилося від
+    # попередніх завантажень.
     try:
         os.remove(zip_path)
     except OSError:
         pass
+    cleanup_downloads()
 
     # Архів може бути запакований як «Hominka/...» — тоді працюємо з підтекою.
     inner = os.path.join(staging, "Hominka")

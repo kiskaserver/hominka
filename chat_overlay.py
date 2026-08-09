@@ -62,7 +62,7 @@ import updater
 # === Налаштування за замовчуванням ==========================================
 APP_NAME = "Hominka"          # від укр. «гомін» — гомін голосів у чаті
 APP_ICON = "hominka.ico"
-APP_VERSION = "1.5.0"
+APP_VERSION = "1.6.0"
 APP_AUTHOR = "Mykyta Vinnyk"
 # Ключ доступу до оверлеїв (?key=) обовʼязковий: без нього сервер відповідає 403.
 # Перевипуск ключа в адмінці ламає це посилання — тоді треба оновити рядок нижче
@@ -1039,6 +1039,17 @@ class SettingsPanel(QWidget):
         self.url_error.setWordWrap(True)
         self.url_error.hide()
         lay.addWidget(self.url_error)
+
+        lay.addSpacing(2)
+        lay.addWidget(self._label("Затримка чату"))
+        self.delay, self.delay_val = self._slider_row(
+            lay, 0, 60, int(self.win.chat_delay), self._on_delay, suffix=" с")
+        hint2 = QLabel("Тримає повідомлення й видає їх по одному — коли пишуть "
+                       "швидше, ніж читаєш, стрічка перестає бути кашею. "
+                       "0 — без затримки.", self)
+        hint2.setObjectName("dim")
+        hint2.setWordWrap(True)
+        lay.addWidget(hint2)
         return card
 
     # --- секція «Вигляд» -----------------------------------------------------
@@ -1121,7 +1132,7 @@ class SettingsPanel(QWidget):
         lab.setObjectName("field")
         return lab
 
-    def _slider_row(self, parent_lay, lo, hi, val, cb):
+    def _slider_row(self, parent_lay, lo, hi, val, cb, suffix="%"):
         row = QHBoxLayout()
         row.setSpacing(8)
         sld = QSlider(Qt.Horizontal, self)
@@ -1130,7 +1141,7 @@ class SettingsPanel(QWidget):
         sld.setStyleSheet(SLIDER_CSS % ACCENT_ACTIVE)
         sld.valueChanged.connect(cb)
         row.addWidget(sld, 1)
-        pct = QLabel(f"{val}%", self)
+        pct = QLabel(f"{val}{suffix}", self)
         pct.setObjectName("value")
         pct.setFixedWidth(40)
         pct.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
@@ -1147,7 +1158,15 @@ class SettingsPanel(QWidget):
         self.win.save_config()
 
     def set_status(self, text: str):
+        """Текст про оновлення. Панель під нього ПІДРОСТАЄ.
+
+        Без цього довгий опис змін просто обрізався: вікно вже показане, а
+        його висота порахована для короткого рядка.
+        """
         self.upd_status.setText(text)
+        if self.isVisible():
+            self.adjustSize()
+            self.win._place_panel()
 
     def set_source_status(self, win: "Overlay"):
         """Показує, який канал знайдено і що саме зараз у вікні.
@@ -1188,6 +1207,10 @@ class SettingsPanel(QWidget):
     def set_url_error(self, text: str):
         self.url_error.setText(text)
         self.url_error.setVisible(bool(text))
+
+    def _on_delay(self, v):
+        self.delay_val.setText("%d с" % v)
+        self.win.set_chat_delay(v)
 
     def _on_opacity(self, v):
         self.win.setWindowOpacity(v / 100)
@@ -1316,7 +1339,7 @@ class UpdateBanner(QFrame):
         self.go.setFixedHeight(24)
         self.go.setStyleSheet(BTN_CSS + "QPushButton{background:#a855f7;color:#fff;font-weight:600;padding:0 8px;}"
                               "QPushButton:hover{background:#9333ea;}")
-        self.go.clicked.connect(win.start_update)
+        self.go.clicked.connect(win.on_update_button)
         lay.addWidget(self.go)
 
         later = QPushButton("✕", self)
@@ -1329,14 +1352,31 @@ class UpdateBanner(QFrame):
         self.hide()
 
     def show_release(self, rel):
-        note = rel.notes.strip().replace("\n", " ")
-        if len(note) > 120:
-            note = note[:117] + "…"
-        self.text.setText("Є %s: %s%s" % (updater.kind_label(rel.kind), rel.version,
-                                          " — " + note if note else ""))
+        """У смужці — тільки версія і вид оновлення.
+
+        Опис змін сюди не влазить: вікно чату вузьке, і довгий текст
+        обрізався на півслові. Повністю він видно у ⚙ («Оновлення») і в
+        підказці при наведенні.
+        """
+        self.text.setText("Є оновлення %s · %s" % (rel.version, updater.kind_label(rel.kind)))
+        note = " ".join(rel.notes.split())
+        self.text.setToolTip(note)
+        self.setToolTip(note)
         self.bar.hide()
         self.go.setEnabled(True)
         self.go.setText("Оновити")
+        self.show()
+
+    def show_ready(self, rel):
+        """Завантажено — тепер рішення за людиною.
+
+        Раніше програма ставила оновлення одразу після завантаження й сама
+        перезапускалася: посеред стріму це щонайменше неввічливо.
+        """
+        self.text.setText("Оновлення %s завантажено" % rel.version)
+        self.bar.hide()
+        self.go.setEnabled(True)
+        self.go.setText("Встановити")
         self.show()
 
     def show_progress(self, done: int, total: int):
@@ -1377,6 +1417,9 @@ class Overlay(QMainWindow):
         self.kick_channel = ""
         self.readers = []
         self.feed = None
+        # Затримка стрічки, секунди. Стосується спільної стрічки: сторінкою
+        # YouTube ми не керуємо, там повідомлення малює він сам.
+        self.chat_delay = 0
         self.auto_video = ""
         self.yt_channel_id = ""
         self.yt_channel_title = ""
@@ -1386,6 +1429,7 @@ class Overlay(QMainWindow):
         self.installed_channel = ""   # з якого каналу стоїть поточна збірка
         self.auto_update = True
         self.pending = None           # Release, який чекає на згоду користувача
+        self.downloaded = ""          # шлях до завантаженого архіву
 
         # Збереження config з дебаунсом — щоб не писати на диск на кожен піксель
         # під час зміни розміру (звідси мікрофрізи).
@@ -1464,6 +1508,9 @@ class Overlay(QMainWindow):
         if self.auto_update:
             QTimer.singleShot(15000, lambda: self.check_updates(manual=False))
             self._upd_timer.start()
+        # Хвости від минулих разів: перерване завантаження або оновлення, яке
+        # так і не поставили.
+        QTimer.singleShot(3000, updater.cleanup_downloads)
 
     def _apply_border(self, accent: str):
         self.accent = accent
@@ -1534,18 +1581,34 @@ class Overlay(QMainWindow):
     def _on_progress(self, done: int, total: int):
         self.banner.show_progress(done, total)
 
+    def on_update_button(self):
+        """Одна кнопка на два кроки: спершу завантажити, потім встановити."""
+        if self.downloaded:
+            self.install_update()
+        else:
+            self.start_update()
+
     def _on_downloaded(self, path: str):
+        self.downloaded = path
+        self.banner.show_ready(self.pending) if self.pending else None
+        self.panel.set_status("Завантажено %s — натисніть «Встановити»."
+                              % (self.pending.version if self.pending else ""))
+
+    def install_update(self):
+        """Ставить завантажене й виходить: підмінник чекає саме виходу."""
+        if not self.downloaded:
+            return
         try:
             app_dir = os.path.dirname(sys.executable) if getattr(sys, "frozen", False) else BASE_DIR
             # Канал запам'ятовуємо ДО перезапуску: після нього це вже інша збірка,
             # і без запису вона не знала б, з якої гілки прийшла.
             self.installed_channel = self.channel
             self._write_config()
-            updater.install(path, app_dir)
+            updater.install(self.downloaded, app_dir)
         except Exception as e:
             self.banner.show_error(str(e))
             return
-        # Підмінник чекає нашого виходу — виходимо.
+        self.downloaded = ""
         self.close()
 
     def _on_update_failed(self, msg: str):
@@ -1567,6 +1630,12 @@ class Overlay(QMainWindow):
         self.save_config()
         self.panel.set_source_status(self)
         self.probe_live()
+
+    def set_chat_delay(self, seconds: int):
+        self.chat_delay = max(0, int(seconds))
+        if self.feed is not None:
+            self.feed.set_delay(self.chat_delay)
+        self.save_config()
 
     def set_extra_channels(self, twitch: str, kick: str):
         """Канали Twitch і Kick із налаштувань. Приймаємо і посилання, і нік."""
@@ -1643,6 +1712,7 @@ class Overlay(QMainWindow):
         self.is_yt = False
         self.url = ""
         self.bar.title.setText("Чат")
+        self.feed.set_delay(self.chat_delay)
         self.feed.load()
 
         if self.twitch_channel:
@@ -1844,6 +1914,11 @@ class Overlay(QMainWindow):
         self.yt_channel_id = cfg.get("youtubeChannelId", "")
         self.my_channel = cfg.get("myChannel", "")
         self.panel.channel_edit.setText(self.my_channel)
+        self.chat_delay = int(cfg.get("chatDelay", 0) or 0)
+        self.panel.delay.blockSignals(True)
+        self.panel.delay.setValue(self.chat_delay)
+        self.panel.delay_val.setText("%d с" % self.chat_delay)
+        self.panel.delay.blockSignals(False)
         self.twitch_channel = cfg.get("twitchChannel", "")
         self.kick_channel = cfg.get("kickChannel", "")
         self.panel.twitch_edit.setText(self.twitch_channel)
@@ -1887,6 +1962,7 @@ class Overlay(QMainWindow):
                     "url": raw_url,
                     "youtubeChannelId": self.yt_channel_id,
                     "myChannel": self.my_channel,
+                    "chatDelay": self.chat_delay,
                     "twitchChannel": self.twitch_channel,
                     "kickChannel": self.kick_channel,
                     "channel": self.channel,
@@ -1898,6 +1974,11 @@ class Overlay(QMainWindow):
 
     def closeEvent(self, e):
         self._stop_readers()
+        # Завантажене, але не встановлене оновлення — 220 МБ у тимчасовій теці.
+        # Якщо людина закриває програму, не поставивши його, тримати файл
+        # немає сенсу: наступного разу він завантажиться заново.
+        if self.downloaded:
+            updater.cleanup_downloads()
         self._write_config()
         try:
             user32.UnregisterHotKey(_hwnd(self), HOTKEY_ID)
