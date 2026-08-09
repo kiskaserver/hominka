@@ -47,7 +47,7 @@ from PySide6.QtGui import QColor, QPainter, QPen, QIcon
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QFrame, QVBoxLayout, QHBoxLayout,
     QSizeGrip, QPushButton, QLabel, QSlider, QLineEdit, QComboBox, QCheckBox,
-    QProgressBar,
+    QProgressBar, QWidget, QGraphicsDropShadowEffect,
 )
 from PySide6.QtWebEngineCore import QWebEngineProfile, QWebEnginePage
 from PySide6.QtWebEngineWidgets import QWebEngineView
@@ -57,7 +57,7 @@ import updater
 # === Налаштування за замовчуванням ==========================================
 APP_NAME = "Hominka"          # від укр. «гомін» — гомін голосів у чаті
 APP_ICON = "hominka.ico"
-APP_VERSION = "1.3.3"
+APP_VERSION = "1.4.0"
 APP_AUTHOR = "Mykyta Vinnyk"
 # Ключ доступу до оверлеїв (?key=) обовʼязковий: без нього сервер відповідає 403.
 # Перевипуск ключа в адмінці ламає це посилання — тоді треба оновити рядок нижче
@@ -767,6 +767,81 @@ QSlider::handle:horizontal {
 }
 """
 
+# Вигляд вікна налаштувань. Один рядок стилю на все вікно: інакше кожен віджет
+# обростає власним setStyleSheet, і зібрати з цього цілісний вигляд неможливо.
+PANEL_CSS = """
+#body {
+    background: #17141f;
+    border: 1px solid rgba(168,85,247,0.35);
+    border-radius: 14px;
+}
+QLabel { color: #d4d4d8; font: 12px 'Segoe UI'; }
+QLabel#title { color: #fafafa; font: 600 14px 'Segoe UI'; }
+QLabel#cap {
+    color: #c4b5fd; font: 600 11px 'Segoe UI';
+    text-transform: uppercase; letter-spacing: 1px;
+}
+QLabel#field { color: #a1a1aa; font: 11px 'Segoe UI'; }
+QLabel#dim   { color: #8b8b93; font: 11px 'Segoe UI'; }
+QLabel#value { color: #e9d5ff; font: 600 11px 'Segoe UI'; }
+QLabel#error { color: #fca5a5; font: 11px 'Segoe UI'; }
+
+#card {
+    background: rgba(255,255,255,0.035);
+    border: 1px solid rgba(255,255,255,0.07);
+    border-radius: 10px;
+}
+
+QLineEdit {
+    background: rgba(255,255,255,0.06); color: #fafafa;
+    border: 1px solid rgba(255,255,255,0.12); border-radius: 7px;
+    padding: 5px 8px; font: 12px 'Segoe UI';
+    selection-background-color: #a855f7;
+}
+QLineEdit:focus { border: 1px solid #a855f7; background: rgba(255,255,255,0.09); }
+
+QPushButton#primary {
+    background: #a855f7; color: #fff; border: none;
+    border-radius: 7px; font: 600 12px 'Segoe UI';
+}
+QPushButton#primary:hover { background: #9333ea; }
+QPushButton#primary:pressed { background: #7e22ce; }
+
+QPushButton#ghost {
+    background: rgba(255,255,255,0.06); color: #e4e4e7; border: none;
+    border-radius: 7px; font: 12px 'Segoe UI';
+}
+QPushButton#ghost:hover { background: rgba(255,255,255,0.14); color: #fff; }
+QPushButton#ghost:pressed { background: rgba(255,255,255,0.2); }
+
+QComboBox {
+    background: rgba(255,255,255,0.06); color: #fafafa;
+    border: 1px solid rgba(255,255,255,0.12); border-radius: 7px;
+    padding: 4px 8px; font: 12px 'Segoe UI';
+    min-height: 18px;
+}
+QComboBox:hover { border: 1px solid #a855f7; }
+QComboBox::drop-down { border: none; width: 18px; }
+QComboBox QAbstractItemView {
+    background: #17141f; color: #fafafa; selection-background-color: #a855f7;
+    border: 1px solid rgba(255,255,255,0.14); outline: none; padding: 2px;
+}
+
+QCheckBox { color: #d4d4d8; font: 11px 'Segoe UI'; spacing: 7px; }
+QCheckBox::indicator {
+    width: 14px; height: 14px; border-radius: 4px;
+    border: 1px solid rgba(255,255,255,0.28); background: rgba(255,255,255,0.06);
+}
+QCheckBox::indicator:hover { border: 1px solid rgba(168,85,247,0.7); }
+/* Галочку в стилях не намалюєш без картинки, тому «увімкнено» — заповнений
+   квадрат із темною серединою: помітно і не потребує зайвих файлів. */
+QCheckBox::indicator:checked {
+    background: #a855f7; border: 4px solid #17141f;
+    width: 8px; height: 8px; border-radius: 6px;
+}
+"""
+
+
 COMBO_CSS = """
 QComboBox {
     background: rgba(255,255,255,0.07); color: #fafafa;
@@ -836,147 +911,215 @@ class SizeGrip(QSizeGrip):
             p.drawLine(w - 3, h - 13 + off, w - 13 + off, h - 3)
 
 
-class SettingsPanel(QFrame):
-    """Випадна панель налаштувань (⚙): посилання, прозорість, тло, шрифт."""
+class SettingsPanel(QWidget):
+    """Вікно налаштувань.
+
+    Окреме верхнє вікно, а не панель усередині чату: нативний QWebEngineView
+    малює поверх усього, що на ньому лежить, — від панелі було видно лише
+    обрізаний край. І відкривається воно ЗБОКУ від чату, а не поверх нього:
+    налаштування крутять саме тоді, коли читають чат, і затуляти його собою —
+    те саме, що правити гучність, закривши екран.
+
+    Оформлення: темна картка з тінню, всередині секції. Вікно без рамки, тож
+    заголовок і хрестик малюємо самі.
+    """
+
+    WIDTH = 330
+    SHADOW = 16          # поле навколо картки під тінь
+    GAP = 10             # відступ від вікна чату
 
     def __init__(self, win: "Overlay"):
-        # Окреме верхнє вікно — інакше нативний QWebEngineView малює поверх
-        # панелі і видно лише обрізаний край (звідси «порізане ОК»).
         super().__init__(None)
         self.win = win
-        self.setWindowFlags(
-            Qt.Tool | Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint
-        )
+        self.setWindowFlags(Qt.Tool | Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint)
         self.setAttribute(Qt.WA_TranslucentBackground, True)
-        self.setObjectName("panel")
-        # Фон малюємо у paintEvent (надійніше за стиль на верхньому вікні —
-        # інакше фон не прокрашувався і текст висів на білому). Тут лише текст.
-        self.setStyleSheet("QLabel { color: #d4d4d8; font: 11px 'Segoe UI'; }")
-        self.setFixedWidth(288)
+        self.setFixedWidth(self.WIDTH + self.SHADOW * 2)
 
-        lay = QVBoxLayout(self)
-        lay.setContentsMargins(12, 11, 12, 12)
-        lay.setSpacing(6)
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(self.SHADOW, self.SHADOW, self.SHADOW, self.SHADOW)
 
-        # --- Посилання на чат ---
-        lay.addWidget(self._cap("Посилання на чат"))
-        urow = QHBoxLayout()
-        urow.setSpacing(6)
-        self.url_edit = QLineEdit(win.url, self)
-        self.url_edit.setStyleSheet(INPUT_CSS)
-        self.url_edit.setPlaceholderText("YouTube-посилання або порожньо = твій чат")
-        self.url_edit.returnPressed.connect(self._apply_url)
-        urow.addWidget(self.url_edit, 1)
-        ok = QPushButton("OK", self)
-        ok.setFixedSize(38, 28)
-        ok.setStyleSheet(BTN_CSS + "QPushButton{background:#a855f7;color:#fff;font-weight:600;}"
-                         "QPushButton:hover{background:#9333ea;}")
-        ok.clicked.connect(self._apply_url)
-        urow.addWidget(ok)
-        lay.addLayout(urow)
-        hint = QLabel("Порожньо — показуємо вашу трансляцію (канал нижче), а поки "
-                      "ефіру немає, чат сайту. Посилання тут перебиває автопошук — "
-                      "воно потрібне лише для чужого чату.", self)
-        hint.setStyleSheet("color:#8b8b93; font:10px 'Segoe UI';")
-        hint.setWordWrap(True)
-        lay.addWidget(hint)
+        self.body = QFrame(self)
+        self.body.setObjectName("body")
+        self.body.setStyleSheet(PANEL_CSS)
+        shadow = QGraphicsDropShadowEffect(self)
+        shadow.setBlurRadius(28)
+        shadow.setColor(QColor(0, 0, 0, 190))
+        shadow.setOffset(0, 6)
+        self.body.setGraphicsEffect(shadow)
+        outer.addWidget(self.body)
 
-        # Помилка поля: показуємо тут, а не мовчки не робимо нічого.
-        self.url_error = QLabel("", self)
-        self.url_error.setStyleSheet("color:#fca5a5; font:10px 'Segoe UI';")
-        self.url_error.setWordWrap(True)
-        self.url_error.hide()
-        lay.addWidget(self.url_error)
+        lay = QVBoxLayout(self.body)
+        lay.setContentsMargins(14, 12, 14, 14)
+        lay.setSpacing(10)
 
-        lay.addSpacing(4)
+        lay.addLayout(self._header())
+        lay.addWidget(self._chat_card())
+        lay.addWidget(self._look_card())
+        lay.addWidget(self._update_card())
 
-        # --- Мій канал ---
-        # Єдине, що потрібно для автопошуку: сторінка каналу і /live відкриті
-        # всім, вхід у акаунт не потрібен (і не робиться — Google не пускає у
-        # вбудований браузер).
-        lay.addWidget(self._cap("Мій канал"))
+        self.hide()
+
+    # --- шапка ---------------------------------------------------------------
+    def _header(self) -> QHBoxLayout:
+        row = QHBoxLayout()
+        row.setSpacing(6)
+        title = QLabel("Налаштування", self)
+        title.setObjectName("title")
+        row.addWidget(title)
+        row.addStretch(1)
+        ver = QLabel(APP_VERSION, self)
+        ver.setObjectName("dim")
+        row.addWidget(ver)
+        close = QPushButton("\u2715", self)
+        close.setObjectName("ghost")
+        close.setFixedSize(24, 24)
+        close.setToolTip("Закрити налаштування")
+        close.clicked.connect(self.hide)
+        row.addWidget(close)
+        return row
+
+    # --- секція «Чат» --------------------------------------------------------
+    def _chat_card(self) -> QFrame:
+        card, lay = self._card("Чат")
+
+        lay.addWidget(self._label("Мій канал"))
         self.channel_edit = QLineEdit(self)
-        self.channel_edit.setStyleSheet(INPUT_CSS)
         self.channel_edit.setPlaceholderText("@нік, посилання на канал або UC…")
         self.channel_edit.returnPressed.connect(self._apply_channel)
         self.channel_edit.editingFinished.connect(self._apply_channel)
         lay.addWidget(self.channel_edit)
 
         self.src_status = QLabel("", self)
-        self.src_status.setStyleSheet("color:#8b8b93; font:10px 'Segoe UI';")
+        self.src_status.setObjectName("dim")
         self.src_status.setWordWrap(True)
         lay.addWidget(self.src_status)
 
-        lay.addSpacing(4)
+        lay.addSpacing(2)
+        lay.addWidget(self._label("Посилання на чат"))
+        urow = QHBoxLayout()
+        urow.setSpacing(6)
+        self.url_edit = QLineEdit(self)
+        self.url_edit.setPlaceholderText("порожньо = моя трансляція")
+        self.url_edit.returnPressed.connect(self._apply_url)
+        urow.addWidget(self.url_edit, 1)
+        ok = QPushButton("OK", self)
+        ok.setObjectName("primary")
+        ok.setFixedSize(42, 28)
+        ok.clicked.connect(self._apply_url)
+        urow.addWidget(ok)
+        lay.addLayout(urow)
 
-        # --- Прозорість вікна ---
-        lay.addWidget(self._cap("Прозорість вікна"))
-        self.opacity, self.op_pct = self._slider_row(lay, 25, 100, int(win.windowOpacity() * 100),
-                                                     self._on_opacity)
+        hint = QLabel("Потрібне лише для чужого чату — своя трансляція "
+                      "знаходиться сама.", self)
+        hint.setObjectName("dim")
+        hint.setWordWrap(True)
+        lay.addWidget(hint)
 
-        # --- Тло (затемнення) ---
-        # До 100%: на світлих іграх навіть щільна підкладка лишалася напівпрозорою,
-        # і білий текст на ній читався погано.
-        lay.addWidget(self._cap("Тло під чатом (затемнення)"))
-        self.bg, self.bg_pct = self._slider_row(lay, 0, 100, int(win.bg_alpha * 100),
-                                                self._on_bg)
+        self.url_error = QLabel("", self)
+        self.url_error.setObjectName("error")
+        self.url_error.setWordWrap(True)
+        self.url_error.hide()
+        lay.addWidget(self.url_error)
+        return card
 
-        lay.addSpacing(4)
+    # --- секція «Вигляд» -----------------------------------------------------
+    def _look_card(self) -> QFrame:
+        card, lay = self._card("Вигляд")
 
-        # --- Розмір тексту ---
-        lay.addWidget(self._cap("Розмір тексту"))
-        frow = QHBoxLayout()
-        frow.setSpacing(6)
-        minus = QPushButton("A−", self)
-        minus.setFixedSize(34, 26)
-        minus.setStyleSheet(BTN_CSS)
-        minus.clicked.connect(win.zoom_out)
-        frow.addWidget(minus)
-        self.zoom_lbl = QLabel(f"{int(win.zoom * 100)}%", self)
+        lay.addWidget(self._label("Прозорість вікна"))
+        self.opacity, self.op_pct = self._slider_row(
+            lay, 25, 100, int(self.win.windowOpacity() * 100), self._on_opacity)
+
+        lay.addWidget(self._label("Тло під чатом"))
+        self.bg, self.bg_pct = self._slider_row(
+            lay, 0, 100, int(self.win.bg_alpha * 100), self._on_bg)
+
+        lay.addWidget(self._label("Розмір тексту"))
+        row = QHBoxLayout()
+        row.setSpacing(6)
+        minus = QPushButton("A\u2212", self)
+        minus.setObjectName("ghost")
+        minus.setFixedSize(38, 28)
+        minus.clicked.connect(self.win.zoom_out)
+        row.addWidget(minus)
+        self.zoom_lbl = QLabel(f"{int(self.win.zoom * 100)}%", self)
+        self.zoom_lbl.setObjectName("value")
         self.zoom_lbl.setAlignment(Qt.AlignCenter)
-        self.zoom_lbl.setFixedWidth(46)
-        self.zoom_lbl.setStyleSheet("color:#a1a1aa; font:11px 'Segoe UI';")
-        frow.addWidget(self.zoom_lbl)
+        self.zoom_lbl.setFixedWidth(52)
+        row.addWidget(self.zoom_lbl)
         plus = QPushButton("A+", self)
-        plus.setFixedSize(34, 26)
-        plus.setStyleSheet(BTN_CSS)
-        plus.clicked.connect(win.zoom_in)
-        frow.addWidget(plus)
-        frow.addStretch(1)
-        lay.addLayout(frow)
+        plus.setObjectName("ghost")
+        plus.setFixedSize(38, 28)
+        plus.clicked.connect(self.win.zoom_in)
+        row.addWidget(plus)
+        row.addStretch(1)
+        lay.addLayout(row)
+        return card
 
-        lay.addSpacing(6)
+    # --- секція «Оновлення» --------------------------------------------------
+    def _update_card(self) -> QFrame:
+        card, lay = self._card("Оновлення")
 
-        # --- Оновлення ---
-        lay.addWidget(self._cap("Оновлення"))
-        crow = QHBoxLayout()
-        crow.setSpacing(6)
+        row = QHBoxLayout()
+        row.setSpacing(6)
         self.channel = QComboBox(self)
-        self.channel.setStyleSheet(COMBO_CSS)
         for cid, label, tip in updater.CHANNELS:
             self.channel.addItem(label, cid)
             self.channel.setItemData(self.channel.count() - 1, tip, Qt.ToolTipRole)
         self.channel.currentIndexChanged.connect(self._on_channel)
-        crow.addWidget(self.channel, 1)
+        row.addWidget(self.channel, 1)
         check = QPushButton("Перевірити", self)
-        check.setFixedHeight(26)
-        check.setStyleSheet(BTN_CSS)
-        check.clicked.connect(lambda: win.check_updates(manual=True))
-        crow.addWidget(check)
-        lay.addLayout(crow)
+        check.setObjectName("ghost")
+        check.setFixedHeight(28)
+        check.clicked.connect(lambda: self.win.check_updates(manual=True))
+        row.addWidget(check)
+        lay.addLayout(row)
 
         self.auto_upd = QCheckBox("Перевіряти автоматично", self)
-        self.auto_upd.setStyleSheet(CHECK_CSS)
         self.auto_upd.toggled.connect(self._on_auto)
         lay.addWidget(self.auto_upd)
 
         self.upd_status = QLabel(f"Версія {APP_VERSION}", self)
-        self.upd_status.setStyleSheet("color:#8b8b93; font:10px 'Segoe UI';")
+        self.upd_status.setObjectName("dim")
         self.upd_status.setWordWrap(True)
         lay.addWidget(self.upd_status)
+        return card
 
-        self.hide()
+    # --- будівельні дрібниці -------------------------------------------------
+    def _card(self, title: str):
+        card = QFrame(self)
+        card.setObjectName("card")
+        lay = QVBoxLayout(card)
+        lay.setContentsMargins(11, 9, 11, 11)
+        lay.setSpacing(5)
+        cap = QLabel(title, card)
+        cap.setObjectName("cap")
+        lay.addWidget(cap)
+        return card, lay
 
+    def _label(self, text: str) -> QLabel:
+        lab = QLabel(text, self)
+        lab.setObjectName("field")
+        return lab
+
+    def _slider_row(self, parent_lay, lo, hi, val, cb):
+        row = QHBoxLayout()
+        row.setSpacing(8)
+        sld = QSlider(Qt.Horizontal, self)
+        sld.setRange(lo, hi)
+        sld.setValue(val)
+        sld.setStyleSheet(SLIDER_CSS % ACCENT_ACTIVE)
+        sld.valueChanged.connect(cb)
+        row.addWidget(sld, 1)
+        pct = QLabel(f"{val}%", self)
+        pct.setObjectName("value")
+        pct.setFixedWidth(40)
+        pct.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        row.addWidget(pct)
+        parent_lay.addLayout(row)
+        return sld, pct
+
+    # --- поведінка -----------------------------------------------------------
     def _on_channel(self, _idx: int):
         self.win.set_channel(self.channel.currentData())
 
@@ -991,7 +1134,7 @@ class SettingsPanel(QFrame):
         """Показує, який канал знайдено і що саме зараз у вікні.
 
         Без цього автоматика мовчазна: незрозуміло, чому чат такий, а не інший,
-        і що робити, щоб став іншим.
+        і що зробити, щоб став іншим.
         """
         manual_url = self.url_edit.text().strip()
         typed = self.channel_edit.text().strip()
@@ -1005,35 +1148,14 @@ class SettingsPanel(QFrame):
             head = "Канал не вказано — автопошук трансляції вимкнено."
 
         if manual_url:
-            tail = "Зараз показуємо посилання, вписане вище."
+            tail = "Зараз показуємо посилання, вписане нижче."
         elif win.auto_video:
             tail = "Ефір іде — показуємо його чат."
         elif known:
-            tail = "Ефіру немає — показуємо чат сайту, перемкнемось самі, щойно почнеться."
+            tail = "Ефіру немає — покажемо чат сайту, перемкнемось самі, щойно почнеться."
         else:
             tail = "Показуємо чат сайту."
         self.src_status.setText(head + " " + tail)
-
-    def _cap(self, text: str) -> QLabel:
-        lab = QLabel(text, self)
-        lab.setStyleSheet("color:#e9d5ff; font:600 11px 'Segoe UI';")
-        return lab
-
-    def _slider_row(self, parent_lay, lo, hi, val, cb):
-        row = QHBoxLayout()
-        row.setSpacing(8)
-        sld = QSlider(Qt.Horizontal, self)
-        sld.setRange(lo, hi)
-        sld.setValue(val)
-        sld.setStyleSheet(SLIDER_CSS % ACCENT_ACTIVE)
-        sld.valueChanged.connect(cb)
-        row.addWidget(sld, 1)
-        pct = QLabel(f"{val}%", self)
-        pct.setFixedWidth(36)
-        pct.setStyleSheet("color:#a1a1aa; font:11px 'Segoe UI';")
-        row.addWidget(pct)
-        parent_lay.addLayout(row)
-        return sld, pct
 
     def _apply_url(self):
         self.win.set_url(self.url_edit.text())
@@ -1063,16 +1185,7 @@ class SettingsPanel(QFrame):
 
     def showEvent(self, e):
         super().showEvent(e)
-        exclude_from_capture(self)  # OBS не бачить і панель налаштувань
-
-    def paintEvent(self, e):
-        # Гарантований тёмний фон із заокругленням та акцентною рамкою.
-        p = QPainter(self)
-        p.setRenderHint(QPainter.Antialiasing)
-        p.setPen(QPen(QColor(168, 85, 247, 120), 1))
-        p.setBrush(QColor(18, 16, 24, 252))
-        r = self.rect().adjusted(0, 0, -1, -1)
-        p.drawRoundedRect(r, 12, 12)
+        exclude_from_capture(self)  # OBS не бачить і вікно налаштувань
 
 
 class DragBar(QFrame):
@@ -1508,15 +1621,37 @@ class Overlay(QMainWindow):
             self.panel.activateWindow()
 
     def _place_panel(self):
-        # під кнопкою ⚙, вирівняно по правому краю, у глобальних координатах
-        g = self.bar.gear
-        anchor = g.mapToGlobal(QPoint(g.width(), g.height()))
-        x, y = anchor.x() - self.panel.width(), anchor.y() + 6
+        """Ставить вікно налаштувань ПОРУЧ із чатом, а не поверх нього.
+
+        Праворуч, якщо там є місце; інакше ліворуч; якщо тісно з обох боків —
+        притискаємо до краю екрана. Чат при цьому лишається видимим: його ж і
+        налаштовують.
+
+        Тінь навколо картки — частина вікна, тому в розрахунках її знімаємо,
+        інакше між чатом і панеллю зяяла б порожня смуга.
+        """
+        pad = self.panel.SHADOW
+        w, h = self.panel.width(), self.panel.sizeHint().height()
         scr = self.screen().availableGeometry() if self.screen() else None
+
+        right = self.x() + self.width() + self.panel.GAP - pad
+        left = self.x() - w + pad - self.panel.GAP
+        x = right
+        if scr and right + w - pad > scr.right():
+            x = left if left + pad >= scr.left() else right
+
+        y = self.y() - pad + 2
         if scr:
-            x = max(scr.left() + 4, min(x, scr.right() - self.panel.width() - 4))
-            y = max(scr.top() + 4, min(y, scr.bottom() - self.panel.height() - 4))
+            x = max(scr.left() - pad, min(x, scr.right() - w + pad))
+            y = max(scr.top() - pad, min(y, scr.bottom() - h + pad))
         self.panel.move(x, y)
+
+    def moveEvent(self, e):
+        # Вікно тягнуть — панель їде разом, інакше вона лишається «висіти»
+        # посеред екрана окремо від чату.
+        super().moveEvent(e)
+        if hasattr(self, "panel") and self.panel.isVisible():
+            self._place_panel()
 
     # --- розмір тексту ---
     def zoom_in(self):
