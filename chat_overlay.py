@@ -57,7 +57,7 @@ import updater
 # === Налаштування за замовчуванням ==========================================
 APP_NAME = "Hominka"          # від укр. «гомін» — гомін голосів у чаті
 APP_ICON = "hominka.ico"
-APP_VERSION = "1.3.2"
+APP_VERSION = "1.3.3"
 APP_AUTHOR = "Mykyta Vinnyk"
 # Ключ доступу до оверлеїв (?key=) обовʼязковий: без нього сервер відповідає 403.
 # Перевипуск ключа в адмінці ламає це посилання — тоді треба оновити рядок нижче
@@ -364,6 +364,21 @@ def is_youtube(url: str) -> bool:
     return "youtube.com" in url or "youtu.be" in url
 
 
+def is_chat_url(text: str) -> bool:
+    """Чи годиться рядок як адреса чату.
+
+    Вимоги мінімальні (чат буває не тільки в YouTube), але саме вони
+    відрізняють адресу від випадково вставленого тексту: схема http(s) і
+    непорожній хост із крапкою.
+    """
+    raw = (text or "").strip()
+    if not raw.startswith("http://") and not raw.startswith("https://"):
+        return False
+    u = QUrl(raw)
+    host = u.host()
+    return u.isValid() and ("." in host or host == "localhost")
+
+
 def popout_url(video_id: str) -> str:
     """Посилання на окреме вікно чату конкретної трансляції."""
     return f"https://www.youtube.com/live_chat?v={video_id}&is_popout=1"
@@ -466,21 +481,17 @@ YT_STYLE_JS = r"""
       height: 1.3em !important; width: auto !important;
       vertical-align: -0.28em !important; margin: 0 1px !important;
     }
-    /* Значки біля імені (спонсорство, модератор, автор каналу).
-       YouTube ставить їм vertical-align: sub — тобто буквально опускає під
-       рядок, і значок висить нижче ніка. Вирівнюємо флексом по центру: у
-       рядку автора вже є flex-контейнер, лишається сказати обом коробкам
-       триматися середини. Заміряно на живому чаті: розбіжність центрів
-       значка й тексту стає 0.00 px (було 1.6). */
-    yt-live-chat-author-chip { align-items: center !important; }
-    #chat-badges {
-      display: inline-flex !important;
-      align-items: center !important;
-    }
+    /* Значки біля імені (спонсорство, ранг, модератор, автор каналу).
+       YouTube ставить їм vertical-align: sub — буквально опускає під рядок, і
+       значок висить нижче ніка.
+       Підіймаємо ЛИШЕ його, зсувом: position: relative нічого не переставляє,
+       тому решта рядка лишається на місці. Спроба вирівняти рядок автора
+       флексом (1.3.1) значок поставила рівно, але зламала базову лінію всієї
+       строки — текст повідомлення поїхав на 4.5 px вище ніка.
+       Заміряно на живому чаті: значок 1.59 px нижче → 0.05, текст 0 → 0. */
     yt-live-chat-author-badge-renderer {
-      display: inline-flex !important;
-      align-items: center !important;
-      vertical-align: middle !important;
+      position: relative !important;
+      top: -0.12em !important;
     }
     yt-live-chat-author-badge-renderer img,
     yt-live-chat-author-badge-renderer #image { height: 1em !important; width: auto !important; }
@@ -870,6 +881,13 @@ class SettingsPanel(QFrame):
         hint.setWordWrap(True)
         lay.addWidget(hint)
 
+        # Помилка поля: показуємо тут, а не мовчки не робимо нічого.
+        self.url_error = QLabel("", self)
+        self.url_error.setStyleSheet("color:#fca5a5; font:10px 'Segoe UI';")
+        self.url_error.setWordWrap(True)
+        self.url_error.hide()
+        lay.addWidget(self.url_error)
+
         lay.addSpacing(4)
 
         # --- Мій канал ---
@@ -897,8 +915,10 @@ class SettingsPanel(QFrame):
                                                      self._on_opacity)
 
         # --- Тло (затемнення) ---
+        # До 100%: на світлих іграх навіть щільна підкладка лишалася напівпрозорою,
+        # і білий текст на ній читався погано.
         lay.addWidget(self._cap("Тло під чатом (затемнення)"))
-        self.bg, self.bg_pct = self._slider_row(lay, 0, 85, int(win.bg_alpha * 100),
+        self.bg, self.bg_pct = self._slider_row(lay, 0, 100, int(win.bg_alpha * 100),
                                                 self._on_bg)
 
         lay.addSpacing(4)
@@ -1020,6 +1040,10 @@ class SettingsPanel(QFrame):
 
     def _apply_channel(self):
         self.win.set_my_channel(self.channel_edit.text())
+
+    def set_url_error(self, text: str):
+        self.url_error.setText(text)
+        self.url_error.setVisible(bool(text))
 
     def _on_opacity(self, v):
         self.win.setWindowOpacity(v / 100)
@@ -1144,6 +1168,7 @@ class UpdateBanner(QFrame):
 
         self.text = QLabel("", self)
         self.text.setWordWrap(True)
+        self.text.setMinimumWidth(0)     # інакше QLabel вимагає ширини на весь рядок
         lay.addWidget(self.text, 1)
 
         self.bar = QProgressBar(self)
@@ -1342,6 +1367,10 @@ class Overlay(QMainWindow):
         self.pending = rel
         self.panel.set_status("Доступно: %s. Що нового: %s" % (rel.title, rel.notes or "—"))
         self.banner.show_release(rel)
+        # Панель налаштувань — окреме вікно поверх; поки вона відкрита, смужку
+        # з оновленням видно погано. Ховаємо: рішення тепер приймають у ній.
+        if self.panel.isVisible():
+            self.panel.hide()
         # Обов'язкове оновлення — це виправлення, без якого програма працює
         # неправильно. Не ставимо мовчки, але й не даємо про нього забути.
         if rel.mandatory and self.auto_update:
@@ -1351,6 +1380,8 @@ class Overlay(QMainWindow):
         if self.pending is None:
             self.check_updates(manual=True)
             return
+        # Далі програма перезапуститься — тримати відкриту панель ні до чого.
+        self.panel.hide()
         self.banner.show_progress(0, self.pending.size)
         self.updater.download(self.pending)
 
@@ -1436,6 +1467,18 @@ class Overlay(QMainWindow):
         return "Chat"
 
     def set_url(self, raw: str):
+        """Посилання з поля ⚙. Порожньо — режим автопошуку.
+
+        Перевіряємо ДО того, як віддати вікну: невалідний рядок QWebEngineView
+        показує сторінкою помилки, і виглядає це як «програма зламалася».
+        """
+        raw = (raw or "").strip()
+        if raw and not is_chat_url(raw):
+            self.panel.url_edit.setText(self.panel.url_edit.text().strip())
+            self.panel.set_url_error("Не схоже на посилання. Потрібне http(s)://… "
+                                     "або порожнє поле для автопошуку.")
+            return
+        self.panel.set_url_error("")
         if self.panel.url_edit.text() != raw:
             self.panel.url_edit.setText(raw)
         self.refresh_source()
@@ -1490,7 +1533,7 @@ class Overlay(QMainWindow):
 
     # --- тло ---
     def set_bg_alpha(self, v: int):
-        self.bg_alpha = max(0.0, min(0.85, v / 100))
+        self.bg_alpha = max(0.0, min(1.0, v / 100))
         self._apply_border(self.accent)
         self.save_config()
 
