@@ -42,7 +42,7 @@ import sys
 import tempfile
 from ctypes import wintypes
 
-from PySide6.QtCore import Qt, QUrl, QTimer, QPoint, QObject, Signal  # noqa
+from PySide6.QtCore import Qt, QUrl, QTimer, QPoint, QObject, QEvent, Signal  # noqa
 from PySide6.QtGui import QColor, QPainter, QPen, QIcon
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QFrame, QVBoxLayout, QHBoxLayout,
@@ -62,7 +62,7 @@ import updater
 # === Налаштування за замовчуванням ==========================================
 APP_NAME = "Hominka"          # від укр. «гомін» — гомін голосів у чаті
 APP_ICON = "hominka.ico"
-APP_VERSION = "1.7.0"
+APP_VERSION = "1.7.2"
 APP_AUTHOR = "Mykyta Vinnyk"
 # Ключ доступу до оверлеїв (?key=) обовʼязковий: без нього сервер відповідає 403.
 # Перевипуск ключа в адмінці ламає це посилання — тоді треба оновити рядок нижче
@@ -155,11 +155,93 @@ def _hwnd(win) -> int:
     return int(win.winId())
 
 
+# Атрибут «прихований» у Windows.
+FILE_ATTRIBUTE_HIDDEN = 0x2
+
+
+def hide_internal_folder():
+    """Ховає службові теки поруч із програмою.
+
+    Поруч із .exe PyInstaller кладе теку зі своїми потрухами (близько 500 МБ),
+    і бачити її користувачу ні до чого. Запакувати все всередину .exe не
+    вийшло: збірка одним файлом розпаковує 583 МБ у тимчасову теку ПРИ КОЖНОМУ
+    запуску, а вікно так і не з'являється (перевірено). Тому тека лишається на
+    місці, просто не потрапляє на очі.
+
+    Робиться щоразу при старті: після оновлення теку копіюють наново, і атрибут
+    з неї злітає.
+    """
+    if not getattr(sys, "frozen", False):
+        return
+    here = os.path.dirname(sys.executable)
+    # profile — кеш браузера, теж службовий. config.json НЕ ховаємо: це
+    # налаштування користувача, і шукати їх у прихованому — знущання.
+    for name in ("_internal", "profile"):
+        folder = os.path.join(here, name)
+        if not os.path.isdir(folder):
+            continue
+        try:
+            ctypes.windll.kernel32.SetFileAttributesW(folder, FILE_ATTRIBUTE_HIDDEN)
+        except Exception:
+            pass      # не вийшло приховати — не привід не запускатися
+
+
 def exclude_from_capture(win) -> bool:
     try:
         return bool(user32.SetWindowDisplayAffinity(_hwnd(win), WDA_EXCLUDEFROMCAPTURE))
     except Exception:
         return False
+
+
+def _is_excluded(hwnd: int) -> bool:
+    """Чи вже приховане вікно від захоплення (щоб не смикати WinAPI даремно)."""
+    value = wintypes.DWORD()
+    try:
+        if not user32.GetWindowDisplayAffinity(hwnd, ctypes.byref(value)):
+            return False
+    except Exception:
+        return False
+    return value.value == WDA_EXCLUDEFROMCAPTURE
+
+
+class CaptureGuard(QObject):
+    """Ховає від захоплення кожне вікно ще до того, як його намалюють.
+
+    Обхід за таймером теж є (див. hide_new_windows_from_capture), але він
+    запізнюється: між появою списку й наступним тактом таймера вікно вже
+    встигає потрапити в кадр. Подія Show приходить раніше за перше малювання,
+    тому ловимо саме її.
+    """
+
+    def eventFilter(self, obj, event):
+        if event.type() == QEvent.Type.Show and isinstance(obj, QWidget) and obj.isWindow():
+            exclude_from_capture(obj)
+        return False
+
+
+def hide_new_windows_from_capture():
+    """Ховає від захоплення кожне вікно програми, яке цього ще не має.
+
+    Головне вікно й налаштування ховають себе самі при показі, але цього мало:
+    випадні списки, підказки й будь-які інші спливаючі елементи Qt — то ОКРЕМІ
+    вікна, і створюються вони лише в мить появи. Саме такий список і потрапив
+    на трансляцію: сама панель була прихована, а список каналів оновлень — ні.
+
+    Дешевше пройтися по верхньорівневих вікнах, ніж вгадувати, яке з них Qt
+    створить наступним.
+    """
+    app = QApplication.instance()
+    if app is None:
+        return
+    for w in app.topLevelWidgets():
+        if not w.isVisible():
+            continue
+        try:
+            hwnd = int(w.winId())
+        except Exception:
+            continue
+        if hwnd and not _is_excluded(hwnd):
+            user32.SetWindowDisplayAffinity(hwnd, WDA_EXCLUDEFROMCAPTURE)
 
 
 def set_click_through(win, enabled: bool):
@@ -1490,6 +1572,13 @@ class Overlay(QMainWindow):
         # так і не поставили.
         QTimer.singleShot(3000, updater.cleanup_downloads)
 
+        # Підстраховка до CaptureGuard: якщо якесь вікно з'явиться повз подію
+        # Show (або Qt перестворить його), обхід усе одно його прикриє.
+        self._capture_timer = QTimer(self)
+        self._capture_timer.setInterval(1000)
+        self._capture_timer.timeout.connect(hide_new_windows_from_capture)
+        self._capture_timer.start()
+
     def _apply_border(self, accent: str):
         self.accent = accent
         self.frame.setStyleSheet(
@@ -1976,7 +2065,11 @@ class Overlay(QMainWindow):
 def main():
     url = sys.argv[1] if len(sys.argv) > 1 else None
     os.environ.setdefault("QTWEBENGINE_CHROMIUM_FLAGS", "--enable-features=TranslucentWindows")
+    hide_internal_folder()
     app = QApplication(sys.argv)
+    # До створення вікон: інакше перше з них з'явиться незахищеним.
+    guard = CaptureGuard(app)
+    app.installEventFilter(guard)
     app.setApplicationName(APP_NAME)
     app.setApplicationDisplayName(APP_NAME)
     app.setApplicationVersion(APP_VERSION)
