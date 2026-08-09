@@ -52,12 +52,17 @@ from PySide6.QtWidgets import (
 from PySide6.QtWebEngineCore import QWebEngineProfile, QWebEnginePage
 from PySide6.QtWebEngineWidgets import QWebEngineView
 
+import chatfeed
+import chatsources as cs
+import chat_kick
+import chat_twitch
+import chat_youtube
 import updater
 
 # === Налаштування за замовчуванням ==========================================
 APP_NAME = "Hominka"          # від укр. «гомін» — гомін голосів у чаті
 APP_ICON = "hominka.ico"
-APP_VERSION = "1.4.0"
+APP_VERSION = "1.5.0"
 APP_AUTHOR = "Mykyta Vinnyk"
 # Ключ доступу до оверлеїв (?key=) обовʼязковий: без нього сервер відповідає 403.
 # Перевипуск ключа в адмінці ламає це посилання — тоді треба оновити рядок нижче
@@ -989,6 +994,20 @@ class SettingsPanel(QWidget):
         self.channel_edit.editingFinished.connect(self._apply_channel)
         lay.addWidget(self.channel_edit)
 
+        lay.addWidget(self._label("Twitch"))
+        self.twitch_edit = QLineEdit(self)
+        self.twitch_edit.setPlaceholderText("twitch.tv/канал або просто нік")
+        self.twitch_edit.returnPressed.connect(self._apply_extra)
+        self.twitch_edit.editingFinished.connect(self._apply_extra)
+        lay.addWidget(self.twitch_edit)
+
+        lay.addWidget(self._label("Kick"))
+        self.kick_edit = QLineEdit(self)
+        self.kick_edit.setPlaceholderText("kick.com/канал або просто нік")
+        self.kick_edit.returnPressed.connect(self._apply_extra)
+        self.kick_edit.editingFinished.connect(self._apply_extra)
+        lay.addWidget(self.kick_edit)
+
         self.src_status = QLabel("", self)
         self.src_status.setObjectName("dim")
         self.src_status.setWordWrap(True)
@@ -1162,6 +1181,9 @@ class SettingsPanel(QWidget):
 
     def _apply_channel(self):
         self.win.set_my_channel(self.channel_edit.text())
+
+    def _apply_extra(self):
+        self.win.set_extra_channels(self.twitch_edit.text(), self.kick_edit.text())
 
     def set_url_error(self, text: str):
         self.url_error.setText(text)
@@ -1342,12 +1364,19 @@ class Overlay(QMainWindow):
         self.zoom = 1.0            # масштаб тексту чату
         self.bg_alpha = 0.30       # затемнення підкладки під чатом
         self.accent = ACCENT_ACTIVE
+        self.mode = "web"          # web = сторінка чату, feed = спільна стрічка
         self._cli_url = url        # URL з аргументу командного рядка (пріоритет)
         self.url = resolve_chat_url(url) if url else CHAT_URL
         self.is_yt = is_youtube(self.url)
 
         # Власна трансляція (див. LiveProbe) і канал, заданий руками.
         self.my_channel = ""
+        # Додаткові площадки: коли задано хоч одну, чат збирається в спільну
+        # стрічку (chatfeed) замість сторінки YouTube.
+        self.twitch_channel = ""
+        self.kick_channel = ""
+        self.readers = []
+        self.feed = None
         self.auto_video = ""
         self.yt_channel_id = ""
         self.yt_channel_title = ""
@@ -1395,6 +1424,7 @@ class Overlay(QMainWindow):
         self.view.setAttribute(Qt.WA_TranslucentBackground, True)
         self.view.loadFinished.connect(self._on_loaded)
         vbox.addWidget(self.view, 1)
+        self.feed = chatfeed.ChatFeed(self.view)
 
         self.setCentralWidget(self.frame)
 
@@ -1403,7 +1433,10 @@ class Overlay(QMainWindow):
         self.grip = SizeGrip(self.frame, ACCENT_ACTIVE)
 
         self._load_config()
-        self.view.load(QUrl(self.url))
+        if not self.panel.url_edit.text().strip() and (self.twitch_channel or self.kick_channel):
+            self._start_feed()
+        else:
+            self.view.load(QUrl(self.url))
 
         # Пошук власної трансляції: окрема прихована сторінка в тому ж профілі.
         self.probe = LiveProbe(self.profile, self)
@@ -1535,6 +1568,26 @@ class Overlay(QMainWindow):
         self.panel.set_source_status(self)
         self.probe_live()
 
+    def set_extra_channels(self, twitch: str, kick: str):
+        """Канали Twitch і Kick із налаштувань. Приймаємо і посилання, і нік."""
+        tw_platform, tw = cs.parse_source(twitch)
+        kk_platform, kk = cs.parse_source(kick)
+        # Голий нік площадка не вгадає — тоді беремо як є, з відповідного поля.
+        if not tw and twitch.strip():
+            tw = twitch.strip().lower().lstrip("@")
+        if not kk and kick.strip():
+            kk = kick.strip().lower().lstrip("@")
+        if tw_platform and tw_platform != cs.TWITCH:
+            tw = ""
+        if kk_platform and kk_platform != cs.KICK:
+            kk = ""
+        if tw == self.twitch_channel and kk == self.kick_channel:
+            return
+        self.twitch_channel, self.kick_channel = tw, kk
+        self.save_config()
+        self.panel.set_source_status(self)
+        self.refresh_source()
+
     # --- пошук власної трансляції ---
     def probe_live(self):
         """Питає YouTube, чи йде зараз ефір на нашому каналі."""
@@ -1550,7 +1603,10 @@ class Overlay(QMainWindow):
         self.auto_video = video
         self.save_config()
         self.panel.set_source_status(self)
-        if changed:
+        # У режимі спільної стрічки трансляцію шукає сам читач YouTube, і
+        # перезбирати стрічку через нього не можна: це стерло б уже показані
+        # повідомлення Twitch і Kick.
+        if changed and self.mode != "feed":
             # Перезавантажуємо вікно, лише коли джерело справді змінилося:
             # смикати чат кожні кілька хвилин — гірше, ніж будь-яка автоматика.
             self.refresh_source()
@@ -1563,14 +1619,60 @@ class Overlay(QMainWindow):
 
     # --- джерело чату ---
     def refresh_source(self):
-        """Переобчислює адресу чату і, якщо вона змінилася, відкриває її."""
+        """Переобчислює джерело чату і, якщо воно змінилося, відкриває його."""
         manual = self.panel.url_edit.text() if hasattr(self, "panel") else ""
+        # Спільна стрічка вмикається, щойно задано Twitch або Kick: показати
+        # два чати однією сторінкою YouTube неможливо, та й іконка площадки
+        # потрібна саме тоді, коли джерел більше одного.
+        if not manual.strip() and (self.twitch_channel or self.kick_channel):
+            self._start_feed()
+            return
+        self._stop_readers()
         url = resolve_chat_url(manual, self.auto_video)
         self.is_yt = is_youtube(url)
         self.bar.title.setText(self._title_for(manual))
-        if url != self.url:
+        if url != self.url or self.mode == "feed":
+            self.mode = "web"
             self.url = url
             self.view.load(QUrl(url))
+
+    def _start_feed(self):
+        """Вмикає спільну стрічку і піднімає читачів для заданих площадок."""
+        self._stop_readers()
+        self.mode = "feed"
+        self.is_yt = False
+        self.url = ""
+        self.bar.title.setText("Чат")
+        self.feed.load()
+
+        if self.twitch_channel:
+            self._add_reader(chat_twitch.TwitchChat(self.twitch_channel, self))
+        if self.kick_channel:
+            self._add_reader(chat_kick.KickChat(self.kick_channel, self))
+        # YouTube у стрічку беремо лише за заданим каналом: без нього шукати
+        # нема чого, а посилання на чужий чат іде звичайним шляхом.
+        yt_channel = self.my_channel.strip() or self.yt_channel_id
+        if yt_channel:
+            self._add_reader(chat_youtube.YouTubeChat(yt_channel, self))
+
+    def _add_reader(self, reader):
+        reader.event.connect(self._on_chat_event)
+        reader.status.connect(self._on_reader_status)
+        reader.start()
+        self.readers.append(reader)
+
+    def _stop_readers(self):
+        for r in self.readers:
+            r.stop()
+        self.readers = []
+
+    def _on_chat_event(self, event: dict):
+        if self.mode == "feed" and self.feed is not None:
+            self.feed.push(event)
+
+    def _on_reader_status(self, text: str):
+        if text and hasattr(self, "panel"):
+            self.panel.set_url_error(text)
 
     def _title_for(self, manual: str) -> str:
         if manual.strip():
@@ -1599,6 +1701,9 @@ class Overlay(QMainWindow):
 
     def _on_loaded(self, ok: bool):
         self.view.setZoomFactor(self.zoom)
+        if ok and self.mode == "feed":
+            self.feed.on_loaded()
+            return
         if ok and self.is_yt:
             # гарний прозорий стиль поверх YouTube-чату
             self.view.page().runJavaScript(YT_STYLE_JS)
@@ -1739,6 +1844,10 @@ class Overlay(QMainWindow):
         self.yt_channel_id = cfg.get("youtubeChannelId", "")
         self.my_channel = cfg.get("myChannel", "")
         self.panel.channel_edit.setText(self.my_channel)
+        self.twitch_channel = cfg.get("twitchChannel", "")
+        self.kick_channel = cfg.get("kickChannel", "")
+        self.panel.twitch_edit.setText(self.twitch_channel)
+        self.panel.kick_edit.setText(self.kick_channel)
         # Оновлення: канал, з якого читаємо, і чи перевіряти самим.
         ch = cfg.get("channel", updater.DEFAULT_CHANNEL)
         self.channel = ch if any(c[0] == ch for c in updater.CHANNELS) else updater.DEFAULT_CHANNEL
@@ -1778,6 +1887,8 @@ class Overlay(QMainWindow):
                     "url": raw_url,
                     "youtubeChannelId": self.yt_channel_id,
                     "myChannel": self.my_channel,
+                    "twitchChannel": self.twitch_channel,
+                    "kickChannel": self.kick_channel,
                     "channel": self.channel,
                     "installedChannel": self.installed_channel,
                     "autoUpdate": self.auto_update,
@@ -1786,6 +1897,7 @@ class Overlay(QMainWindow):
             pass
 
     def closeEvent(self, e):
+        self._stop_readers()
         self._write_config()
         try:
             user32.UnregisterHotKey(_hwnd(self), HOTKEY_ID)
