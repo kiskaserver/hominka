@@ -109,13 +109,17 @@ function trim() { while (list.children.length > MAX) list.removeChild(list.first
 // послідовність плюсів.
 const PARTS = {
   ico:    e => ICONS[e.platform] || '',
-  badges: e => (e.badges || []).map(b => {
+  // У системної події (рейд, підписка) немає ні автора, ні плашок, ні
+  // відповіді — весь її текст уже в частині text. Без цієї перевірки на місці
+  // ніка малювалося «undefined:».
+  badges: e => e.kind === 'system' ? '' : (e.badges || []).map(b => {
             const s = BADGES[b];
             return s ? '<span class="b" style="background:' + s[1] + ';color:' + s[2] + '">'
                        + s[0] + '</span>' : '';
           }).join(''),
-  reply:  e => e.reply ? '<span class="re">↳ ' + esc(e.reply) + '</span>' : '',
+  reply:  e => (e.kind === 'system' || !e.reply) ? '' : '<span class="re">↳ ' + esc(e.reply) + '</span>',
   name:   e => {
+            if (e.kind === 'system') return '';
             const color = /^#[0-9a-fA-F]{3,8}$/.test(e.color || '') ? e.color : '#f87171';
             return '<span class="n" style="color:' + color + '">' + esc(e.name) + '</span>';
           },

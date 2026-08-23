@@ -1,13 +1,15 @@
-// Шейдери для тестового прямокутника — компілюємо в рантаймі.
+// Шейдери оверлея — компілюємо в рантаймі.
 //
 // Чому не готовий байткод у заголовку: щоб його зробити, потрібен fxc або
 // D3DCompile на етапі збірки, а ми збираємо під mingw-w64, де d3dcompiler як
 // бібліотеки лінкування немає. Тому вантажимо d3dcompiler_47.dll (він є в
-// System32 на Windows 10/11) уже в грі й компілюємо крихітний HLSL там. Це
-// відбувається один раз на старті оверлея, тож на кадри не впливає.
+// System32 на Windows 10/11) уже в грі й компілюємо там. Це один раз на старті,
+// на кадри не впливає.
 //
-// Якщо d3dcompiler_47.dll раптом немає — чесно пишемо про це в журнал і не
-// малюємо; хук усе одно стоїть, і це видно за лічильником кадрів.
+// Вершинний шейдер малює прямокутник на весь viewport за SV_VertexID (буфер не
+// потрібен) і віддає UV; піксельний — семплить текстуру кадру чату й гасить її
+// загальною прозорістю. Формат BGRA семпл повертає вже як RGBA, тож колір
+// правильний без перестановки.
 
 #include "overlay_dx11.h"
 
@@ -18,22 +20,26 @@ namespace hominka {
 
 namespace {
 
-// Прямокутник із SV_VertexID: чотири кути екранного простору viewport'а. Ніяких
-// вхідних буферів — координати рахує сам шейдер.
 const char* kVertexHLSL =
-    "struct VOut { float4 pos : SV_Position; };\n"
+    "struct VOut { float4 pos : SV_Position; float2 uv : TEXCOORD0; };\n"
     "VOut main(uint id : SV_VertexID) {\n"
     "  float2 uv = float2((id == 1 || id == 3) ? 1.0 : 0.0,\n"
     "                     (id == 2 || id == 3) ? 1.0 : 0.0);\n"
     "  VOut o;\n"
+    "  o.uv = uv;\n"
     "  o.pos = float4(uv.x * 2.0 - 1.0, 1.0 - uv.y * 2.0, 0.0, 1.0);\n"
     "  return o;\n"
     "}\n";
 
-// Помітний напівпрозорий фіолетовий — колір акценту Hominka (#a855f7).
+// b0.x — загальна прозорість 0..1 (додатково до альфи кадру).
 const char* kPixelHLSL =
-    "float4 main() : SV_Target {\n"
-    "  return float4(0.659, 0.333, 0.969, 0.72);\n"
+    "Texture2D tex : register(t0);\n"
+    "SamplerState smp : register(s0);\n"
+    "cbuffer Params : register(b0) { float opacity; float3 pad; };\n"
+    "float4 main(float4 pos : SV_Position, float2 uv : TEXCOORD0) : SV_Target {\n"
+    "  float4 c = tex.Sample(smp, uv);\n"
+    "  c.a *= opacity;\n"
+    "  return c;\n"
     "}\n";
 
 typedef HRESULT (WINAPI *D3DCompileFn)(
@@ -69,8 +75,7 @@ ID3DBlob* compile(D3DCompileFn fn, const char* src, const char* target) {
 bool OverlayDX11::build_shaders() {
     D3DCompileFn compiler = load_compiler();
     if (!compiler) {
-        log("overlay: d3dcompiler недоступний — прямокутник не намалюю, "
-            "але хук працює (стежте за лічильником кадрів)");
+        log("overlay: d3dcompiler недоступний — кадр чату намалювати нічим");
         return false;
     }
 
@@ -94,6 +99,15 @@ bool OverlayDX11::build_shaders() {
             (unsigned long)hr1, (unsigned long)hr2);
         return false;
     }
+
+    // Константний буфер прозорості. Оновлюємо його щоразу перед малюванням у
+    // blit(); тут лише створюємо. 16 байтів — мінімум для cbuffer.
+    D3D11_BUFFER_DESC cbd = {};
+    cbd.ByteWidth = 16;
+    cbd.Usage = D3D11_USAGE_DYNAMIC;
+    cbd.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
+    cbd.CPUAccessFlags = D3D11_CPU_ACCESS_WRITE;
+    device_->CreateBuffer(&cbd, nullptr, &cbuf_);
     return true;
 }
 

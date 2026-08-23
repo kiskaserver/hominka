@@ -131,6 +131,15 @@ class Overlay(SourcesMixin, UpdatingMixin, ConfigMixin, LookMixin, QMainWindow):
         self.rtss_on = False
         self.rtss = rtss.ChatMirror()
 
+        # Справжній чат у грі через інжектор (native/). Створюємо лениво —
+        # тільки коли вмикають, бо це друге приховане вікно з рушієм браузера.
+        self.game_on = False
+        self.game_overlay = None
+        self.game_anchor = "tl"
+        self.game_margin_x = 24
+        self.game_margin_y = 24
+        self.game_opacity = 235
+
     def _build_window(self):
         """Рамка без системного заголовка: смужка, смужка оновлення, куточок."""
         self.setWindowFlags(
@@ -238,6 +247,8 @@ class Overlay(SourcesMixin, UpdatingMixin, ConfigMixin, LookMixin, QMainWindow):
         self.save_config()
         if self.feed is not None:
             self.feed.set_custom_css(self.custom_css)
+        if self.game_overlay is not None:
+            self.game_overlay.set_custom_css(self.custom_css)
         if self.mode == "web":
             self._inject_custom_css()
 
@@ -251,6 +262,8 @@ class Overlay(SourcesMixin, UpdatingMixin, ConfigMixin, LookMixin, QMainWindow):
         self.save_config()
         if self.feed is not None:
             self.feed.set_layout(self.chat_layout)
+        if self.game_overlay is not None:
+            self.game_overlay.set_layout(self.chat_layout)
 
     def _inject_custom_css(self):
         """Кладе свій CSS і на звичайну сторінку чату (сайт або YouTube).
@@ -392,6 +405,47 @@ class Overlay(SourcesMixin, UpdatingMixin, ConfigMixin, LookMixin, QMainWindow):
             return
         self.panel.set_fullscreen_state(fullscreen.state())
 
+    # --- справжній чат у грі (інжектор) ---
+    def _ensure_game_overlay(self):
+        if self.game_overlay is None:
+            from .gameoverlay import GameOverlay
+            self.game_overlay = GameOverlay(self)
+            self.game_overlay.set_geometry(self.game_anchor, self.game_margin_x,
+                                           self.game_margin_y, self.game_opacity)
+        return self.game_overlay
+
+    def set_game_overlay(self, on: bool):
+        """Вмикає/вимикає продюсера кадру чату для гри.
+
+        У стабільному каналі — ніколи (як і RTSS): експеримент з інʼєкцією не
+        має вмикатися в тих, хто просто веде ефір.
+        """
+        if on and self.channel == "stable":
+            on = False
+        self.game_on = bool(on)
+        if self.game_on:
+            self._ensure_game_overlay().set_enabled(True)
+        elif self.game_overlay is not None:
+            self.game_overlay.set_enabled(False)
+        self.save_config()
+
+    def inject_game(self, hwnd: int):
+        """Кладе overlay.dll у вікно hwnd і, якщо вдалося, вмикає продюсера."""
+        from . import inject
+        res = inject.inject(hwnd)
+        if res.ok:
+            self.set_game_overlay(True)
+        return res
+
+    def set_game_geometry(self, anchor: str, margin_x: int, margin_y: int, opacity: int):
+        self.game_anchor = anchor
+        self.game_margin_x = int(margin_x)
+        self.game_margin_y = int(margin_y)
+        self.game_opacity = int(opacity)
+        if self.game_overlay is not None:
+            self.game_overlay.set_geometry(anchor, margin_x, margin_y, opacity)
+        self.save_config()
+
     def set_rtss(self, on: bool):
         """Вмикає дублювання чату в OSD RTSS.
 
@@ -426,6 +480,8 @@ class Overlay(SourcesMixin, UpdatingMixin, ConfigMixin, LookMixin, QMainWindow):
         # Слот OSD чужий, і лишати в ньому свій текст після виходу не можна:
         # RTSS показуватиме його доти, доки сам не перезапуститься.
         self.rtss.stop()
+        if self.game_overlay is not None:
+            self.game_overlay.close()
         self._stop_readers()
         # Завантажене, але не встановлене оновлення — 220 МБ у тимчасовій теці.
         # Якщо людина закриває програму, не поставивши його, тримати файл

@@ -7,12 +7,14 @@
 
 from typing import TYPE_CHECKING
 
-from PySide6.QtCore import Qt, QUrl
+from PySide6.QtCore import Qt, QTimer, QUrl
 from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (
     QCheckBox, QComboBox, QFrame, QHBoxLayout, QLabel, QLineEdit, QPushButton,
 )
 
+from ... import fullscreen as fs_mod
+from ... import inject as inject_mod
 from ... import rtss as rtss_mod
 from ... import update as updater
 from ...fullscreen import changed_window as _changed_window
@@ -190,6 +192,47 @@ class CardsMixin:
         self.rtss_action.hide()
         lay.addWidget(self.rtss_action)
 
+        # --- справжній чат у грі (інжектор) ---------------------------------
+        # Найпотужніше і найризикованіше: своя бібліотека всередині процесу гри
+        # малює справжній чат — з аватарками й емоутами — навіть у виключному
+        # повноекранному режимі. Тільки тестові канали, і з чесним попередженням.
+        self.game_box = QCheckBox("Справжній чат у грі (для одиночних ігор)", self)
+        self.game_box.setToolTip(
+            "Показує повний чат — з аватарками й емоутами — поверх гри, навіть "
+            "коли вона у виключному повноекранному режимі. Це єдиний спосіб без "
+            "RTSS, але він вкладає бібліотеку в процес гри.")
+        self.game_box.toggled.connect(self._toggle_game)
+        lay.addWidget(self.game_box)
+
+        self.game_warn = QLabel(
+            "У змагальних іграх з античитом (Valorant, CS2, Rust, Apex, EFT…) "
+            "вкладати щось у процес НЕ МОЖНА — це загрожує баном, і програма туди "
+            "не пускає. Discord і OBS живуть у білих списках античитів за "
+            "домовленістю; у нас такого списку немає. Бібліотека непідписана — "
+            "Defender чи SmartScreen можуть застерегти. Для змагальних ігор "
+            "лишається безрамковий режим вище.", self)
+        self.game_warn.setObjectName("dim")
+        self.game_warn.setWordWrap(True)
+        self.game_warn.hide()
+        lay.addWidget(self.game_warn)
+
+        self.game_inject = QPushButton("Показати чат у грі", self)
+        self.game_inject.setObjectName("ghost")
+        self.game_inject.setFixedHeight(28)
+        self.game_inject.setToolTip(
+            "Натисніть, перейдіть у гру — і за кілька секунд чат зʼявиться в ній.")
+        self.game_inject.clicked.connect(self._inject_game)
+        self.game_inject.hide()
+        lay.addWidget(self.game_inject)
+
+        self._inject_timer = QTimer(self)
+        self._inject_timer.setInterval(1000)
+        self._inject_timer.timeout.connect(self._inject_countdown)
+        self._inject_left = 0
+
+        if self.win.channel != "stable":
+            self.set_game_experimental(True)
+
         if self.win.channel == "stable":
             self.rtss.hide()
             self.rtss_action.hide()
@@ -235,6 +278,65 @@ class CardsMixin:
             return
         QDesktopServices.openUrl(QUrl(rtss_mod.RTSS_SITE))
         self.top_status.setText("Відкрив сторінку завантаження RTSS.")
+
+    # --- інжектор чату в гру ---
+    def set_game_experimental(self, on: bool):
+        """Показує розділ інжектора лише в тестових каналах (як і RTSS)."""
+        show = on and inject_mod.available()
+        self.game_box.setVisible(show)
+        if not show:
+            self.game_warn.hide()
+            self.game_inject.hide()
+            self._inject_timer.stop()
+            if self.game_box.isChecked():
+                self.game_box.blockSignals(True)
+                self.game_box.setChecked(False)
+                self.game_box.blockSignals(False)
+
+    def _toggle_game(self, on: bool):
+        """Розкриває попередження і кнопку; вимикає — гасить продюсера."""
+        self.game_warn.setVisible(on)
+        self.game_inject.setVisible(on)
+        if not on:
+            self._inject_timer.stop()
+            self.game_inject.setText("Показати чат у грі")
+            self.game_inject.setEnabled(True)
+            self.win.set_game_overlay(False)
+            self.top_status.setText("Чат у грі вимкнено.")
+
+    def _inject_game(self):
+        """Відлік, щоб людина встигла перейти у гру, — тоді вкладаємо DLL."""
+        self._inject_left = 4
+        self.game_inject.setEnabled(False)
+        self._inject_countdown()
+        self._inject_timer.start()
+
+    def _inject_countdown(self):
+        if self._inject_left > 0:
+            self.top_status.setText(
+                "Перейдіть у гру… вкладу чат за %d с." % self._inject_left)
+            self.game_inject.setText("Зачекайте… %d" % self._inject_left)
+            self._inject_left -= 1
+            return
+        self._inject_timer.stop()
+        self.game_inject.setText("Показати чат у грі")
+        self.game_inject.setEnabled(True)
+
+        info = fs_mod.state()
+        hwnd = info.get("hwnd")
+        exe = (info.get("exe") or "").lower()
+        if not hwnd or exe in ("hominka.exe", "python.exe", "pythonw.exe", "explorer.exe", ""):
+            self.top_status.setText(
+                "Не бачу гри у фокусі. Натисніть ще раз і встигніть перейти в її вікно.")
+            return
+        res = self.win.inject_game(hwnd)
+        self.top_status.setText(res.message)
+        # Якщо гру заблокував античит — знімаємо галочку: тут інжектор не варіант.
+        if res.code == inject_mod.EX_BLOCKED:
+            self.game_box.blockSignals(True)
+            self.game_box.setChecked(False)
+            self.game_box.blockSignals(False)
+            self._toggle_game(False)
 
     def set_fullscreen_state(self, info: dict):
         """Показує, що зараз попереду, простими словами."""

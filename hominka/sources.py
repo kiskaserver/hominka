@@ -180,6 +180,11 @@ class SourcesMixin:
         # стрічки: там подія може затриматися, а в OSD затримка ні до чого.
         if getattr(self, "rtss_on", False):
             self.rtss.push(event)
+        # Копія у гру, якщо ввімкнено (див. gameoverlay.py). Незалежно від режиму
+        # головного вікна: у грі чат потрібен і тоді, коли на сайті показано
+        # сторінку YouTube, а не спільну стрічку.
+        if getattr(self, "game_on", False) and self.game_overlay is not None:
+            self.game_overlay.push(event)
         if self.mode == "feed" and self.feed is not None:
             self.feed.push(event)
 

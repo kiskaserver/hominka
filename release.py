@@ -91,6 +91,30 @@ def build_linux(version: str) -> str:
     return out
 
 
+def build_native() -> str:
+    """Збирає overlay.dll + injector.exe (обидві розрядності) у контейнері.
+
+    Той самий mingw-w64, що й для Linux. Джерела компілюються під час docker
+    build, готове дістаємо через docker cp — без bind-mount, який на Windows
+    віддає стару копію (на цьому вже горіли, див. native/README.md).
+    """
+    ndir = os.path.join(HERE, "native")
+    out = os.path.join(ndir, "dist")
+    run(["docker", "build", "-t", "hominka-native", ndir], cwd=HERE)
+    cid = subprocess.run(["docker", "create", "hominka-native"],
+                         check=True, capture_output=True, text=True).stdout.strip()
+    try:
+        os.makedirs(out, exist_ok=True)
+        run(["docker", "cp", "%s:/out/." % cid, out])
+    finally:
+        subprocess.run(["docker", "rm", cid], capture_output=True)
+    need = ["injector-x64.exe", "injector-x86.exe", "overlay-x64.dll", "overlay-x86.dll"]
+    missing = [n for n in need if not os.path.isfile(os.path.join(out, n))]
+    if missing:
+        raise SystemExit("нативна збірка не дала: %s" % ", ".join(missing))
+    return out
+
+
 def build_exe():
     """PyInstaller за Hominka_one.spec — збірка ОДНИМ файлом.
 
@@ -129,13 +153,19 @@ def stamp_version(version: str):
     print("версію проставлено:", version)
 
 
-def pack(version: str, exe_path: str = "", suffix: str = "win64") -> str:
-    """Кладе один файл програми в zip.
+def pack(version: str, exe_path: str = "", suffix: str = "win64",
+         native_dir: str = "") -> str:
+    """Кладе один файл програми в zip; за потреби — і нативні файли поруч.
 
     Раніше пакували цілу теку і мусили пильнувати, щоб у неї не потрапили
     config.json і тека profile — тобто чужі налаштування й куки входу. Тепер
     програма — один файл, і пакувати більше нічого: те, що лежить поруч,
     належить користувачу і в оновлення не їде за визначенням.
+
+    Виняток — інжектор (native/): overlay.dll та injector.exe кладемо в підтеку
+    native/ поруч із програмою. Тільки для тестових каналів: у стабільній
+    непідписана DLL нікому не потрібна і лише псувала б репутацію в SmartScreen
+    активним стрімерам, які цієї можливості не вмикають.
     """
     exe_path = exe_path or EXE
     if not os.path.isfile(exe_path):
@@ -146,6 +176,13 @@ def pack(version: str, exe_path: str = "", suffix: str = "win64") -> str:
     print("пакую", out)
     with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED, compresslevel=6) as z:
         z.write(exe_path, os.path.basename(exe_path))
+        if native_dir:
+            for name in ("injector-x64.exe", "injector-x86.exe",
+                         "overlay-x64.dll", "overlay-x86.dll"):
+                p = os.path.join(native_dir, name)
+                if os.path.isfile(p):
+                    z.write(p, "native/" + name)
+                    print("  + native/%s" % name)
     return out
 
 
@@ -211,6 +248,8 @@ def main():
     ap.add_argument("--no-warning", action="store_true",
                     help="випустити без попередження, навіть якщо канал має стандартне")
     ap.add_argument("--no-build", action="store_true", help="взяти вже зібране в dist/")
+    ap.add_argument("--no-native", action="store_true",
+                    help="не вкладати інжектор навіть у тестовий канал")
     ap.add_argument("--linux-zip", default="",
                     help="готовий архів для Linux; за замовчуванням збираємо самі в контейнері")
     ap.add_argument("--no-linux", action="store_true",
@@ -262,7 +301,12 @@ def main():
             linux_zip = build_linux(args.version)
         if not args.no_build:
             build_exe()
-        win_zip = pack(args.version, EXE, "win64")
+        # Інжектор — лише в тестові канали (див. pack). Збираємо його тим самим
+        # контейнером; --no-native дає вимкнути, якщо треба випуск без нього.
+        native_dir = ""
+        if args.channel != "stable" and not args.no_native:
+            native_dir = build_native()
+        win_zip = pack(args.version, EXE, "win64", native_dir)
         uploads.append(win_zip)
         files.append(entry(args.version, win_zip, "win64"))
         if linux_zip:

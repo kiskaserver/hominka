@@ -46,7 +46,8 @@ HRESULT STDMETHODCALLTYPE hooked_present(IDXGISwapChain* swap, UINT interval, UI
     // DXGI_PRESENT_TEST — гра лише перевіряє можливість показу; малювати не
     // треба, інакше ми псуємо саме цю перевірку.
     if (!(flags & DXGI_PRESENT_TEST)) {
-        g_overlay.draw_test_rectangle(swap);
+        g_overlay.set_swap(swap);
+        g_overlay.draw(swap);
     }
     return g_present_original(swap, interval, flags);
 }

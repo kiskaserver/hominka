@@ -43,6 +43,11 @@ class UpdatingMixin:
         self.panel.rtss_action.setVisible(False)
         if not experimental and self.rtss_on:
             self.set_rtss(False)
+        # Інжектор — теж лише в тестових каналах, і за тим самим правилом.
+        if hasattr(self.panel, "set_game_experimental"):
+            self.panel.set_game_experimental(experimental)
+        if not experimental and getattr(self, "game_on", False):
+            self.set_game_overlay(False)
 
     def check_updates(self, manual: bool = False):
         if getattr(self, "updater", None) is None:

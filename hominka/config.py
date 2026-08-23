@@ -49,6 +49,14 @@ class ConfigMixin:
         # ще до того, як програма дізнавалася, що вона в стабільному каналі,
         # де цієї можливості не існує.
         want_rtss = bool(cfg.get("rtss"))
+        # Розташування чату в грі. Саме ввімкнення (game_on) не відновлюємо: гра
+        # після перезапуску вже не та (DLL пішла разом із нею), тож продюсер має
+        # вмикатися свідомо, кнопкою, а не сам.
+        g = cfg.get("gameOverlay") or {}
+        self.game_anchor = g.get("anchor", "tl")
+        self.game_margin_x = int(g.get("marginX", 24))
+        self.game_margin_y = int(g.get("marginY", 24))
+        self.game_opacity = int(g.get("opacity", 235))
         self._topmost.enabled = self.keep_top
         self.panel.keep_top.blockSignals(True)
         self.panel.keep_top.setChecked(self.keep_top)
@@ -130,6 +138,12 @@ class ConfigMixin:
                     "chatLayout": self.chat_layout,
                     "keepTop": self.keep_top,
                     "rtss": self.rtss_on,
+                    "gameOverlay": {
+                        "anchor": self.game_anchor,
+                        "marginX": self.game_margin_x,
+                        "marginY": self.game_margin_y,
+                        "opacity": self.game_opacity,
+                    },
                     "updatedTo": self.updated_to,
                     "updatedNotes": self.updated_notes,
                     "chatDelay": self.chat_delay,
