@@ -231,6 +231,10 @@ class ChatFeed(QObject):
     def push(self, event: dict):
         """Подія → сторінка. До завантаження складаємо в чергу, інакше перші
         повідомлення (а вони приходять одразу) просто зникли б."""
+        # Від відповіді лишилося саме звертання (див. trim_reply_mention) —
+        # показувати порожній рядок з ніком нема сенсу.
+        if event.get("kind") == "msg" and not event.get("text") and not event.get("amount"):
+            return
         if not self.ready:
             self._queue.append(event)
             if len(self._queue) > 200:

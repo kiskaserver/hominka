@@ -18,7 +18,8 @@ import re
 from PySide6.QtCore import QObject, QTimer, QUrl, Signal
 from PySide6.QtWebSockets import QWebSocket
 
-import chatsources as cs
+from . import chatsources as cs
+
 
 IRC_URL = "wss://irc-ws.chat.twitch.tv:443"
 EMOTE_CDN = "https://static-cdn.jtvnw.net/emoticons/v2/%s/default/dark/2.0"

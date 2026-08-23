@@ -55,23 +55,48 @@ def parse_source(text: str):
     return None, ""
 
 
+def trim_reply_mention(text: str, reply_to: str) -> str:
+    """Прибирає «@адресат» на початку тексту відповіді.
+
+    Twitch дописує звертання в саме повідомлення, Kick — як вийде. Позначку
+    «кому відповідають» ми малюємо окремо (↳ нік), тож без цієї чистки ім'я
+    стоїть у рядку двічі. Правило те саме, що й у чаті на сайті: ріжемо лише
+    точний збіг і лише на початку — «@Саша, ти не правий» посеред фрази це вже
+    слова автора, а не службова приписка площадки.
+    """
+    if not text or not reply_to or not text.startswith("@"):
+        return text
+    rest = text[1:]
+    if not rest.lower().startswith(reply_to.lower()):
+        return text
+    rest = rest[len(reply_to):]
+    rest = rest.lstrip(",:")
+    trimmed = rest.strip()
+    # Пробіл (або кінець рядка) після імені обов'язковий: інакше «@Сашко»
+    # приймуть за відповідь «@Саша» і відріжуть шматок чужого ніка.
+    if rest and trimmed == rest:
+        return text
+    return trimmed
+
+
 def message(platform: str, nick: str, name: str, text: str, **extra) -> dict:
     """Повідомлення у спільному вигляді.
 
     Порожні поля не викидаємо навмисне: сторінка-приймач читає їх без перевірок,
     і один відсутній ключ там перетворився б на «undefined» посеред рядка.
     """
+    reply = extra.get("reply", "")
     msg = {
         "kind": "msg",
         "platform": platform,
         "id": extra.get("id", ""),
         "nick": nick,
         "name": name or nick,
-        "text": text,
+        "text": trim_reply_mention(text, reply),
         "color": extra.get("color", ""),
         "badges": [b for b in extra.get("badges", []) if b in BADGES],
         "emotes": extra.get("emotes", []),
-        "reply": extra.get("reply", ""),
+        "reply": reply,
         "amount": extra.get("amount", ""),
     }
     return msg

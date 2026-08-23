@@ -93,7 +93,7 @@ def build_exe():
 
 
 def stamp_version(version: str):
-    """Проставляє версію в chat_overlay.py і version_info.txt.
+    """Проставляє версію в hominka/version.py і version_info.txt.
 
     Одне джерело правди — аргумент --version: інакше в маніфесті одне, у вікні
     «про програму» друге, а у властивостях .exe третє."""
@@ -102,7 +102,7 @@ def stamp_version(version: str):
         nums.append("0")
     tup = "(%s, 0)" % ", ".join(nums)
 
-    p = os.path.join(HERE, "chat_overlay.py")
+    p = os.path.join(HERE, "hominka", "version.py")
     src = open(p, encoding="utf-8").read()
     src = re.sub(r'APP_VERSION = "[^"]*"', 'APP_VERSION = "%s"' % version, src, count=1)
     open(p, "w", encoding="utf-8", newline="\n").write(src)

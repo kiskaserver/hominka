@@ -12,7 +12,13 @@ import os
 
 from PIL import Image, ImageDraw, ImageFilter, ImageFont
 
-W, H = 480, 240
+# Розмір навмисно великий.
+#
+# Заставку показує Tk, і вікно це не знає про масштабування екрана: у Windows
+# зі 125-150 % система розтягує його сама, і дрібна картинка перетворюється на
+# кашу з пікселів. Що більший оригінал — то менше видно розтягування. Верхня
+# межа — max_img_size у Hominka_one.spec, більше PyInstaller стисне сам.
+W, H = 720, 360
 SCALE = 3                     # малюємо більшим і зменшуємо — краї виходять гладкі
 BG_TOP = (22, 18, 28)
 BG_BOT = (14, 12, 18)
@@ -51,28 +57,28 @@ def build() -> Image.Image:
         for x in range(w):
             gd[x, y] = row
     mask = Image.new("L", (w, h), 0)
-    ImageDraw.Draw(mask).rounded_rectangle([0, 0, w - 1, h - 1], radius=18 * SCALE, fill=255)
+    ImageDraw.Draw(mask).rounded_rectangle([0, 0, w - 1, h - 1], radius=26 * SCALE, fill=255)
     img.paste(grad, (0, 0), mask)
 
     # фіолетове сяйво зверху ліворуч — той самий акцент, що й на сайті
     glow = Image.new("RGBA", (w, h), (0, 0, 0, 0))
-    ImageDraw.Draw(glow).ellipse([-60 * SCALE, -90 * SCALE, 220 * SCALE, 110 * SCALE],
+    ImageDraw.Draw(glow).ellipse([-90 * SCALE, -130 * SCALE, 330 * SCALE, 165 * SCALE],
                                  fill=VIOLET + (70,))
-    glow = glow.filter(ImageFilter.GaussianBlur(40 * SCALE))
+    glow = glow.filter(ImageFilter.GaussianBlur(56 * SCALE))
     img.alpha_composite(Image.composite(glow, Image.new("RGBA", (w, h), (0, 0, 0, 0)),
                                         mask))
 
     # логотип
     icon_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "hominka.png")
     if os.path.isfile(icon_path):
-        size = 72 * SCALE
+        size = 108 * SCALE
         icon = Image.open(icon_path).convert("RGBA").resize((size, size), Image.LANCZOS)
-        img.alpha_composite(icon, (36 * SCALE, 40 * SCALE))
+        img.alpha_composite(icon, (54 * SCALE, 62 * SCALE))
 
     draw = ImageDraw.Draw(img)
-    draw.text((132 * SCALE, 46 * SCALE), "HOMINKA", font=font("segoeuib.ttf", 40 * SCALE),
+    draw.text((198 * SCALE, 72 * SCALE), "HOMINKA", font=font("segoeuib.ttf", 58 * SCALE),
               fill=(240, 236, 234))
-    draw.text((134 * SCALE, 94 * SCALE), "чат поверх гри", font=font("segoeui.ttf", 17 * SCALE),
+    draw.text((201 * SCALE, 142 * SCALE), "чат поверх гри", font=font("segoeui.ttf", 24 * SCALE),
               fill=(154, 148, 144))
 
     # Доріжка, під якою bootloader пише, що саме зараз розпаковує.
@@ -80,15 +86,15 @@ def build() -> Image.Image:
     # Малюємо окремим шаром і накладаємо: ImageDraw не змішує кольори з тим,
     # що вже намальовано, а ЗАМІНЮЄ пікселі — напівпрозора смуга, намальована
     # напряму, вийшла б білою.
-    y = 150 * SCALE
+    y = 232 * SCALE
     track = Image.new("RGBA", (w, h), (0, 0, 0, 0))
     td = ImageDraw.Draw(track)
-    td.rounded_rectangle([36 * SCALE, y, (W - 36) * SCALE, y + 5 * SCALE],
-                         radius=3 * SCALE, fill=(255, 255, 255, 28))
-    td.rounded_rectangle([36 * SCALE, y, 210 * SCALE, y + 5 * SCALE],
-                         radius=3 * SCALE, fill=VIOLET + (235,))
-    td.rounded_rectangle([190 * SCALE, y, 268 * SCALE, y + 5 * SCALE],
-                         radius=3 * SCALE, fill=PINK + (200,))
+    td.rounded_rectangle([54 * SCALE, y, (W - 54) * SCALE, y + 7 * SCALE],
+                         radius=4 * SCALE, fill=(255, 255, 255, 28))
+    td.rounded_rectangle([54 * SCALE, y, 320 * SCALE, y + 7 * SCALE],
+                         radius=4 * SCALE, fill=VIOLET + (235,))
+    td.rounded_rectangle([292 * SCALE, y, 408 * SCALE, y + 7 * SCALE],
+                         radius=4 * SCALE, fill=PINK + (200,))
     img.alpha_composite(track)
 
     return img.resize((W, H), Image.LANCZOS)

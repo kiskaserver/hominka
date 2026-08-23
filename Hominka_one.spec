@@ -59,14 +59,28 @@ pyz = PYZ(a.pure)
 # зараз розпаковує. Без нього людина дивиться на нерухому картинку і не знає,
 # чи взагалі щось відбувається. Перед появою вікна текст замінюємо своїм
 # (див. close_splash / splash_text у chat_overlay).
+# Рядок прогресу мусить переноситися.
+#
+# PyInstaller малює його елементом canvas без обмеження ширини, а bootloader
+# пише туди повні шляхи файлів, які зараз розпаковує, — довгий шлях їхав за
+# край заставки й далі за екран. Опція `-width` у Tk саме про перенос; в API
+# Splash її не винесено, тому дописуємо в шаблон. Число літеральне: шаблон
+# потім проходить через %-форматування, і зайвий %d його зламав би.
+from PyInstaller.building import splash_templates as _splash_tpl  # noqa: E402
+
+if '-width' not in _splash_tpl.splash_canvas_text:
+    _splash_tpl.splash_canvas_text = _splash_tpl.splash_canvas_text.replace(
+        '-anchor sw', '-anchor sw \\\n        -width 612')
+
 splash = Splash(
     'splash.png',
     binaries=a.binaries,
     datas=a.datas,
-    text_pos=(36, 192),
-    text_size=9,
+    text_pos=(54, 322),
+    text_size=10,
     text_color='#9a9490',
     text_default='Готуюсь до запуску…',
+    max_img_size=(760, 400),
     minify_script=True,
     always_on_top=True,
 )

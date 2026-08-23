@@ -16,11 +16,12 @@ python -m pip install pyinstaller pillow >nul
 echo [build] Генерую іконку...
 python make_icon.py
 
-echo [build] Збираю Hominka.exe (кілька хвилин)...
-pyinstaller --noconfirm --clean --windowed --name Hominka ^
-  --icon hominka.ico --version-file version_info.txt --add-data "hominka.ico;." ^
-  chat_overlay.py
+echo [build] Готую заставку...
+python make_splash.py
+
+echo [build] Збираю Hominka.exe одним файлом (кілька хвилин)...
+pyinstaller --noconfirm --clean Hominka_one.spec
 
 echo.
-echo [build] Готово. Запускай:  dist\Hominka\Hominka.exe
+echo [build] Готово. Запускай:  dist\Hominka.exe
 pause

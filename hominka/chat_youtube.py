@@ -18,13 +18,13 @@
 
 import json
 import re
-import time
 import urllib.request
 from threading import Event, Thread
 
 from PySide6.QtCore import QObject, Signal
 
-import chatsources as cs
+from . import chatsources as cs
+
 
 UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
       "(KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36")

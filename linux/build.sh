@@ -3,7 +3,7 @@
 set -euo pipefail
 cd /src
 
-VERSION="$(grep -oP 'APP_VERSION = "\K[^"]+' chat_overlay.py)"
+VERSION="$(grep -oP 'APP_VERSION = "\K[^"]+' hominka/version.py)"
 echo "[linux] версія $VERSION"
 
 python3 -m PyInstaller --noconfirm --clean --distpath dist-linux --workpath build-linux Hominka_one.spec

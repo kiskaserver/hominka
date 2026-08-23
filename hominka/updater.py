@@ -80,7 +80,7 @@ from urllib.request import Request, urlopen
 
 from PySide6.QtCore import QObject, Signal
 
-import signing
+from . import signing
 
 # Базова адреса оновлень. Змінюється разом із доменом, тому окремою константою.
 UPDATE_BASE = "https://update.svitix.com/hominka/"
@@ -354,6 +354,19 @@ def cleanup_downloads(keep: str = ""):
 
 # --- встановлення ----------------------------------------------------------
 
+def clean_env() -> dict:
+    """Оточення для процесу-підмінника — без службових змінних PyInstaller.
+
+    Bootloader кладе в оточення свої `_PYI_*` (у старих версіях `_MEIPASS2`),
+    і дочірні процеси їх успадковують. Новий .exe, запущений з таким
+    оточенням, вважає себе продовженням ЧУЖОГО запуску і зустрічає людину
+    віконцем «_PYI_APPLICATION_HOME_DIR environment variable is not defined».
+    Саме це й бачили ті, хто оновлювався з 1.8.0.
+    """
+    return {k: v for k, v in os.environ.items()
+            if not k.startswith("_PYI_") and k not in ("_MEIPASS2", "_MEIPASS")}
+
+
 def install(zip_path: str, app_dir: str) -> str:
     """Розпаковує архів поруч і запускає підмінник.
 
@@ -396,7 +409,8 @@ def install(zip_path: str, app_dir: str) -> str:
     # процес), а вікна консолі посеред гри користувачу не потрібно. Повне
     # від'єднання (DETACHED_PROCESS) залишає його без консолі зовсім, і частина
     # системних утиліт у такому оточенні поводиться інакше.
-    subprocess.Popen(cmd, creationflags=0x08000000 | 0x00000200, close_fds=True)
+    subprocess.Popen(cmd, creationflags=0x08000000 | 0x00000200, close_fds=True,
+                     env=clean_env())
     return " ".join(cmd)
 
 
@@ -428,7 +442,7 @@ def _install_posix(zip_path: str, app_dir: str) -> str:
         f.write(_UPDATE_SH)
     os.chmod(sh, 0o755)
     cmd = ["/bin/sh", sh, str(os.getpid()), src, app_dir.rstrip("/"), staging]
-    subprocess.Popen(cmd, start_new_session=True, close_fds=True)
+    subprocess.Popen(cmd, start_new_session=True, close_fds=True, env=clean_env())
     return " ".join(cmd)
 
 

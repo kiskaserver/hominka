@@ -30,31 +30,111 @@ from PySide6.QtWidgets import (
 )
 from PySide6.QtWebEngineWidgets import QWebEngineView
 
-import chatfeed
+from . import chatfeed
 
 # --- що взагалі можна стилізувати ------------------------------------------
 #
 # Це не «документація десь у файлі», а те, що людина бачить у вікні: інакше
 # писати CSS для чужої розмітки — гра в вгадайку.
 SELECTORS = [
-    ("#list", "Уся стрічка", "Колонка з повідомленнями. Тут задають відступи від країв, напрямок (знизу вгору) і проміжок між рядками."),
-    (".m", "Одне повідомлення", "Обгортка кожного рядка. Фон, рамка, скруглення, поля."),
-    ('.m[data-platform="twitch"]', "Повідомлення з Twitch", "Те саме, але лише для Twitch. Так само: kick, youtube, site."),
-    ('.m[data-platform="kick"]', "Повідомлення з Kick", "Лише повідомлення, що прийшли з Kick."),
-    ('.m[data-platform="youtube"]', "Повідомлення з YouTube", "Лише повідомлення, що прийшли з YouTube."),
-    ('.m[data-kind="money"]', "Донат / Super Chat", "Повідомлення з грошима. Поряд є клас .paid зі стандартним оформленням."),
-    ('.m[data-kind="system"]', "Системне повідомлення", "Рейди, підписки, повідомлення самої площадки."),
-    (".ico", "Значок площадки", "Логотип Twitch / Kick / YouTube перед повідомленням. Розмір задано в em — тягнеться за текстом."),
-    (".b", "Значок автора", "MOD, VIP, SUB, HOST і решта плашок біля ніка."),
-    (".n", "Нік автора", "Колір приходить із площадки і задається інлайном, тож перебивати треба через !important."),
-    (".money", "Сума донату", "Жовта плашка з сумою."),
-    (".re", "Кому відповідають", "Рядок «↳ нік» перед текстом відповіді."),
-    (".em", "Емоут", "Картинка емоута всередині тексту."),
-    (".at", "Звертання @нік", "Підсвічене звертання в тексті повідомлення."),
-    (".sys", "Текст системного повідомлення", "Курсив для рейдів, підписок і подібного."),
-    (".paid", "Оформлення донату", "Жовта смуга ліворуч і підкладка для повідомлень із грошима."),
-    ("body", "Загальні налаштування", "Шрифт, базовий кегль, колір тексту, тінь під текстом."),
-    ("@keyframes in", "Поява рядка", "Анімація, з якою нове повідомлення виїжджає знизу."),
+    ("#list", "Уся стрічка",
+     "Колонка з повідомленнями: відступи від країв, напрямок і проміжок між рядками.",
+     "#list {\n  inset: 16px;      /* відступи від країв вікна */\n  gap: 10px;        /* проміжок між рядками */\n}"),
+    (".m", "Одне повідомлення",
+     "Обгортка кожного рядка: фон, рамка, скруглення, поля.",
+     ".m {\n  background: rgba(0,0,0,.45);\n  padding: 3px 8px;\n  border-radius: 10px;\n}"),
+    ('.m[data-platform="twitch"]', "Тільки з Twitch",
+     "Те саме, але лише для Twitch. Так само: kick, youtube, site (чат сайту).",
+     '.m[data-platform="twitch"] {\n  border-left: 3px solid #9146ff;\n  padding-left: 6px;\n}'),
+    ('.m[data-platform="kick"]', "Тільки з Kick",
+     "Повідомлення, що прийшли з Kick.",
+     '.m[data-platform="kick"] {\n  border-left: 3px solid #53fc18;\n  padding-left: 6px;\n}'),
+    ('.m[data-platform="youtube"]', "Тільки з YouTube",
+     "Повідомлення, що прийшли з YouTube.",
+     '.m[data-platform="youtube"] {\n  border-left: 3px solid #ff0033;\n  padding-left: 6px;\n}'),
+    ('.m[data-kind="money"]', "Донат / Super Chat",
+     "Рядок із грошима. Поряд працює клас .paid — типове оформлення донату.",
+     '.m[data-kind="money"] {\n  background: rgba(251,191,36,.28);\n  border-radius: 10px;\n}'),
+    ('.m[data-kind="system"]', "Системне повідомлення",
+     "Рейди, підписки, оголошення самої площадки.",
+     '.m[data-kind="system"] {\n  opacity: .7;\n}'),
+    (".ico", "Значок площадки",
+     "Логотип Twitch / Kick / YouTube перед рядком. Розмір в em — тягнеться за текстом.",
+     ".ico {\n  width: 1.2em;\n  height: 1.2em;\n}"),
+    (".b", "Значок автора",
+     "MOD, VIP, SUB, HOST і решта плашок біля ніка.",
+     ".b {\n  border-radius: 999px;\n  font-size: .5em;\n}"),
+    (".n", "Нік автора",
+     "Колір приходить із площадки і стоїть інлайном — свій треба ставити з !important.",
+     ".n {\n  color: #ffd166 !important;\n  font-weight: 800;\n}"),
+    (".money", "Сума донату",
+     "Жовта плашка з сумою.",
+     ".money {\n  background: #22c55e;\n  color: #052e16;\n}"),
+    (".re", "Кому відповідають",
+     "Рядок «↳ нік» перед текстом відповіді.",
+     ".re {\n  color: #c4b5fd;\n  font-size: .75em;\n}"),
+    (".em", "Емоут",
+     "Картинка емоута всередині тексту.",
+     ".em {\n  height: 2em;\n}"),
+    (".at", "Звертання @нік",
+     "Підсвічене звертання в тексті повідомлення.",
+     ".at {\n  background: #f59e0b;\n  color: #111;\n}"),
+    (".sys", "Текст системного",
+     "Курсив рейдів, підписок і подібного.",
+     ".sys {\n  font-style: normal;\n  color: #c4b5fd;\n}"),
+    (".paid", "Оформлення донату",
+     "Жовта смуга ліворуч і підкладка для повідомлень із грошима.",
+     ".paid {\n  border-left-color: #22c55e;\n}"),
+    ("body", "Загальні налаштування",
+     "Шрифт, базовий кегль, колір тексту, тінь під текстом.",
+     "body {\n  font-size: 26px;\n  text-shadow: 0 0 4px #000, 0 2px 3px #000;\n}"),
+    ("@keyframes in", "Поява рядка",
+     "Анімація, з якою новий рядок виїжджає знизу. Можна замінити своєю.",
+     "@keyframes in {\n  from { opacity: 0; transform: translateX(-12px); }\n}"),
+]
+
+# --- готові рецепти ---------------------------------------------------------
+#
+# Найчастіше людині потрібно не «дізнатися про клас», а зробити одну конкретну
+# річ: збільшити текст, прибрати плашки, підсвітити донати. Тому поруч із
+# довідником — список готових шматків: подвійний клік вставляє, наведення
+# показує, що саме вставиться.
+RECIPES = [
+    ("Крупніший текст", "Найчастіша правка: чат у кадрі дрібний.",
+     "body { font-size: 26px; }"),
+    ("Компактні рядки", "Більше повідомлень в тій самій висоті.",
+     "#list { gap: 2px; }\n.m { line-height: 1.15; }"),
+    ("Підкладка під рядком", "Читається на будь-якій картинці, не лише на темній.",
+     ".m {\n  background: rgba(0,0,0,.5);\n  padding: 3px 8px;\n  border-radius: 10px;\n}"),
+    ("Смуга кольору площадки", "Видно з одного погляду, звідки прийшло повідомлення.",
+     '.m[data-platform="twitch"] { border-left: 3px solid #9146ff; padding-left: 6px; }\n'
+     '.m[data-platform="kick"]   { border-left: 3px solid #53fc18; padding-left: 6px; }\n'
+     '.m[data-platform="youtube"]{ border-left: 3px solid #ff0033; padding-left: 6px; }'),
+    ("Прибрати значки автора", "MOD/VIP/SUB зникають, лишається нік.",
+     ".b { display: none; }"),
+    ("Прибрати іконки площадок", "Коли площадка одна, значок лише займає місце.",
+     ".ico { display: none; }"),
+    ("Свій колір ніків", "Площадка ставить свій колір інлайном — тому !important.",
+     ".n { color: #ffd166 !important; font-weight: 800; }"),
+    ("Донати помітніше", "Гроші не мають губитися серед звичайних рядків.",
+     '.m[data-kind="money"] {\n  background: rgba(251,191,36,.30);\n  border-radius: 10px;\n}\n'
+     ".money { font-size: .9em; }"),
+    ("Системні тихіше", "Рейди й підписки не перебивають розмову.",
+     ".sys { opacity: .55; font-size: .78em; }"),
+    ("Без анімації появи", "Якщо рух у кадрі відволікає.",
+     ".m { animation: none; }"),
+    ("Товстіший контур тексту", "Читається навіть на світлій грі.",
+     "body { text-shadow: 0 0 4px #000, 0 0 8px #000, 0 2px 3px #000; }"),
+    ("Більші емоути", "Емоути на всю висоту рядка.",
+     ".em { height: 2em; }"),
+    ("Сховати чат сайту", "Лишити тільки площадки.",
+     '.m[data-platform="site"] { display: none; }'),
+    ("Яскравіші звертання", "Коли звертаються до вас — має кидатися в очі.",
+     ".at { background: #f59e0b; color: #111; border-radius: .3em; }"),
+    ("Рядок вліво, а не знизу", "Інша анімація появи.",
+     "@keyframes in { from { opacity: 0; transform: translateX(-14px); } }"),
+    ("Все праворуч", "Чат притиснутий до правого краю вікна.",
+     "#list { align-items: flex-end; text-align: right; }"),
 ]
 
 # --- приклади для перегляду -------------------------------------------------
@@ -300,6 +380,8 @@ QHeaderView::section { background: #221c2b; color: #9a9490; border: 0; padding: 
 QLabel#status { padding: 4px 8px; border-radius: 6px; }
 QLabel#hint { color: #9a9490; }
 QSplitter::handle { background: rgba(255,255,255,0.06); }
+QToolTip { background: #1a1620; color: #e7e2df; border: 1px solid #a855f7;
+           border-radius: 6px; padding: 6px 8px; }
 """
 
 
@@ -386,6 +468,7 @@ class CssEditor(QMainWindow):
         tabs.addTab(base, "Типовий CSS")
 
         tabs.addTab(self._reference(), "Класи")
+        tabs.addTab(self._recipes(), "Приклади")
         lay.addWidget(tabs, 1)
 
         self.errors = QListWidget(box)
@@ -406,15 +489,32 @@ class CssEditor(QMainWindow):
         tree.setColumnCount(2)
         tree.setHeaderLabels(["Селектор", "Що це"])
         tree.setRootIsDecorated(False)
-        tree.setAlternatingRowColors(False)
-        for selector, short, desc in SELECTORS:
+        for selector, short, desc, example in SELECTORS:
             item = QTreeWidgetItem([selector, short])
-            item.setToolTip(0, desc)
-            item.setToolTip(1, desc)
-            item.setData(0, Qt.UserRole, selector)
+            tip = _tip(short, desc, example)
+            item.setToolTip(0, tip)
+            item.setToolTip(1, tip)
+            item.setData(0, Qt.UserRole, example)
             tree.addTopLevelItem(item)
         tree.setColumnWidth(0, 240)
-        tree.itemDoubleClicked.connect(self._insert_selector)
+        tree.itemDoubleClicked.connect(self._insert_snippet)
+        return tree
+
+    def _recipes(self) -> QWidget:
+        """Готові шматки CSS: подвійний клік вставляє, наведення показує код."""
+        tree = QTreeWidget(self)
+        tree.setColumnCount(2)
+        tree.setHeaderLabels(["Що зробити", "Навіщо"])
+        tree.setRootIsDecorated(False)
+        for title, why, code in RECIPES:
+            item = QTreeWidgetItem([title, why])
+            tip = _tip(title, why, code)
+            item.setToolTip(0, tip)
+            item.setToolTip(1, tip)
+            item.setData(0, Qt.UserRole, code)
+            tree.addTopLevelItem(item)
+        tree.setColumnWidth(0, 230)
+        tree.itemDoubleClicked.connect(self._insert_snippet)
         return tree
 
     # --- права половина: живий перегляд ---
@@ -455,15 +555,17 @@ class CssEditor(QMainWindow):
         return box
 
     # --- дії ---
-    def _insert_selector(self, item, _column):
-        selector = item.data(0, Qt.UserRole) or item.text(0)
+    def _insert_snippet(self, item, _column):
+        """Вставляє готовий шматок у кінець тексту і показує результат."""
+        snippet = (item.data(0, Qt.UserRole) or item.text(0)).rstrip()
         cursor = self.editor.textCursor()
         cursor.movePosition(QTextCursor.End)
-        cursor.insertText("\n%s {\n  \n}\n" % selector)
-        cursor.movePosition(QTextCursor.Up, QTextCursor.MoveAnchor, 2)
-        cursor.movePosition(QTextCursor.EndOfLine)
+        prefix = "" if self.css().endswith("\n") or not self.css() else "\n"
+        cursor.insertText(prefix + "\n" + snippet + "\n")
         self.editor.setTextCursor(cursor)
+        self.editor.centerCursor()
         self.editor.setFocus()
+        self.apply_preview()
 
     def _goto_error(self, item: QListWidgetItem):
         line = item.data(Qt.UserRole)
@@ -538,6 +640,19 @@ class CssEditor(QMainWindow):
             self.close()
             return
         super().keyPressEvent(e)
+
+
+def _tip(title: str, desc: str, example: str) -> str:
+    """Підказка з прикладом коду.
+
+    Саме приклад і потрібен: «клас .n — нік автора» не каже, ЩО з ним робити,
+    а рядок «.n { color: #ffd166 !important; }» каже все і одразу.
+    """
+    code = (example.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+            .replace("\n", "<br>").replace(" ", "&nbsp;"))
+    return ("<b>%s</b><br>%s<br><br><code style='color:#c9a4ff'>%s</code>"
+            "<br><br><i>подвійний клік — вставити</i>"
+            % (title, desc, code))
 
 
 def _base_css() -> str:

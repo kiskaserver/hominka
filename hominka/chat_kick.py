@@ -17,7 +17,7 @@ from threading import Thread
 from PySide6.QtCore import QObject, QTimer, QUrl, Signal
 from PySide6.QtWebSockets import QWebSocket
 
-import chatsources as cs
+from . import chatsources as cs
 
 # Публічний ключ Pusher у Kick (не секрет — зашитий у клієнті сайту).
 PUSHER_URL = ("wss://ws-us2.pusher.com/app/32cbd69e4b950bf97679"
