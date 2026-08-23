@@ -124,6 +124,63 @@ def _exe_of(hwnd: int) -> str:
     return ""
 
 
+WS_EX_TOOLWINDOW = 0x00000080
+GW_OWNER = 4
+
+_OURS = ("hominka.exe", "python.exe", "pythonw.exe")
+_SKIP = ("explorer.exe", "applicationframehost.exe", "textinputhost.exe",
+         "systemsettings.exe", "searchhost.exe", "shellexperiencehost.exe",
+         "startmenuexperiencehost.exe", "")
+
+
+def list_windows() -> list:
+    """Список видимих вікон-кандидатів на гру: [(hwnd, pid, exe, title)].
+
+    Замість «вгадай, що зараз попереду» — явний вибір зі списку. Беремо
+    top-level вікна, у яких є заголовок, які видимі й не службові: саме такими
+    бувають вікна ігор. Себе, робочий стіл і системну обслугу відкидаємо.
+    """
+    if not IS_WINDOWS:
+        return []
+    out = []
+    seen = set()
+
+    @ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
+    def cb(hwnd, _lparam):
+        if not user32.IsWindowVisible(hwnd):
+            return True
+        # Дочірні/власні спливні вікна не показуємо — потрібне головне вікно гри.
+        if user32.GetWindow(hwnd, GW_OWNER):
+            return True
+        ex = user32.GetWindowLongW(hwnd, GWL_EXSTYLE)
+        if ex & WS_EX_TOOLWINDOW:
+            return True
+        length = user32.GetWindowTextLengthW(hwnd)
+        if length <= 0:
+            return True
+        buf = ctypes.create_unicode_buffer(length + 1)
+        user32.GetWindowTextW(hwnd, buf, length + 1)
+        title = buf.value.strip()
+        if not title:
+            return True
+        exe = _exe_of(hwnd)
+        low = exe.lower()
+        if low in _OURS or low in _SKIP:
+            return True
+        pid = wintypes.DWORD()
+        user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
+        key = (pid.value, low)
+        if key in seen:              # одна гра — один рядок, навіть якщо вікон кілька
+            return True
+        seen.add(key)
+        out.append((int(hwnd), int(pid.value), exe, title))
+        return True
+
+    user32.EnumWindows(cb, 0)
+    out.sort(key=lambda w: w[3].lower())
+    return out
+
+
 def monitor_rect(hwnd: int):
     """Прямокутник монітора, на якому лежить вікно."""
     monitor = user32.MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST)

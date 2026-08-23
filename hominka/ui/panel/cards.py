@@ -7,7 +7,7 @@
 
 from typing import TYPE_CHECKING
 
-from PySide6.QtCore import Qt, QTimer, QUrl
+from PySide6.QtCore import Qt, QUrl
 from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (
     QCheckBox, QComboBox, QFrame, QHBoxLayout, QLabel, QLineEdit, QPushButton,
@@ -216,19 +216,34 @@ class CardsMixin:
         self.game_warn.hide()
         lay.addWidget(self.game_warn)
 
+        # Вибір гри списком, а не «встигни перейти за 4 секунди»: панель
+        # зникала разом з Alt-Tab, і натиснути було нікуди. Список — з видимих
+        # вікон (fullscreen.list_windows), поруч кнопка оновити.
+        pick_row = QHBoxLayout()
+        pick_row.setSpacing(6)
+        self.game_pick = QComboBox(self)
+        self.game_pick.setToolTip("Оберіть вікно гри, у яке показати чат.")
+        pick_row.addWidget(self.game_pick, 1)
+        self.game_refresh = QPushButton("⟳", self)
+        self.game_refresh.setObjectName("ghost")
+        self.game_refresh.setFixedSize(30, 28)
+        self.game_refresh.setToolTip("Оновити список вікон.")
+        self.game_refresh.clicked.connect(self._refresh_games)
+        pick_row.addWidget(self.game_refresh)
+        self.game_pick_row = pick_row
+        lay.addLayout(pick_row)
+
         self.game_inject = QPushButton("Показати чат у грі", self)
         self.game_inject.setObjectName("ghost")
         self.game_inject.setFixedHeight(28)
-        self.game_inject.setToolTip(
-            "Натисніть, перейдіть у гру — і за кілька секунд чат зʼявиться в ній.")
-        self.game_inject.clicked.connect(self._inject_game)
-        self.game_inject.hide()
+        self.game_inject.setToolTip("Вкладе чат у вибрану гру.")
+        self.game_inject.clicked.connect(self._inject_selected)
         lay.addWidget(self.game_inject)
 
-        self._inject_timer = QTimer(self)
-        self._inject_timer.setInterval(1000)
-        self._inject_timer.timeout.connect(self._inject_countdown)
-        self._inject_left = 0
+        self._game_widgets = (self.game_warn, self.game_pick, self.game_refresh,
+                              self.game_inject)
+        for w in self._game_widgets:
+            w.hide()
 
         if self.win.channel != "stable":
             self.set_game_experimental(True)
@@ -285,51 +300,51 @@ class CardsMixin:
         show = on and inject_mod.available()
         self.game_box.setVisible(show)
         if not show:
-            self.game_warn.hide()
-            self.game_inject.hide()
-            self._inject_timer.stop()
+            for w in self._game_widgets:
+                w.hide()
             if self.game_box.isChecked():
                 self.game_box.blockSignals(True)
                 self.game_box.setChecked(False)
                 self.game_box.blockSignals(False)
 
     def _toggle_game(self, on: bool):
-        """Розкриває попередження і кнопку; вимикає — гасить продюсера."""
-        self.game_warn.setVisible(on)
-        self.game_inject.setVisible(on)
-        if not on:
-            self._inject_timer.stop()
-            self.game_inject.setText("Показати чат у грі")
-            self.game_inject.setEnabled(True)
+        """Розкриває попередження, список ігор і кнопку; вимикає — гасить продюсера."""
+        for w in self._game_widgets:
+            w.setVisible(on)
+        if on:
+            self._refresh_games()
+        else:
             self.win.set_game_overlay(False)
             self.top_status.setText("Чат у грі вимкнено.")
 
-    def _inject_game(self):
-        """Відлік, щоб людина встигла перейти у гру, — тоді вкладаємо DLL."""
-        self._inject_left = 4
-        self.game_inject.setEnabled(False)
-        self._inject_countdown()
-        self._inject_timer.start()
-
-    def _inject_countdown(self):
-        if self._inject_left > 0:
-            self.top_status.setText(
-                "Перейдіть у гру… вкладу чат за %d с." % self._inject_left)
-            self.game_inject.setText("Зачекайте… %d" % self._inject_left)
-            self._inject_left -= 1
+    def _refresh_games(self):
+        """Наповнює список видимими вікнами. Кожен рядок памʼятає свій hwnd."""
+        self.game_pick.clear()
+        wins = fs_mod.list_windows()
+        if not wins:
+            self.game_pick.addItem("Немає відкритих ігор — запустіть гру й оновіть", None)
+            self.game_inject.setEnabled(False)
             return
-        self._inject_timer.stop()
-        self.game_inject.setText("Показати чат у грі")
+        for hwnd, pid, exe, title in wins:
+            label = "%s — %s" % (title[:40], exe)
+            self.game_pick.addItem(label, hwnd)
         self.game_inject.setEnabled(True)
 
-        info = fs_mod.state()
-        hwnd = info.get("hwnd")
-        exe = (info.get("exe") or "").lower()
-        if not hwnd or exe in ("hominka.exe", "python.exe", "pythonw.exe", "explorer.exe", ""):
-            self.top_status.setText(
-                "Не бачу гри у фокусі. Натисніть ще раз і встигніть перейти в її вікно.")
+    def _inject_selected(self):
+        """Вкладає чат у вибрану зі списку гру."""
+        hwnd = self.game_pick.currentData()
+        if not hwnd:
+            self.top_status.setText("Спершу оберіть гру зі списку (кнопка ⟳ оновлює).")
             return
+        self.top_status.setText("Вкладаю чат…")
         res = self.win.inject_game(hwnd)
+        # Інша копія Hominka вже пише кадр у ту саму память — двоє зіпсують чат.
+        ov = getattr(self.win, "game_overlay", None)
+        if res.ok and ov is not None and getattr(ov.writer, "conflict", False):
+            self.top_status.setText(
+                "Інша копія Hominka вже показує чат у грі. Лишіть одну — двоє "
+                "малюють одне поверх одного.")
+            return
         self.top_status.setText(res.message)
         # Якщо гру заблокував античит — знімаємо галочку: тут інжектор не варіант.
         if res.code == inject_mod.EX_BLOCKED:

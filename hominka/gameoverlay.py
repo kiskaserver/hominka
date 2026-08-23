@@ -49,6 +49,7 @@ class SharedFrameWriter:
         self._h = None
         self._view = None
         self._seq = 0
+        self.conflict = False
         if not _IS_WINDOWS:
             return
         k32 = ctypes.windll.kernel32
@@ -69,7 +70,17 @@ class SharedFrameWriter:
         PAGE_READWRITE = 0x04
         self._h = k32.CreateFileMappingW(INVALID, None, PAGE_READWRITE,
                                          0, TOTAL, SHM_NAME)
+        # GetLastError одразу після виклику: імʼя одне на систему, і якщо мапінг
+        # уже існує (183), значить інша копія Hominka вже пише кадр. Двоє в один
+        # буфер — миготіння й каша. Не займаємо його, а чесно кажемо про конфлікт.
+        ERROR_ALREADY_EXISTS = 183
+        err = k32.GetLastError()
+        self.conflict = bool(self._h) and err == ERROR_ALREADY_EXISTS
         if not self._h:
+            return
+        if self.conflict:
+            k32.CloseHandle(self._h)
+            self._h = None
             return
         FILE_MAP_ALL_ACCESS = 0xF001F
         self._view = k32.MapViewOfFile(self._h, FILE_MAP_ALL_ACCESS, 0, 0, TOTAL)

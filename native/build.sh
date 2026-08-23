@@ -18,7 +18,7 @@ mkdir -p "$OUT"
 # -Wl,--kill-at      прибрати «@N» з імен експортів stdcall (для 32-біт це важливо);
 # -municode          wmain як точка входу (юнікодні аргументи).
 COMMON="-O2 -s -static -static-libgcc -static-libstdc++ -Wall -Wextra -Wno-unused-parameter"
-DLL_LIBS="-ld3d11 -ldxgi -lgdi32 -lole32 -luuid"
+DLL_LIBS="-ld3d11 -ldxgi -ld3d9 -lgdi32 -lole32 -luuid"
 EXE_LIBS="-lshlwapi"
 
 build() {
