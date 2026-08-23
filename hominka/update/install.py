@@ -55,6 +55,21 @@ def _parent_pid() -> int:
         kernel32.CloseHandle(snapshot)
 
 
+def _check_script(text: str):
+    """Не запускати підмінника, який уже зламаний.
+
+    Табуляція чи повернення каретки посеред команди — слід того, що текст
+    скрипта колись переписали звичайним рядком Python, і «\\tasklist» стало
+    табуляцією. Зовні це виглядало найгірше з можливого: програма чесно
+    закривалася, підмінник запускався, нічого не копіював і мовчки зникав.
+    Краще зупинитися тут і сказати про це вголос — вікно ще на екрані.
+    """
+    bad = [ch for ch in text if ch in "\t\r\f\v\b\a\0"]
+    if bad:
+        raise ValueError("скрипт оновлення зіпсований (%d керуючих символів) — "
+                         "оновіться вручну з сайту" % len(bad))
+
+
 def clean_env() -> dict:
     """Оточення для процесу-підмінника — без службових змінних PyInstaller.
 
@@ -101,6 +116,7 @@ def install(zip_path: str, app_dir: str) -> str:
     if not os.path.isfile(os.path.join(src, "Hominka.exe")):
         raise ValueError("в архіві немає Hominka.exe")
 
+    _check_script(_UPDATE_BAT)
     bat = os.path.join(tempfile.gettempdir(), "hominka-update.bat")
     with open(bat, "w", encoding="cp1251", errors="replace") as f:
         f.write(_UPDATE_BAT)
@@ -185,23 +201,34 @@ rm -f "$0"
 # закрилося, і показати помилку йому нікуди.
 _UPDATE_BAT = r"""@echo off
 setlocal enabledelayedexpansion
-set SYS=%SystemRoot%\System32
+REM SYS уже з кінцевою похилою рискою — навмисно.
+REM
+REM Раніше тут стояло %SYS% і далі \tasklist.exe, \find.exe, \robocopy.exe.
+REM Один необережний запис цього файлу через звичайний (не r"") рядок Python
+REM перетворив \t на табуляцію, \f на перевід сторінки, \r на повернення
+REM каретки — і підмінник тихо перестав і чекати, і копіювати. Програма
+REM закривалася, оновлення не ставилося, і сказати про це було нікому.
+REM Тепер після %SYS% йде одразу ім'я, тож ламатися нема чому.
+REM
+REM Шляхи в лапках із «~»: у теці, де в імені є пробіл, robocopy без
+REM лапок бачив два різні аргументи й не копіював нічого.
+set SYS=%SystemRoot%\System32\
 set LOG=%TEMP%\hominka-update.log
 echo [%DATE% %TIME%] wait pid=%1 parent=%5 src=%2 dst=%3 >> "%LOG%"
 
 REM Чекаємо і на Python-процес, і на bootloader: другий тримає .exe відкритим,
 REM і копіювати поверх нього означає зіпсувати файл.
 :wait
-%SYS%	asklist.exe /NH /FI "PID eq %1" 2>nul | %SYS%ind.exe "%1" >nul
+%SYS%tasklist.exe /NH /FI "PID eq %1" 2>nul | %SYS%find.exe "%1" >nul
 if not errorlevel 1 (
-  %SYS%\ping.exe -n 2 127.0.0.1 >nul
+  %SYS%ping.exe -n 2 127.0.0.1 >nul
   goto wait
 )
 if not "%~5"=="0" (
   :waitparent
-  %SYS%	asklist.exe /NH /FI "PID eq %5" 2>nul | %SYS%ind.exe "%5" >nul
+  %SYS%tasklist.exe /NH /FI "PID eq %5" 2>nul | %SYS%find.exe "%5" >nul
   if not errorlevel 1 (
-    %SYS%\ping.exe -n 2 127.0.0.1 >nul
+    %SYS%ping.exe -n 2 127.0.0.1 >nul
     goto waitparent
   )
 )
@@ -211,7 +238,7 @@ REM перейменувати його — це найдешевша перев
 set TRIES=0
 :trylock
 set /a TRIES+=1
-%SYS%\ping.exe -n 2 127.0.0.1 >nul
+%SYS%ping.exe -n 2 127.0.0.1 >nul
 ren "%~3\Hominka.exe" "Hominka.exe.old" 2>nul
 if errorlevel 1 (
   if !TRIES! LSS 15 goto trylock
@@ -221,7 +248,7 @@ if errorlevel 1 (
 )
 
 echo [%DATE% %TIME%] copying >> "%LOG%"
-%SYS%obocopy.exe %2 %3 /E /IS /IT /R:5 /W:2 /NFL /NDL /NJH /NJS >> "%LOG%" 2>&1
+%SYS%robocopy.exe "%~2" "%~3" /E /IS /IT /R:5 /W:2 /NFL /NDL /NJH /NJS >> "%LOG%" 2>&1
 echo [%DATE% %TIME%] robocopy exit=%ERRORLEVEL% >> "%LOG%"
 
 REM Звіряємо розміри: обірвана копія — це саме те, через що людина бачила
@@ -231,8 +258,8 @@ for %%A in ("%~3\Hominka.exe") do set DSTSIZE=%%~zA
 echo [%DATE% %TIME%] size src=!SRCSIZE! dst=!DSTSIZE! >> "%LOG%"
 if not "!SRCSIZE!"=="!DSTSIZE!" (
   echo [%DATE% %TIME%] size mismatch, retry once >> "%LOG%"
-  %SYS%\ping.exe -n 4 127.0.0.1 >nul
-  %SYS%obocopy.exe %2 %3 /E /IS /IT /R:5 /W:2 /NFL /NDL /NJH /NJS >> "%LOG%" 2>&1
+  %SYS%ping.exe -n 4 127.0.0.1 >nul
+  %SYS%robocopy.exe "%~2" "%~3" /E /IS /IT /R:5 /W:2 /NFL /NDL /NJH /NJS >> "%LOG%" 2>&1
   for %%A in ("%~3\Hominka.exe") do set DSTSIZE=%%~zA
   echo [%DATE% %TIME%] size after retry dst=!DSTSIZE! >> "%LOG%"
 )
@@ -240,7 +267,8 @@ if not "!SRCSIZE!"=="!DSTSIZE!" (
 REM Перехід зі збірки текою на збірку одним файлом: _internal у новій версії
 REM немає, а стара його лишила — 340 МБ, які вже нікому не потрібні.
 if not exist "%~2\_internal" if exist "%~3\_internal" rmdir /s /q "%~3\_internal"
+echo [%DATE% %TIME%] restarting >> "%LOG%"
 start "" "%~3\Hominka.exe"
-rmdir /s /q %4
+rmdir /s /q "%~4"
 (goto) 2>nul & del "%~f0"
 """
