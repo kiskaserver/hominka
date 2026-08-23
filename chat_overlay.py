@@ -11,7 +11,7 @@ Game Capture його НЕ бачить — WDA_EXCLUDEFROMCAPTURE, Windows 10 2
     (потрібне хіба для чужого чату);
   • ВЛАСНА трансляція: у ⚙ один раз названо свій канал, і програма сама
     знаходить активний ефір та відкриває його чат (див. LiveProbe);
-  • інакше — чат сайту (CHAT_URL).
+  • інакше — чат сайту за посиланням, вписаним у ⚙ (порожньо, поки не вписали).
 
 Входу в акаунт YouTube тут немає навмисне: Google не пускає у вбудований
 браузер, а для пошуку трансляції вхід і не потрібен — сторінки каналу відкриті
@@ -23,7 +23,7 @@ Game Capture його НЕ бачить — WDA_EXCLUDEFROMCAPTURE, Windows 10 2
 
 Можливості (панель ⚙):
   • свій канал (щоб чат трансляції знаходився сам);
-  • посилання на чат (для чужого чату);
+  • посилання на чат сайту (беремо в адмінці: Віджети → Адреси для OBS);
   • прозорість вікна (повзунок);
   • тло / затемнення підкладки під чатом (повзунок);
   • розмір тексту (A− / A+);
@@ -41,6 +41,7 @@ import re
 import sys
 import tempfile
 from ctypes import wintypes
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 from PySide6.QtCore import Qt, QUrl, QTimer, QPoint, QObject, QEvent, Signal  # noqa
 from PySide6.QtGui import QColor, QPainter, QPen, QIcon
@@ -64,13 +65,27 @@ APP_NAME = "Hominka"          # від укр. «гомін» — гомін г�
 APP_ICON = "hominka.ico"
 APP_VERSION = "1.7.2"
 APP_AUTHOR = "Mykyta Vinnyk"
-# Ключ доступу до оверлеїв (?key=) обовʼязковий: без нього сервер відповідає 403.
-# Перевипуск ключа в адмінці ламає це посилання — тоді треба оновити рядок нижче
-# (або просто вставити новий URL у полі налаштувань — воно має пріоритет).
-# raw=1 — особисте вікно: показує повідомлення ДО автомодерації (вирізане
-# фільтром позначається червоним). Цей параметр НЕ можна ставити в OBS —
-# джерело з ним покаже глядачам те, що фільтр прибрав.
-CHAT_URL = "https://stream.svitix.com/overlay/chat?lang=uk&raw=1&key=YOUR_OVERLAY_KEY"
+# Посилання на чат сайту вписує сам стрімер у ⚙ — тут його немає навмисно.
+#
+# Раніше в цьому рядку лежала готова адреса з ключем оверлея. Ключ (?key=) — це
+# доступ до ОСОБИСТОГО вікна чату: з raw=1 воно показує й те, що автомодерація
+# прибрала від глядачів. Тримати такий ключ у програмі, яку завантажують інші
+# люди, не можна — кожен, хто її поставив, читав би чужий приватний чат.
+UI_LANG = "uk"  # мова, якою програма просить сервер говорити
+
+
+# Сторінка на місці чату, поки джерело не задано.
+NO_SOURCE_HTML = """
+<html><head><meta charset="utf-8"><style>
+  html,body{margin:0;height:100%;background:transparent;font:14px/1.5 "Segoe UI",sans-serif;color:#e7e2df}
+  div{height:100%;display:flex;flex-direction:column;gap:6px;align-items:center;justify-content:center;text-align:center;padding:16px}
+  b{color:#c9a4ff}
+  span{color:#9a9490;font-size:12px}
+</style></head><body><div>
+  <b>Джерело чату не задано</b>
+  <span>Відкрий ⚙ і встав посилання на чат сайту<br>(в адмінці: Віджети → Адреси для OBS → Чат)<br>або назви свій канал Twitch / Kick / YouTube.</span>
+</div></body></html>
+"""
 
 
 def resource_path(name: str) -> str:
@@ -471,7 +486,32 @@ def popout_url(video_id: str) -> str:
     return f"https://www.youtube.com/live_chat?v={video_id}&is_popout=1"
 
 
-def resolve_chat_url(raw: str, auto_video: str = "") -> str:
+def site_chat_url(raw: str) -> str:
+    """Доводить вписане посилання на чат сайту до вигляду, придатного тут.
+
+    Дописуємо два параметри, якщо їх немає:
+      • lang — інакше сервер говорить англійською, і причини, з яких
+        автомодерація прибрала повідомлення ("profanity", "harassment"), видно
+        англійськими словами посеред українського вікна;
+      • raw=1 — це ж особисте вікно стрімера, саме воно й показує вирізане.
+    Те, що людина написала руками, не чіпаємо: свій lang сильніший за наш.
+    """
+    raw = (raw or "").strip()
+    if not raw:
+        return ""
+    if "://" not in raw:
+        raw = "https://" + raw
+    try:
+        u = urlsplit(raw)
+    except ValueError:
+        return raw
+    q = dict(parse_qsl(u.query, keep_blank_values=True))
+    q.setdefault("lang", UI_LANG)
+    q.setdefault("raw", "1")
+    return urlunsplit((u.scheme, u.netloc, u.path, urlencode(q), u.fragment))
+
+
+def resolve_chat_url(raw: str, auto_video: str = "", site: str = "") -> str:
     """Куди дивитися вікну чату.
 
     Порядок навмисне такий:
@@ -479,11 +519,12 @@ def resolve_chat_url(raw: str, auto_video: str = "") -> str:
          автоматику (наприклад, читати чужу трансляцію);
       2. власна трансляція, знайдена після входу в YouTube, — головний режим:
          програма для того й є, щоб стрімер читав СВІЙ чат;
-      3. чат сайту — коли входу немає або ефір не йде.
+      3. чат сайту — коли входу немає або ефір не йде; порожньо, якщо
+         посилання на нього ще не вписали.
     """
     raw = (raw or "").strip()
     if not raw:
-        return popout_url(auto_video) if auto_video else CHAT_URL
+        return popout_url(auto_video) if auto_video else site_chat_url(site)
     if "youtube.com/live_chat" in raw:
         return raw
     if is_youtube(raw):
@@ -1090,14 +1131,23 @@ class SettingsPanel(QWidget):
         self.kick_edit.editingFinished.connect(self._apply_extra)
         lay.addWidget(self.kick_edit)
 
+        lay.addWidget(self._label("Чат сайту"))
+        self.site_edit = QLineEdit(self)
+        self.site_edit.setPlaceholderText("https://…/overlay/chat?key=…")
+        self.site_edit.setToolTip(
+            "Готове посилання лежить в адмінці: Віджети → Адреси для OBS → Чат. "
+            "Мову й особистий режим (raw) програма дописує сама.")
+        self.site_edit.returnPressed.connect(self._apply_site)
+        self.site_edit.editingFinished.connect(self._apply_site)
+        lay.addWidget(self.site_edit)
+
         self.src_status = QLabel("", self)
         self.src_status.setObjectName("dim")
         self.src_status.setWordWrap(True)
         lay.addWidget(self.src_status)
 
-        # Поля для посилання більше немає: джерела задаються ніками площадок
-        # вище, і чат збирається сам. Лишилося місце для скарг читачів — коли
-        # каналу не існує або площадка не відповідає, це має бути видно.
+        # Місце для скарг читачів: коли каналу не існує або площадка не
+        # відповідає, це має бути видно тут же, а не тільки в порожньому вікні.
         self.chat_error = QLabel("", self)
         self.chat_error.setObjectName("error")
         self.chat_error.setWordWrap(True)
@@ -1248,14 +1298,19 @@ class SettingsPanel(QWidget):
         else:
             head = "Канал YouTube не вказано."
 
+        site = bool(win.site_url.strip())
         if win.mode == "feed":
             tail = "Читаємо: %s." % ", ".join(win.active_sources())
         elif win.auto_video:
             tail = "Ефір іде — показуємо його чат."
+        elif known and site:
+            tail = "Ефіру немає — показуємо чат сайту, перемкнемось самі, щойно почнеться."
         elif known:
-            tail = "Ефіру немає — покажемо чат сайту, перемкнемось самі, щойно почнеться."
-        else:
+            tail = "Ефіру немає, а посилання на чат сайту не вписано — вікно порожнє."
+        elif site:
             tail = "Показуємо чат сайту."
+        else:
+            tail = "Джерела немає: вставте посилання на чат сайту або назвіть канал."
         self.src_status.setText(head + " " + tail)
 
     def _apply_channel(self):
@@ -1263,6 +1318,9 @@ class SettingsPanel(QWidget):
 
     def _apply_extra(self):
         self.win.set_extra_channels(self.twitch_edit.text(), self.kick_edit.text())
+
+    def _apply_site(self):
+        self.win.set_site_url(self.site_edit.text())
 
     def set_chat_error(self, text: str):
         self.chat_error.setText(text)
@@ -1466,7 +1524,10 @@ class Overlay(QMainWindow):
         self.accent = ACCENT_ACTIVE
         self.mode = "web"          # web = сторінка чату, feed = спільна стрічка
         self._cli_url = url        # URL з аргументу командного рядка (пріоритет)
-        self.url = resolve_chat_url(url) if url else CHAT_URL
+        # Чат сайту: посилання з ⚙ (config.json). Порожнє, поки не вписали —
+        # тоді вікно чесно каже, чого йому бракує, замість порожньої сторінки.
+        self.site_url = ""
+        self.url = resolve_chat_url(url) if url else ""
         self.is_yt = is_youtube(self.url)
 
         # Власна трансляція (див. LiveProbe) і канал, заданий руками.
@@ -1540,7 +1601,7 @@ class Overlay(QMainWindow):
         if not self._cli_url and (self.twitch_channel or self.kick_channel):
             self._start_feed()
         else:
-            self.view.load(QUrl(self.url))
+            self._show_url()
 
         # Пошук власної трансляції: окрема прихована сторінка в тому ж профілі.
         self.probe = LiveProbe(self.profile, self)
@@ -1698,6 +1759,17 @@ class Overlay(QMainWindow):
         self.panel.set_source_status(self)
         self.probe_live()
 
+    def set_site_url(self, text: str):
+        """Посилання на чат сайту з ⚙. Порожнє — теж відповідь: чат сайту не
+        показуємо взагалі, залишаються площадки."""
+        text = (text or "").strip()
+        if text == self.site_url:
+            return
+        self.site_url = text
+        self.save_config()
+        self.panel.set_source_status(self)
+        self.refresh_source()
+
     def set_chat_delay(self, seconds: int):
         self.chat_delay = max(0, int(seconds))
         if self.feed is not None:
@@ -1763,7 +1835,7 @@ class Overlay(QMainWindow):
             out.append("Kick")
         if self.my_channel.strip() or self.yt_channel_id:
             out.append("YouTube")
-        return out or ["чат сайту"]
+        return out or (["чат сайту"] if self.site_url.strip() else ["нічого"])
 
     def refresh_source(self):
         """Переобчислює джерело чату і, якщо воно змінилося, відкриває його.
@@ -1777,13 +1849,24 @@ class Overlay(QMainWindow):
             self._start_feed()
             return
         self._stop_readers()
-        url = resolve_chat_url(self._cli_url or "", self.auto_video)
+        url = resolve_chat_url(self._cli_url or "", self.auto_video, self.site_url)
         self.is_yt = is_youtube(url)
         self.bar.title.setText(self._title_for())
         if url != self.url or self.mode == "feed":
             self.mode = "web"
             self.url = url
-            self.view.load(QUrl(url))
+            self._show_url()
+
+    def _show_url(self):
+        """Відкриває поточне посилання або пояснює, чого бракує.
+
+        Порожня адреса — не помилка програми, а незаповнене налаштування:
+        показати білу сторінку означало б залишити людину гадати, що зламалося.
+        """
+        if self.url:
+            self.view.load(QUrl(self.url))
+        else:
+            self.view.setHtml(NO_SOURCE_HTML)
 
     def _start_feed(self):
         """Вмикає спільну стрічку і піднімає читачів для заданих площадок."""
@@ -1829,7 +1912,7 @@ class Overlay(QMainWindow):
             return "Чат"
         if self.auto_video:
             return "Мій стрім"
-        return "Chat"
+        return "Чат" if self.url else "Немає джерела"
 
     def _on_loaded(self, ok: bool):
         self.view.setZoomFactor(self.zoom)
@@ -1966,12 +2049,12 @@ class Overlay(QMainWindow):
         self.setWindowOpacity(op)
         self.zoom = float(cfg.get("zoom", 1.0))
         self.bg_alpha = float(cfg.get("bg_alpha", 0.30))
-        # Адреса береться лише з аргументу командного рядка (для налагодження)
-        # або складається сама з ніків площадок. Збережене колись посилання
-        # свідомо ігноруємо: поля для нього більше немає, і прибрати його з
-        # налаштувань було б нічим.
+        # Чат сайту — те, що людина вписала в ⚙. Аргумент командного рядка
+        # сильніший: ним відкривають чужий чат для налагодження.
+        self.site_url = (cfg.get("siteChatUrl") or "").strip()
+        self.panel.site_edit.setText(self.site_url)
         if not self._cli_url:
-            self.url = CHAT_URL
+            self.url = site_chat_url(self.site_url)
             self.is_yt = False
         # Канал YouTube, знайдений минулого разу: id не змінюється, тож не
         # ходимо за ним щоразу. Саму трансляцію не запам'ятовуємо — вона
@@ -2023,6 +2106,7 @@ class Overlay(QMainWindow):
                     "bg_alpha": round(self.bg_alpha, 2),
                     "youtubeChannelId": self.yt_channel_id,
                     "myChannel": self.my_channel,
+                    "siteChatUrl": self.site_url,
                     "chatDelay": self.chat_delay,
                     "twitchChannel": self.twitch_channel,
                     "kickChannel": self.kick_channel,
