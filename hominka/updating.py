@@ -25,6 +25,12 @@ class UpdatingMixin:
         if not channel or channel == self.channel:
             return
         self.channel = channel
+        # Експериментальні можливості живуть у тестових каналах — і зникають,
+        # щойно людина повертається на стабільний.
+        experimental = channel != "stable"
+        self.panel.rtss.setVisible(experimental)
+        if not experimental and self.rtss_on:
+            self.set_rtss(False)
         self.save_config()
         self.check_updates(manual=True)
 

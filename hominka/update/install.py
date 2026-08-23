@@ -17,6 +17,44 @@ from .download import cleanup_downloads
 IS_WINDOWS = sys.platform == "win32"
 
 
+def _parent_pid() -> int:
+    """PID батьківського процесу (у збірці одним файлом — bootloader).
+
+    Без сторонніх бібліотек: знімок процесів через Toolhelp і пошук себе.
+    """
+    if not IS_WINDOWS:
+        return 0
+    import ctypes
+    from ctypes import wintypes
+
+    class ENTRY(ctypes.Structure):
+        _fields_ = [("dwSize", wintypes.DWORD), ("cntUsage", wintypes.DWORD),
+                    ("th32ProcessID", wintypes.DWORD),
+                    ("th32DefaultHeapID", ctypes.POINTER(ctypes.c_ulong)),
+                    ("th32ModuleID", wintypes.DWORD), ("cntThreads", wintypes.DWORD),
+                    ("th32ParentProcessID", wintypes.DWORD),
+                    ("pcPriClassBase", ctypes.c_long), ("dwFlags", wintypes.DWORD),
+                    ("szExeFile", ctypes.c_char * 260)]
+
+    kernel32 = ctypes.windll.kernel32
+    snapshot = kernel32.CreateToolhelp32Snapshot(0x00000002, 0)   # TH32CS_SNAPPROCESS
+    if snapshot == -1:
+        return 0
+    try:
+        entry = ENTRY()
+        entry.dwSize = ctypes.sizeof(ENTRY)
+        me = os.getpid()
+        if not kernel32.Process32First(snapshot, ctypes.byref(entry)):
+            return 0
+        while True:
+            if entry.th32ProcessID == me:
+                return int(entry.th32ParentProcessID)
+            if not kernel32.Process32Next(snapshot, ctypes.byref(entry)):
+                return 0
+    finally:
+        kernel32.CloseHandle(snapshot)
+
+
 def clean_env() -> dict:
     """Оточення для процесу-підмінника — без службових змінних PyInstaller.
 
@@ -66,8 +104,17 @@ def install(zip_path: str, app_dir: str) -> str:
     bat = os.path.join(tempfile.gettempdir(), "hominka-update.bat")
     with open(bat, "w", encoding="cp1251", errors="replace") as f:
         f.write(_UPDATE_BAT)
+    # Чекати треба не лише на себе.
+    #
+    # Збірка одним файлом — це ДВА процеси: bootloader (він тримає .exe
+    # відкритим) і ми, Python усередині нього. Підмінник раніше чекав лише на
+    # наш pid, починав копіювати, поки батьківський ще живий, і копія
+    # обривалася на замкненому файлі. Наслідок людина бачила як
+    # «Failed to load Python DLL … python313.dll» — тобто .exe на диску
+    # лишався битим.
     cmd = [os.path.join(os.environ.get("SystemRoot", r"C:\Windows"), "System32", "cmd.exe"),
-           "/c", bat, str(os.getpid()), src, app_dir.rstrip("\\/"), staging]
+           "/c", bat, str(os.getpid()), src, app_dir.rstrip("\\/"), staging,
+           str(_parent_pid())]
     # CREATE_NO_WINDOW: підмінник переживає наш вихід і сам по собі (це окремий
     # процес), а вікна консолі посеред гри користувачу не потрібно. Повне
     # від'єднання (DETACHED_PROCESS) залишає його без консолі зовсім, і частина
@@ -137,19 +184,59 @@ rm -f "$0"
 # Журнал у %TEMP%\hominka-update.log: підмінник працює вже після того, як вікно
 # закрилося, і показати помилку йому нікуди.
 _UPDATE_BAT = r"""@echo off
-setlocal
+setlocal enabledelayedexpansion
 set SYS=%SystemRoot%\System32
 set LOG=%TEMP%\hominka-update.log
-echo [%DATE% %TIME%] wait pid=%1 src=%2 dst=%3 >> "%LOG%"
+echo [%DATE% %TIME%] wait pid=%1 parent=%5 src=%2 dst=%3 >> "%LOG%"
+
+REM Чекаємо і на Python-процес, і на bootloader: другий тримає .exe відкритим,
+REM і копіювати поверх нього означає зіпсувати файл.
 :wait
-%SYS%\tasklist.exe /NH /FI "PID eq %1" 2>nul | %SYS%\find.exe "%1" >nul
+%SYS%	asklist.exe /NH /FI "PID eq %1" 2>nul | %SYS%ind.exe "%1" >nul
 if not errorlevel 1 (
   %SYS%\ping.exe -n 2 127.0.0.1 >nul
   goto wait
 )
+if not "%~5"=="0" (
+  :waitparent
+  %SYS%	asklist.exe /NH /FI "PID eq %5" 2>nul | %SYS%ind.exe "%5" >nul
+  if not errorlevel 1 (
+    %SYS%\ping.exe -n 2 127.0.0.1 >nul
+    goto waitparent
+  )
+)
+
+REM Навіть після виходу процесу файл ще секунду-дві буває замкнений. Пробуємо
+REM перейменувати його — це найдешевша перевірка «чи можна писати».
+set TRIES=0
+:trylock
+set /a TRIES+=1
+%SYS%\ping.exe -n 2 127.0.0.1 >nul
+ren "%~3\Hominka.exe" "Hominka.exe.old" 2>nul
+if errorlevel 1 (
+  if !TRIES! LSS 15 goto trylock
+  echo [%DATE% %TIME%] exe still locked, copying anyway >> "%LOG%"
+) else (
+  ren "%~3\Hominka.exe.old" "Hominka.exe" 2>nul
+)
+
 echo [%DATE% %TIME%] copying >> "%LOG%"
-%SYS%\robocopy.exe %2 %3 /E /IS /IT /R:2 /W:1 /NFL /NDL /NJH /NJS >> "%LOG%" 2>&1
+%SYS%obocopy.exe %2 %3 /E /IS /IT /R:5 /W:2 /NFL /NDL /NJH /NJS >> "%LOG%" 2>&1
 echo [%DATE% %TIME%] robocopy exit=%ERRORLEVEL% >> "%LOG%"
+
+REM Звіряємо розміри: обірвана копія — це саме те, через що людина бачила
+REM «Failed to load Python DLL» замість програми.
+for %%A in ("%~2\Hominka.exe") do set SRCSIZE=%%~zA
+for %%A in ("%~3\Hominka.exe") do set DSTSIZE=%%~zA
+echo [%DATE% %TIME%] size src=!SRCSIZE! dst=!DSTSIZE! >> "%LOG%"
+if not "!SRCSIZE!"=="!DSTSIZE!" (
+  echo [%DATE% %TIME%] size mismatch, retry once >> "%LOG%"
+  %SYS%\ping.exe -n 4 127.0.0.1 >nul
+  %SYS%obocopy.exe %2 %3 /E /IS /IT /R:5 /W:2 /NFL /NDL /NJH /NJS >> "%LOG%" 2>&1
+  for %%A in ("%~3\Hominka.exe") do set DSTSIZE=%%~zA
+  echo [%DATE% %TIME%] size after retry dst=!DSTSIZE! >> "%LOG%"
+)
+
 REM Перехід зі збірки текою на збірку одним файлом: _internal у новій версії
 REM немає, а стара його лишила — 340 МБ, які вже нікому не потрібні.
 if not exist "%~2\_internal" if exist "%~3\_internal" rmdir /s /q "%~3\_internal"

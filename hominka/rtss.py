@@ -23,7 +23,9 @@ osdArrOffset, osdArrSize, osdFrame — далі поля, які нам не п�
 """
 
 import ctypes
+import os
 import struct
+import subprocess
 
 MAP_NAME = "RTSSSharedMemoryV2"
 OWNER = "Hominka"
@@ -36,6 +38,38 @@ OSD_OWNER = 256                 # char szOSDOwner[256]
 OSD_TEXT_EX = 512               # char szOSDEx[4096]
 
 kernel32 = ctypes.windll.kernel32 if hasattr(ctypes, "windll") else None
+
+
+# Де RTSS зазвичай лежить і звідки його беруть.
+RTSS_PATHS = (
+    r"C:\Program Files (x86)\RivaTuner Statistics Server\RTSS.exe",
+    r"C:\Program Files\RivaTuner Statistics Server\RTSS.exe",
+)
+RTSS_SITE = "https://www.guru3d.com/download/rtss-rivatuner-statistics-server-download/"
+
+
+def installed_path() -> str:
+    """Шлях до RTSS.exe, якщо він встановлений (інакше порожньо).
+
+    Потрібне, щоб відрізнити «не встановлено» від «встановлено, але не
+    запущено»: у першому випадку людині треба посилання, у другому — кнопка.
+    """
+    for path in RTSS_PATHS:
+        if os.path.isfile(path):
+            return path
+    return ""
+
+
+def launch() -> bool:
+    """Запускає встановлений RTSS (він осідає в треї)."""
+    path = installed_path()
+    if not path:
+        return False
+    try:
+        subprocess.Popen([path], cwd=os.path.dirname(path))
+        return True
+    except OSError:
+        return False
 
 
 class Bridge:

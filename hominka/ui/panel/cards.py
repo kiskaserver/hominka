@@ -7,11 +7,13 @@
 
 from typing import TYPE_CHECKING
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QUrl
+from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (
     QCheckBox, QComboBox, QFrame, QHBoxLayout, QLabel, QLineEdit, QPushButton,
 )
 
+from ... import rtss as rtss_mod
 from ... import update as updater
 from ...fullscreen import changed_window as _changed_window
 from ...version import APP_VERSION
@@ -167,6 +169,10 @@ class CardsMixin:
 
         # Дзеркало в RTSS: єдиний спосіб побачити чат у виключному
         # повноекранному режимі без інʼєкції в гру.
+        #
+        # Показуємо лише в тестових каналах. У стабільному каналі люди ведуть
+        # ефіри, і експериментальні можливості мають доходити до них уже
+        # перевіреними — а не «спробуйте, раптом спрацює».
         self.rtss = QCheckBox("Дублювати чат в RTSS (текстом)", self)
         self.rtss.setToolTip(
             "RivaTuner Statistics Server уже вміє малювати поверх гри — ми просто "
@@ -174,6 +180,19 @@ class CardsMixin:
             "зате видно навіть у виключному повноекранному режимі.")
         self.rtss.toggled.connect(self._toggle_rtss)
         lay.addWidget(self.rtss)
+
+        # Кнопка з'являється лише тоді, коли є що робити: запустити вже
+        # встановлений RTSS або піти по нього.
+        self.rtss_action = QPushButton("", self)
+        self.rtss_action.setObjectName("ghost")
+        self.rtss_action.setFixedHeight(26)
+        self.rtss_action.clicked.connect(self._rtss_action)
+        self.rtss_action.hide()
+        lay.addWidget(self.rtss_action)
+
+        if self.win.channel == "stable":
+            self.rtss.hide()
+            self.rtss_action.hide()
 
         self.keep_top = QCheckBox("Тримати поверх усіх вікон", self)
         self.keep_top.setToolTip(
@@ -183,16 +202,39 @@ class CardsMixin:
         return card
 
     def _toggle_rtss(self, on: bool):
-        """Вмикає дзеркало і чесно каже, якщо RTSS не запущено."""
+        """Вмикає дзеркало, а якщо RTSS немає — пропонує зробити наступний крок.
+
+        Просто сказати «не працює» мало: людина не зобов'язана знати, що таке
+        RTSS і де його брати.
+        """
         if on and not self.win.rtss.available():
             self.rtss.blockSignals(True)
             self.rtss.setChecked(False)
             self.rtss.blockSignals(False)
-            self.top_status.setText(
-                "RTSS не запущено. Це окрема безкоштовна програма (йде з MSI "
-                "Afterburner) — запустіть її і спробуйте ще раз.")
+            if rtss_mod.installed_path():
+                self.top_status.setText("RTSS встановлено, але не запущено.")
+                self.rtss_action.setText("Запустити RTSS")
+            else:
+                self.top_status.setText(
+                    "Потрібен RivaTuner Statistics Server — безкоштовна програма, "
+                    "яка вміє малювати поверх гри (йде разом із MSI Afterburner).")
+                self.rtss_action.setText("Завантажити RTSS")
+            self.rtss_action.show()
             return
+        self.rtss_action.hide()
         self.win.set_rtss(on)
+
+    def _rtss_action(self):
+        """Запустити RTSS або відкрити сторінку завантаження."""
+        if rtss_mod.installed_path():
+            if rtss_mod.launch():
+                self.top_status.setText("Запускаю RTSS… за кілька секунд увімкніть галочку ще раз.")
+                self.rtss_action.hide()
+            else:
+                self.top_status.setText("Не вдалося запустити RTSS — спробуйте вручну.")
+            return
+        QDesktopServices.openUrl(QUrl(rtss_mod.RTSS_SITE))
+        self.top_status.setText("Відкрив сторінку завантаження RTSS.")
 
     def set_fullscreen_state(self, info: dict):
         """Показує, що зараз попереду, простими словами."""

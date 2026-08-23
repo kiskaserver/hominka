@@ -4,14 +4,17 @@ import json
 import re
 
 from PySide6.QtCore import Qt, QTimer, QUrl
-from PySide6.QtGui import QColor, QTextCursor
+from PySide6.QtGui import QColor, QIcon, QTextCursor
 from PySide6.QtWidgets import (
     QHBoxLayout, QLabel, QListWidget, QListWidgetItem, QMainWindow, QPushButton,
-    QSplitter, QTabWidget, QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget,
+    QSizeGrip, QSplitter, QTabWidget, QTreeWidget, QTreeWidgetItem, QVBoxLayout,
+    QWidget,
 )
 from PySide6.QtWebEngineWidgets import QWebEngineView
 
 from .. import feed as chatfeed
+from ..paths import resource_path
+from ..version import APP_ICON
 from .catalog import RECIPES, SAMPLES, SELECTORS
 from .codeedit import CodeEdit
 from .styles import EDITOR_CSS
@@ -23,15 +26,24 @@ class CssEditor(QMainWindow):
     def __init__(self, win):
         super().__init__(None)
         self.win = win
+        # Назва без «Hominka —»: її додає смужка вікна, а в панелі завдань
+        # програма й так підписана своїм іменем.
         self.setWindowTitle("Hominka — свій CSS для чату")
+        self.setWindowIcon(QIcon(resource_path(APP_ICON)))
         self.resize(1180, 760)
         self.setMinimumSize(880, 560)
         self.setStyleSheet(EDITOR_CSS)
+        # Без системної рамки: вікно чату й панель налаштувань свої, і чуже
+        # синє обрамлення посеред них виглядало як інша програма.
+        self.setWindowFlags(Qt.Window | Qt.FramelessWindowHint)
+        self._drag_from = None
 
         root = QWidget(self)
+        root.setObjectName("root")
         outer = QVBoxLayout(root)
-        outer.setContentsMargins(12, 10, 12, 10)
+        outer.setContentsMargins(12, 8, 12, 10)
         outer.setSpacing(8)
+        outer.addLayout(self._titlebar())
         outer.addLayout(self._toolbar())
 
         split = QSplitter(Qt.Horizontal, root)
@@ -42,6 +54,9 @@ class CssEditor(QMainWindow):
         split.setChildrenCollapsible(False)
         outer.addWidget(split, 1)
         self.setCentralWidget(root)
+        # Рамки немає — тягнути за край нічим, тож куточок ставимо самі.
+        self._grip = QSizeGrip(root)
+        self._grip.setFixedSize(16, 16)
 
         # Перегляд оновлюємо не на кожну літеру: перемальовувати сторінку в
         # такт набору — і моргання, і марна робота.
@@ -58,13 +73,56 @@ class CssEditor(QMainWindow):
                              QUrl("https://stream.svitix.com/"))
         self.validate()
 
+    # --- своя смужка вікна ---
+    def _titlebar(self) -> QHBoxLayout:
+        """Іконка, назва і хрестик — як у вікні чату.
+
+        Рамку малюємо самі, тож і тягнути вікно доводиться самим: обробники
+        миші нижче.
+        """
+        row = QHBoxLayout()
+        row.setSpacing(8)
+
+        icon = QLabel(self)
+        icon.setPixmap(QIcon(resource_path(APP_ICON)).pixmap(18, 18))
+        row.addWidget(icon)
+
+        name = QLabel("Hominka", self)
+        name.setStyleSheet("font:700 13px 'Segoe UI'; color:#e7e2df;")
+        row.addWidget(name)
+
+        sub = QLabel("свій CSS для чату", self)
+        sub.setStyleSheet("font:12px 'Segoe UI'; color:#8f8a96;")
+        row.addWidget(sub)
+        row.addStretch(1)
+
+        close = QPushButton("✕", self)
+        close.setObjectName("close")
+        close.setFixedSize(26, 24)
+        close.setToolTip("Закрити (Esc)")
+        close.clicked.connect(self.close)
+        row.addWidget(close)
+        return row
+
+    # --- перетягування вікна за смужку ---
+    def mousePressEvent(self, e):
+        if e.button() == Qt.LeftButton and e.position().y() < 44:
+            self._drag_from = e.globalPosition().toPoint() - self.frameGeometry().topLeft()
+        super().mousePressEvent(e)
+
+    def mouseMoveEvent(self, e):
+        if self._drag_from is not None and e.buttons() & Qt.LeftButton:
+            self.move(e.globalPosition().toPoint() - self._drag_from)
+        super().mouseMoveEvent(e)
+
+    def mouseReleaseEvent(self, e):
+        self._drag_from = None
+        super().mouseReleaseEvent(e)
+
     # --- шапка ---
     def _toolbar(self) -> QHBoxLayout:
         row = QHBoxLayout()
         row.setSpacing(8)
-        title = QLabel("Свій CSS для чату", self)
-        title.setStyleSheet("font: 700 15px 'Segoe UI';")
-        row.addWidget(title)
 
         self.status = QLabel("", self)
         self.status.setObjectName("status")
@@ -263,6 +321,12 @@ class CssEditor(QMainWindow):
         self.editor.setPlainText("")
         self.apply_preview()
         self.win.set_custom_css("")
+
+    def resizeEvent(self, e):
+        super().resizeEvent(e)
+        self._grip.move(self.width() - self._grip.width() - 4,
+                        self.height() - self._grip.height() - 4)
+        self._grip.raise_()
 
     def keyPressEvent(self, e):
         if e.key() == Qt.Key_S and e.modifiers() & Qt.ControlModifier:

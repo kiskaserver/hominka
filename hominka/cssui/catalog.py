@@ -125,8 +125,11 @@ SAMPLES = [
     {"platform": "twitch", "name": "GoodTheme", "nick": "goodtheme", "color": "#ff7f50",
      "badges": ["mod", "sub"], "text": "о, привіт! Kappa як воно?",
      "emotes": [{"code": "Kappa", "url": _EMOTE}]},
+    # Текст без «@lazar1n» навмисно: звертання малює позначка «↳ нік», а
+    # дублювати його в рядку — той самий баг, який ми прибрали в самому чаті
+    # (chatsources.trim_reply_mention). Приклад мусить показувати правильне.
     {"platform": "kick", "name": "xQc_fan", "nick": "xqc_fan", "color": "#53fc18",
-     "badges": ["vip"], "text": "@lazar1n не забудь про рейд", "reply": "lazar1n"},
+     "badges": ["vip"], "text": "не забудь про рейд", "reply": "lazar1n"},
     {"platform": "youtube", "name": "Оксана", "nick": "oksana", "color": "#ff6b81",
      "badges": ["member"], "text": "дякую за стрім!", "amount": "200 UAH"},
     {"platform": "twitch", "name": "raid", "kind": "system",

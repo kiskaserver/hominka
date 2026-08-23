@@ -147,7 +147,7 @@ class SourcesMixin:
         self.mode = "feed"
         self.is_yt = False
         self.url = ""
-        self.bar.title.setText("Чат")
+        self.bar.title.setText(self._title_for())
         self.feed.set_delay(self.chat_delay)
         self.feed.load()
 
@@ -160,6 +160,9 @@ class SourcesMixin:
         yt_channel = self.my_channel.strip() or self.yt_channel_id
         if yt_channel:
             self._add_reader(chat_youtube.YouTubeChat(yt_channel, self))
+        # Назву оновлюємо ПІСЛЯ читачів: до цього active_sources() ще не знає,
+        # звідки саме береться чат.
+        self.bar.title.setText(self._title_for())
 
     def _add_reader(self, reader):
         reader.event.connect(self._on_chat_event)

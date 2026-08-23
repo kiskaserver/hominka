@@ -33,7 +33,9 @@ def main():
         guard = CaptureGuard(app)
         app.installEventFilter(guard)
     app.setApplicationName(APP_NAME)
-    app.setApplicationDisplayName(APP_NAME)
+    # setApplicationDisplayName НЕ ставимо: Qt дописує його до назви кожного
+    # вікна, і «Hominka — свій CSS» перетворювалося на
+    # «Hominka — свій CSS — Hominka».
     app.setApplicationVersion(APP_VERSION)
     app.setOrganizationName(APP_AUTHOR)
     app.setWindowIcon(QIcon(resource_path(APP_ICON)))
