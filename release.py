@@ -38,7 +38,7 @@ import tempfile
 import zipfile
 from datetime import date
 
-import signing
+from hominka import signing
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 DIST = os.path.join(HERE, "dist")
