@@ -310,6 +310,7 @@ class Overlay(SourcesMixin, UpdatingMixin, ConfigMixin, LookMixin, QMainWindow):
         if self.panel.isVisible():
             self.panel.hide()
         else:
+            self.panel.cap_height()
             self.panel.adjustSize()
             self._place_panel()
             self.panel.show()

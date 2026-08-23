@@ -11,8 +11,8 @@ from typing import TYPE_CHECKING
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
-    QFrame, QGraphicsDropShadowEffect, QHBoxLayout, QLabel, QPushButton, QVBoxLayout,
-    QWidget,
+    QFrame, QGraphicsDropShadowEffect, QHBoxLayout, QLabel, QPushButton, QScrollArea,
+    QVBoxLayout, QWidget,
 )
 
 from ...styles import PANEL_CSS, SLIDER_CSS
@@ -62,17 +62,59 @@ class SettingsPanel(CardsMixin, WidgetsMixin, QWidget):
         self.body.setGraphicsEffect(shadow)
         outer.addWidget(self.body)
 
-        lay = QVBoxLayout(self.body)
-        lay.setContentsMargins(14, 12, 14, 14)
-        lay.setSpacing(10)
+        body_lay = QVBoxLayout(self.body)
+        body_lay.setContentsMargins(14, 12, 14, 14)
+        body_lay.setSpacing(10)
+        body_lay.addLayout(self._header())
 
-        lay.addLayout(self._header())
+        # Картки — у прокрутці: разом вони бувають вищі за екран (особливо коли
+        # розкрито розділ гри), і тоді кнопки внизу просто не дотягтися. Прокрутка
+        # тримає вікно в межах екрана, а хрестик і заголовок лишає завжди на очах.
+        self.scroll = QScrollArea(self.body)
+        self.scroll.setWidgetResizable(True)
+        self.scroll.setFrameShape(QFrame.NoFrame)
+        self.scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        self.scroll.viewport().setAutoFillBackground(False)
+        self.scroll.setStyleSheet(
+            "QScrollArea, QScrollArea > QWidget > QWidget { background: transparent; }"
+            "QScrollBar:vertical { background: transparent; width: 8px; margin: 2px; }"
+            "QScrollBar::handle:vertical { background: rgba(255,255,255,0.18);"
+            " border-radius: 4px; min-height: 30px; }"
+            "QScrollBar::handle:vertical:hover { background: rgba(255,255,255,0.30); }"
+            "QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0; }"
+            "QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical { background: transparent; }")
+        content = QWidget(self.scroll)
+        content.setAttribute(Qt.WA_TranslucentBackground, True)
+        lay = QVBoxLayout(content)
+        lay.setContentsMargins(0, 0, 6, 0)   # місце під смужку прокрутки праворуч
+        lay.setSpacing(10)
         lay.addWidget(self._chat_card())
         lay.addWidget(self._look_card())
         lay.addWidget(self._top_card())
         lay.addWidget(self._update_card())
+        lay.addStretch(1)
+        self.scroll.setWidget(content)
+        self._content = content
+        body_lay.addWidget(self.scroll)
 
         self.hide()
+
+    def cap_height(self):
+        """Обмежує висоту прокрутки висотою екрана — щоб вікно не вилазило за край.
+
+        Рахуємо перед показом: без обмеження QScrollArea росте під увесь вміст,
+        і сенсу в прокрутці немає.
+        """
+        scr = self.screen().availableGeometry() if self.screen() else None
+        if not scr:
+            return
+        # Повна бажана висота вмісту.
+        want = self._content.sizeHint().height()
+        # Скільки лишається під картки: екран мінус тінь, заголовок, поля.
+        chrome = self.SHADOW * 2 + 46
+        avail = scr.height() - chrome - 8
+        self.scroll.setMaximumHeight(max(200, min(want, avail)))
 
     # --- шапка ---------------------------------------------------------------
     def _header(self) -> QHBoxLayout:
@@ -109,6 +151,7 @@ class SettingsPanel(CardsMixin, WidgetsMixin, QWidget):
         """
         self.upd_status.setText(text)
         if self.isVisible():
+            self.cap_height()
             self.adjustSize()
             self.win._place_panel()
 

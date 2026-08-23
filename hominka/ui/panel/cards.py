@@ -7,7 +7,7 @@
 
 from typing import TYPE_CHECKING
 
-from PySide6.QtCore import Qt, QUrl
+from PySide6.QtCore import Qt, QTimer, QUrl
 from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (
     QCheckBox, QComboBox, QFrame, QHBoxLayout, QLabel, QLineEdit, QPushButton,
@@ -311,8 +311,18 @@ class CardsMixin:
         """Розкриває попередження, список ігор і кнопку; вимикає — гасить продюсера."""
         for w in self._game_widgets:
             w.setVisible(on)
+        # Вміст змінився — переміряти висоту й переставити вікно, щоб воно
+        # виросло (чи стислося) в межах екрана, а не лишалося старого розміру.
+        if hasattr(self, "cap_height"):
+            self.cap_height()
+            self.adjustSize()
+            self.win._place_panel()
         if on:
             self._refresh_games()
+            # Розділ гри високий: прокручуємо до нього, щоб кнопка «Показати чат
+            # у грі» була на очах, а не за нижнім краєм екрана.
+            if hasattr(self, "scroll"):
+                QTimer.singleShot(0, lambda: self.scroll.ensureWidgetVisible(self.game_inject))
         else:
             self.win.set_game_overlay(False)
             self.top_status.setText("Чат у грі вимкнено.")
