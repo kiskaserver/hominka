@@ -69,6 +69,7 @@ class SettingsPanel(CardsMixin, WidgetsMixin, QWidget):
         lay.addLayout(self._header())
         lay.addWidget(self._chat_card())
         lay.addWidget(self._look_card())
+        lay.addWidget(self._top_card())
         lay.addWidget(self._update_card())
 
         self.hide()

@@ -26,6 +26,7 @@ from PySide6.QtWebEngineWidgets import QWebEngineView
 from . import feed as chatfeed
 from . import update as updater
 from .config import ConfigMixin
+from . import fullscreen, x11
 from .paths import BASE_DIR, resource_path
 from .probe import LiveProbe
 from .sources import SourcesMixin
@@ -116,6 +117,12 @@ class Overlay(SourcesMixin, UpdatingMixin, ConfigMixin, LookMixin, QMainWindow):
         self._save_timer.setSingleShot(True)
         self._save_timer.setInterval(400)
         self._save_timer.timeout.connect(self._write_config)
+
+        # Утримання вікна зверху (див. fullscreen.py). Вмикається галочкою в ⚙:
+        # у рідкісних старих іграх воно дає мерехтіння, і людина мусить мати
+        # змогу його вимкнути.
+        self.keep_top = True
+        self._topmost = fullscreen.TopMostKeeper(self)
 
     def _build_window(self):
         """Рамка без системного заголовка: смужка, смужка оновлення, куточок."""
@@ -209,6 +216,8 @@ class Overlay(SourcesMixin, UpdatingMixin, ConfigMixin, LookMixin, QMainWindow):
         self._capture_timer = QTimer(self)
         self._capture_timer.setInterval(1000)
         self._capture_timer.timeout.connect(hide_new_windows_from_capture)
+        self._capture_timer.timeout.connect(self._topmost.tick)
+        self._capture_timer.timeout.connect(self._refresh_fullscreen_state)
         self._capture_timer.start()
 
 
@@ -325,6 +334,8 @@ class Overlay(SourcesMixin, UpdatingMixin, ConfigMixin, LookMixin, QMainWindow):
             print("[chat-overlay] УВАГА: не вдалося виключити з захоплення "
                   "(потрібна Windows 10 2004+/11). OBS може бачити вікно.")
         self._register_hotkey()
+        # Linux: підказки композитору (див. x11.py). У Windows нічого не робить.
+        x11.apply_overlay_hints(self)
         # Заставка збірки одним файлом: знімаємо її саме тут — вікно вже є.
         close_splash()
 
@@ -350,6 +361,31 @@ class Overlay(SourcesMixin, UpdatingMixin, ConfigMixin, LookMixin, QMainWindow):
             if msg.message == WM_HOTKEY and msg.wParam == HOTKEY_ID:
                 self.toggle_click_through()
         return False, 0
+
+    def _refresh_fullscreen_state(self):
+        """Питає систему, що зараз попереду, і показує це в ⚙.
+
+        Раз на секунду і тільки коли панель відкрита: інакше це опитування
+        нікому не потрібне — людина його все одно не бачить.
+        """
+        if not self.panel.isVisible():
+            return
+        self.panel.set_fullscreen_state(fullscreen.state())
+
+    def set_keep_top(self, on: bool):
+        self.keep_top = bool(on)
+        self._topmost.enabled = self.keep_top
+        self.save_config()
+
+    def make_game_borderless(self):
+        """Переводить вікно гри в безрамковий режим — на прохання людини."""
+        info = fullscreen.state()
+        if info.get("kind") in ("none", "desktop"):
+            return False
+        return fullscreen.make_borderless(info.get("hwnd", 0))
+
+    def restore_game_window(self):
+        return fullscreen.restore(fullscreen.changed_window())
 
     def closeEvent(self, e):
         self._stop_readers()

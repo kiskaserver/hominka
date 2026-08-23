@@ -41,6 +41,11 @@ class ConfigMixin:
         self.site_url = (cfg.get("siteChatUrl") or "").strip()
         self.panel.site_edit.setText(self.site_url)
         self.custom_css = cfg.get("customCss") or ""
+        self.keep_top = bool(cfg.get("keepTop", True))
+        self._topmost.enabled = self.keep_top
+        self.panel.keep_top.blockSignals(True)
+        self.panel.keep_top.setChecked(self.keep_top)
+        self.panel.keep_top.blockSignals(False)
         if self.feed is not None:
             self.feed.custom_css = self.custom_css
         # Ми щойно оновилися? Тоді перше, що бачить людина, — за чим саме
@@ -105,6 +110,7 @@ class ConfigMixin:
                     "myChannel": self.my_channel,
                     "siteChatUrl": self.site_url,
                     "customCss": self.custom_css,
+                    "keepTop": self.keep_top,
                     "updatedTo": self.updated_to,
                     "updatedNotes": self.updated_notes,
                     "chatDelay": self.chat_delay,

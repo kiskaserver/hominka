@@ -13,6 +13,7 @@ from PySide6.QtWidgets import (
 )
 
 from ... import update as updater
+from ...fullscreen import changed_window as _changed_window
 from ...version import APP_VERSION
 
 if TYPE_CHECKING:                      # тільки для підказок типів
@@ -128,6 +129,78 @@ class CardsMixin:
         return card
 
     # --- секція «Оновлення» --------------------------------------------------
+    # --- секція «Поверх гри» -------------------------------------------------
+    def _top_card(self) -> QFrame:
+        """Що робити, коли гра йде на весь екран.
+
+        Тут не налаштування, а відповідь на єдине питання, з яким сюди
+        приходять: «чому чата не видно?». Тому спершу стан — що саме зараз
+        попереду і чи побачить людина чат, — і лише потім кнопки.
+        """
+        card, lay = self._card("Поверх гри")
+
+        self.top_status = QLabel("", self)
+        self.top_status.setObjectName("dim")
+        self.top_status.setWordWrap(True)
+        lay.addWidget(self.top_status)
+
+        row = QHBoxLayout()
+        row.setSpacing(6)
+        self.borderless_btn = QPushButton("Зробити гру безрамковою", self)
+        self.borderless_btn.setObjectName("ghost")
+        self.borderless_btn.setFixedHeight(28)
+        self.borderless_btn.setToolTip(
+            "Знімає з вікна гри рамку і розтягує на монітор. Гра виглядає так само, "
+            "але малює її вже система — і чат поверх неї видно. Нічого в саму гру ми "
+            "не встановлюємо.")
+        self.borderless_btn.clicked.connect(self._make_borderless)
+        row.addWidget(self.borderless_btn, 1)
+
+        self.restore_btn = QPushButton("Повернути", self)
+        self.restore_btn.setObjectName("ghost")
+        self.restore_btn.setFixedHeight(28)
+        self.restore_btn.setToolTip("Повернути вікну гри те, що в нього було.")
+        self.restore_btn.clicked.connect(self._restore_window)
+        self.restore_btn.hide()
+        row.addWidget(self.restore_btn)
+        lay.addLayout(row)
+
+        self.keep_top = QCheckBox("Тримати поверх усіх вікон", self)
+        self.keep_top.setToolTip(
+            "У рідкісних старих іграх це дає мерехтіння — тоді вимкніть.")
+        self.keep_top.toggled.connect(self.win.set_keep_top)
+        lay.addWidget(self.keep_top)
+        return card
+
+    def set_fullscreen_state(self, info: dict):
+        """Показує, що зараз попереду, простими словами."""
+        kind = info.get("kind", "none")
+        title = (info.get("title") or info.get("exe") or "").strip()
+        short = title if len(title) <= 34 else title[:33] + "…"
+        if kind in ("none", "desktop"):
+            text = "Попереду немає гри — чат видно як завжди."
+        elif kind == "exclusive":
+            text = ("«%s» у виключному повноекранному режимі: поверх нього не малює "
+                    "ніхто, крім самої гри. Натисніть кнопку нижче — вікно стане "
+                    "безрамковим, і чат зʼявиться." % short)
+        elif kind == "borderless":
+            text = "«%s» на весь екран, але вікном — чат буде видно." % short
+        else:
+            text = "«%s» у вікні — чат буде видно." % short
+        self.top_status.setText(text)
+        self.borderless_btn.setEnabled(kind in ("windowed", "exclusive", "borderless"))
+        self.restore_btn.setVisible(bool(self.win.__class__ and _changed_window()))
+
+    def _make_borderless(self):
+        if self.win.make_game_borderless():
+            self.top_status.setText("Готово: вікно гри тепер безрамкове.")
+            self.restore_btn.show()
+
+    def _restore_window(self):
+        if self.win.restore_game_window():
+            self.top_status.setText("Повернули вікну гри те, що в нього було.")
+            self.restore_btn.hide()
+
     def _update_card(self) -> QFrame:
         card, lay = self._card("Оновлення")
 
