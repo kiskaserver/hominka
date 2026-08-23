@@ -42,11 +42,11 @@ class ConfigMixin:
         self.panel.site_edit.setText(self.site_url)
         self.custom_css = cfg.get("customCss") or ""
         self.keep_top = bool(cfg.get("keepTop", True))
-        if cfg.get("rtss"):
-            self.set_rtss(True)
-        self.panel.rtss.blockSignals(True)
-        self.panel.rtss.setChecked(self.rtss_on)
-        self.panel.rtss.blockSignals(False)
+        # Дзеркало в RTSS вмикаємо не тут, а нижче — після того, як прочитаємо
+        # канал оновлень. Інакше виходило, що збережене «rtss: true» оживало
+        # ще до того, як програма дізнавалася, що вона в стабільному каналі,
+        # де цієї можливості не існує.
+        want_rtss = bool(cfg.get("rtss"))
         self._topmost.enabled = self.keep_top
         self.panel.keep_top.blockSignals(True)
         self.panel.keep_top.setChecked(self.keep_top)
@@ -92,6 +92,15 @@ class ConfigMixin:
         self.panel.auto_upd.setChecked(self.auto_update)
         self.panel.auto_upd.blockSignals(False)
         self.panel.set_status("Версія %s (%s)" % (APP_VERSION, updater.channel_label(self.channel)))
+        # Канал відомий — тепер вирішуємо долю експериментальних можливостей.
+        # Панель будувалася зі стабільним каналом (overlay.py), тож без цього
+        # рядка бета після кожного перезапуску лишалася без своїх галочок.
+        if want_rtss:
+            self.set_rtss(True)
+        self.apply_experimental()
+        self.panel.rtss.blockSignals(True)
+        self.panel.rtss.setChecked(self.rtss_on)
+        self.panel.rtss.blockSignals(False)
         # синхронізуємо панель з завантаженими значеннями
         self.panel.opacity.setValue(int(op * 100))
         self.panel.bg.setValue(int(self.bg_alpha * 100))

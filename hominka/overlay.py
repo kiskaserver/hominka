@@ -380,7 +380,14 @@ class Overlay(SourcesMixin, UpdatingMixin, ConfigMixin, LookMixin, QMainWindow):
         self.panel.set_fullscreen_state(fullscreen.state())
 
     def set_rtss(self, on: bool):
-        """Вмикає дублювання чату в OSD RTSS."""
+        """Вмикає дублювання чату в OSD RTSS.
+
+        У стабільному каналі — ніколи. Це остання застава: галочки там і так
+        не видно, але жоден config.json — свій, чужий чи принесений з бети —
+        не має права оживити в стабільній програмі те, чого в ній немає.
+        """
+        if on and self.channel == "stable":
+            on = False
         self.rtss_on = bool(on) and self.rtss.set_enabled(bool(on))
         if not on:
             self.rtss.set_enabled(False)

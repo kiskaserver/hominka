@@ -25,14 +25,24 @@ class UpdatingMixin:
         if not channel or channel == self.channel:
             return
         self.channel = channel
-        # Експериментальні можливості живуть у тестових каналах — і зникають,
-        # щойно людина повертається на стабільний.
-        experimental = channel != "stable"
-        self.panel.rtss.setVisible(experimental)
-        if not experimental and self.rtss_on:
-            self.set_rtss(False)
+        self.apply_experimental()
         self.save_config()
         self.check_updates(manual=True)
+
+    def apply_experimental(self):
+        """Експериментальні можливості живуть тільки в тестових каналах.
+
+        Правило одне, а місць, де його треба застосувати, два: коли людина
+        перемикає канал і коли програма стартує з config.json. Друге раніше
+        було пропущене — панель будується зі стабільним каналом, тож бета після
+        перезапуску лишалася без галочки RTSS, а стабільна могла успадкувати
+        ввімкнене дзеркало зі старих налаштувань.
+        """
+        experimental = self.channel != "stable"
+        self.panel.rtss.setVisible(experimental)
+        self.panel.rtss_action.setVisible(False)
+        if not experimental and self.rtss_on:
+            self.set_rtss(False)
 
     def check_updates(self, manual: bool = False):
         if getattr(self, "updater", None) is None:
