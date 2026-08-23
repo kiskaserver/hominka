@@ -86,15 +86,16 @@ def build() -> Image.Image:
     # Малюємо окремим шаром і накладаємо: ImageDraw не змішує кольори з тим,
     # що вже намальовано, а ЗАМІНЮЄ пікселі — напівпрозора смуга, намальована
     # напряму, вийшла б білою.
+    # Доріжка смуги — і тільки доріжка.
+    #
+    # Саму смугу малює вже Tcl-скрипт заставки поверх цієї картинки (див.
+    # Hominka_one.spec), бо вона має рухатися. Раніше тут було намальоване
+    # «заповнення» — красиве й нерухоме, тобто просто брехня про прогрес.
     y = 232 * SCALE
     track = Image.new("RGBA", (w, h), (0, 0, 0, 0))
-    td = ImageDraw.Draw(track)
-    td.rounded_rectangle([54 * SCALE, y, (W - 54) * SCALE, y + 7 * SCALE],
-                         radius=4 * SCALE, fill=(255, 255, 255, 28))
-    td.rounded_rectangle([54 * SCALE, y, 320 * SCALE, y + 7 * SCALE],
-                         radius=4 * SCALE, fill=VIOLET + (235,))
-    td.rounded_rectangle([292 * SCALE, y, 408 * SCALE, y + 7 * SCALE],
-                         radius=4 * SCALE, fill=PINK + (200,))
+    ImageDraw.Draw(track).rounded_rectangle(
+        [54 * SCALE, y, (W - 54) * SCALE, y + 7 * SCALE],
+        radius=4 * SCALE, fill=(255, 255, 255, 28))
     img.alpha_composite(track)
 
     return img.resize((W, H), Image.LANCZOS)

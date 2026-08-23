@@ -17,7 +17,7 @@ def main():
     url = sys.argv[1] if len(sys.argv) > 1 else None
     os.environ.setdefault("QTWEBENGINE_CHROMIUM_FLAGS", "--enable-features=TranslucentWindows")
     hide_internal_folder()
-    splash_text("Запускаю…")
+    splash_text("Запускаю…", 92)
     app = QApplication(sys.argv)
     # Фільтр подій усього застосунку ставимо ТІЛЬКИ у Windows, і не з обережності.
     #
@@ -38,7 +38,7 @@ def main():
     app.setOrganizationName(APP_AUTHOR)
     app.setWindowIcon(QIcon(resource_path(APP_ICON)))
     app.setQuitOnLastWindowClosed(True)
-    splash_text("Відкриваю чат…")
+    splash_text("Відкриваю чат…", 97)
     win = Overlay(url)
     win.show()
     sys.exit(app.exec())

@@ -30,7 +30,7 @@ from . import fullscreen, x11
 from .paths import BASE_DIR, resource_path
 from .probe import LiveProbe
 from .sources import SourcesMixin
-from .splash import close_splash
+from .splash import close_splash, splash_text
 from .look import LookMixin
 from .styles import ACCENT_ACTIVE
 from .ui.banner import UpdateBanner
@@ -336,7 +336,9 @@ class Overlay(SourcesMixin, UpdatingMixin, ConfigMixin, LookMixin, QMainWindow):
         self._register_hotkey()
         # Linux: підказки композитору (див. x11.py). У Windows нічого не робить.
         x11.apply_overlay_hints(self)
-        # Заставка збірки одним файлом: знімаємо її саме тут — вікно вже є.
+        # Заставка збірки одним файлом: доводимо смугу до кінця і знімаємо —
+        # вікно вже на екрані, і тягнути далі нема чого.
+        splash_text("Готово", 100)
         close_splash()
 
 

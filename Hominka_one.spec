@@ -59,18 +59,81 @@ pyz = PYZ(a.pure)
 # зараз розпаковує. Без нього людина дивиться на нерухому картинку і не знає,
 # чи взагалі щось відбувається. Перед появою вікна текст замінюємо своїм
 # (див. close_splash / splash_text у chat_overlay).
-# Рядок прогресу мусить переноситися.
+# Заставка: перенос рядка прогресу і СПРАВЖНЯ смуга.
 #
-# PyInstaller малює його елементом canvas без обмеження ширини, а bootloader
-# пише туди повні шляхи файлів, які зараз розпаковує, — довгий шлях їхав за
-# край заставки й далі за екран. Опція `-width` у Tk саме про перенос; в API
-# Splash її не винесено, тому дописуємо в шаблон. Число літеральне: шаблон
-# потім проходить через %-форматування, і зайвий %d його зламав би.
+# PyInstaller уміє показати лише картинку та один рядок тексту. Смуга на
+# картинці була намальованою — тобто брехнею: вона не рухалася й нічого не
+# означала. Тут вона стає справжньою, і коштує це двох вставок у шаблон Tcl:
+#
+#   1. `-width` для тексту: bootloader пише туди повні шляхи файлів, і довгий
+#      шлях їхав за край заставки й далі за екран. В API Splash цієї опції
+#      немає, тому дописуємо. Числа літеральні: шаблон потім проходить через
+#      %-форматування, і зайвий %d його зламав би.
+#   2. прямокутник поверх картинки + лічильник у canvas_text_update. Цю
+#      процедуру Tk кличе на КОЖНУ зміну тексту, а bootloader змінює його на
+#      кожен розпакований файл — отже, це і є наш крок прогресу. Скільки всього
+#      файлів, ми знаємо тут, під час збірки (див. _steps нижче).
+#
+# Повідомлення від самої програми йдуть із префіксом «NN|» — це прямий наказ
+# «постав смугу на NN %» (див. hominka/splash.py). Так останні кроки запуску,
+# яких bootloader уже не бачить, теж видно.
 from PyInstaller.building import splash_templates as _splash_tpl  # noqa: E402
+
+_steps = max(1, len(a.binaries) + len(a.datas))
 
 if '-width' not in _splash_tpl.splash_canvas_text:
     _splash_tpl.splash_canvas_text = _splash_tpl.splash_canvas_text.replace(
         '-anchor sw', '-anchor sw \\\n        -width 612')
+
+if 'pyi_progress' not in _splash_tpl.splash_canvas_setup:
+    _splash_tpl.splash_canvas_setup += """
+# Смуга прогресу: доріжка і заповнення поверх картинки.
+set pyi_progress_done 0
+set pyi_progress_shown 0
+set pyi_progress_total %d
+set pyi_progress_x0 54
+set pyi_progress_x1 666
+.root.canvas create rectangle $pyi_progress_x0 232 $pyi_progress_x1 239 \\
+    -fill #241d2e -outline "" -tag pyi_progress_track
+.root.canvas create rectangle $pyi_progress_x0 232 $pyi_progress_x0 239 \\
+    -fill #a855f7 -outline "" -tag pyi_progress
+""" % _steps
+
+if 'pyi_progress' not in _splash_tpl.image_script:
+    _splash_tpl.image_script = _splash_tpl.image_script.replace(
+        """    upvar $_var var
+    $canvas itemconfigure $tag -text $var""",
+        """    upvar $_var var
+    global pyi_progress_done pyi_progress_total pyi_progress_x0 pyi_progress_x1
+    global pyi_progress_shown
+
+    # Повідомлення від програми: «NN|текст» — поставити смугу рівно на NN %.
+    set shown $var
+    set bar -1
+    if {[regexp {^([0-9]+)\\|(.*)$} $var - pct rest]} {
+        set bar $pct
+        set shown $rest
+    } else {
+        # Рядок від bootloader-а: ще один розпакований файл.
+        #
+        # Розпакування — це перші 85 % смуги. Решту віддано запуску Qt, якого
+        # bootloader уже не бачить: інакше смуга впиралася б у край за пару
+        # секунд до вікна і виглядала б як зависання.
+        incr pyi_progress_done
+        set bar [expr {int(85.0 * $pyi_progress_done / $pyi_progress_total)}]
+        if {$bar > 85} { set bar 85 }
+        # Довгий шлях файлу нікому нічого не каже — показуємо лише імʼя.
+        set shown [file tail $shown]
+    }
+    # Смуга не їде назад: підрахунок кроків приблизний, і стрибок ліворуч
+    # читається як помилка, навіть коли це просто уточнення.
+    if {$bar >= 0 && $bar < $pyi_progress_shown} { set bar $pyi_progress_shown }
+    set pyi_progress_shown $bar
+    $canvas itemconfigure $tag -text $shown
+    if {$bar >= 0} {
+        set w [expr {$pyi_progress_x0 + ($pyi_progress_x1 - $pyi_progress_x0) * $bar / 100.0}]
+        $canvas coords pyi_progress $pyi_progress_x0 232 $w 239
+    }""")
 
 splash = Splash(
     'splash.png',
