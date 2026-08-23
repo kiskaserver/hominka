@@ -21,6 +21,24 @@ KICK = "kick"
 # verified | staff | og | artist.
 BADGES = ("broadcaster", "mod", "vip", "sub", "member", "verified", "staff", "og", "artist")
 
+# Що саме сталося. Площадки називають це по-різному — «resub», «subscription»,
+# «liveChatMembershipItemRenderer», — але для глядача це одне й те саме, і
+# оформлювати він хоче саме подію, а не назву з чужого API. Порожній рядок —
+# звичайне повідомлення.
+EVENTS = (
+    ("raid", "Рейд"),
+    ("sub", "Підписка"),
+    ("gift", "Подарована підписка"),
+    ("announce", "Оголошення"),
+    ("pin", "Закріплене"),
+    ("points", "Бали каналу"),
+    ("mode", "Зміна режиму чату"),
+    ("bits", "Біти Twitch"),
+    ("superchat", "Super Chat"),
+)
+
+EVENT_IDS = tuple(e for e, _label in EVENTS)
+
 
 def parse_source(text: str):
     """Що це за посилання. Повертає (площадка, канал) або (None, "").
@@ -98,13 +116,21 @@ def message(platform: str, nick: str, name: str, text: str, **extra) -> dict:
         "emotes": extra.get("emotes", []),
         "reply": reply,
         "amount": extra.get("amount", ""),
+        # Біти, Super Chat, донат — теж події, просто написані самим глядачем.
+        "event": extra.get("event", "") if extra.get("event", "") in EVENT_IDS else "",
     }
     return msg
 
 
-def system(platform: str, text: str) -> dict:
-    """Подія площадки, яка не є повідомленням: підписка, рейд, оголошення."""
-    return {"kind": "system", "platform": platform, "text": text}
+def system(platform: str, text: str, event: str = "") -> dict:
+    """Подія площадки, яка не є повідомленням: підписка, рейд, оголошення.
+
+    `event` — що саме сталося (див. EVENTS). Раніше всі вони приходили одним
+    «системним» рядком, і відрізнити рейд від підписки в оформленні не було
+    чим — тільки читаючи текст, тобто ніяк.
+    """
+    return {"kind": "system", "platform": platform, "text": text,
+            "event": event if event in EVENT_IDS else ""}
 
 
 def delete(platform: str, msg_id: str) -> dict:

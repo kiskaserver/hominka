@@ -62,30 +62,32 @@ def _item(item):
         return cs.message(
             cs.YOUTUBE, "yt:" + channel if channel else name.lower(), name, text,
             id=r.get("id", ""), badges=author_badges(r.get("authorBadges")),
-            emotes=emotes, amount=amount or "")
+            emotes=emotes, amount=amount or "",
+            event="superchat" if amount else "")
 
     r = item.get("liveChatMembershipItemRenderer")
     if r:
         user = (jget(r, "authorName", "simpleText") or "").lstrip("@")
         head, _ = runs_to_text(jget(r, "headerPrimaryText", "runs"))
         sub = jget(r, "headerSubtext", "simpleText") or ""
-        return cs.system(cs.YOUTUBE, ("%s — %s" % (user, head or sub)).strip(" —"))
+        # Спонсорство YouTube — та сама підписка, просто названа інакше.
+        return cs.system(cs.YOUTUBE, ("%s — %s" % (user, head or sub)).strip(" —"), "sub")
 
     r = item.get("liveChatSponsorshipsGiftPurchaseAnnouncementRenderer")
     if r:
         hdr = jget(r, "header", "liveChatSponsorshipsHeaderRenderer") or {}
         user = (jget(hdr, "authorName", "simpleText") or "").lstrip("@")
         text, _ = runs_to_text(jget(hdr, "primaryText", "runs"))
-        return cs.system(cs.YOUTUBE, "%s — %s" % (user, text) if text else user)
+        return cs.system(cs.YOUTUBE, "%s — %s" % (user, text) if text else user, "gift")
 
     r = item.get("liveChatSponsorshipsGiftRedemptionAnnouncementRenderer")
     if r:
         text, _ = runs_to_text(jget(r, "message", "runs"))
         user = (jget(r, "authorName", "simpleText") or "").lstrip("@")
-        return cs.system(cs.YOUTUBE, ("%s %s" % (user, text)).strip())
+        return cs.system(cs.YOUTUBE, ("%s %s" % (user, text)).strip(), "gift")
 
     r = item.get("liveChatModeChangeMessageRenderer")
     if r:
         text, _ = runs_to_text(jget(r, "text", "runs"))
-        return cs.system(cs.YOUTUBE, text) if text else None
+        return cs.system(cs.YOUTUBE, text, "mode") if text else None
     return None

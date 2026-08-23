@@ -79,6 +79,8 @@ class Overlay(SourcesMixin, UpdatingMixin, ConfigMixin, LookMixin, QMainWindow):
         # Свій CSS для чату (редактор — cssui/). Порожній = типове оформлення;
         # воно й є те, що людина бачить, поки нічого не змінювала.
         self.custom_css = ""
+        # Порядок частин рядка чату. Типовий — той, що був завжди.
+        self.chat_layout = list(chatfeed.DEFAULT_LAYOUT)
         self.css_window = None
         # Слід від щойно встановленого оновлення (пишеться перед перезапуском).
         self.updated_to = ""
@@ -238,6 +240,17 @@ class Overlay(SourcesMixin, UpdatingMixin, ConfigMixin, LookMixin, QMainWindow):
             self.feed.set_custom_css(self.custom_css)
         if self.mode == "web":
             self._inject_custom_css()
+
+    def set_chat_layout(self, layout):
+        """Порядок частин рядка — у вікно чату негайно і в config.json.
+
+        Стосується лише спільної стрічки: сторінку YouTube чи чат сайту малюємо
+        не ми, і переставляти там нічого.
+        """
+        self.chat_layout = chatfeed.clean_layout(layout)
+        self.save_config()
+        if self.feed is not None:
+            self.feed.set_layout(self.chat_layout)
 
     def _inject_custom_css(self):
         """Кладе свій CSS і на звичайну сторінку чату (сайт або YouTube).

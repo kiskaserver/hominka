@@ -174,11 +174,11 @@ class KickChat(QObject):
             user = data.get("username") or "Anonymous"
             months = data.get("months") or 0
             self.event.emit(cs.system(cs.KICK, "%s підписався%s" % (
-                user, " (%d міс.)" % months if months else "")))
+                user, " (%d міс.)" % months if months else ""), "sub"))
         elif name == EVT_GIFT:
             gifter = data.get("gifter_username") or "Anonymous"
             n = len(data.get("gifted_usernames") or []) or 1
-            self.event.emit(cs.system(cs.KICK, "%s подарував %d підписк(и)" % (gifter, n)))
+            self.event.emit(cs.system(cs.KICK, "%s подарував %d підписк(и)" % (gifter, n), "gift"))
         elif name == EVT_DELETED:
             mid = ((data.get("message") or {}).get("id")) or ""
             if mid:
@@ -191,18 +191,18 @@ class KickChat(QObject):
             host = data.get("host_username") or ""
             if host:
                 self.event.emit(cs.system(cs.KICK, "%s привів рейд: %s глядачів" % (
-                    host, data.get("number_viewers", "?"))))
+                    host, data.get("number_viewers", "?")), "raid"))
         elif name == EVT_PINNED:
             msg = data.get("message") or {}
             text, _ = extract_emotes(msg.get("content") or "")
             user = ((msg.get("sender") or {}).get("username")) or ""
             if text:
-                self.event.emit(cs.system(cs.KICK, "Закріплено (%s): %s" % (user, text)))
+                self.event.emit(cs.system(cs.KICK, "Закріплено (%s): %s" % (user, text), "pin"))
         elif name == EVT_REWARD:
             user = data.get("username") or ""
             title = data.get("reward_title") or ""
             if user and title:
-                self.event.emit(cs.system(cs.KICK, "%s витратив бали: %s" % (user, title)))
+                self.event.emit(cs.system(cs.KICK, "%s витратив бали: %s" % (user, title), "points"))
 
     def _message(self, data: dict):
         sender = data.get("sender") or {}

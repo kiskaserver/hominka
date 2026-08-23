@@ -28,6 +28,13 @@ QTabBar::tab:selected { color: #e7e2df; border-bottom: 2px solid #a855f7; }
 QTreeWidget, QListWidget { background: #1a1620; border: 1px solid rgba(255,255,255,0.08);
                            border-radius: 6px; }
 QTreeWidget::item, QListWidget::item { padding: 3px 2px; }
+/* Галочка у вкладці «Порядок» має виглядати як галочка, яку можна натиснути:
+   без рамки її приймали за значок «увімкнено» і не чіпали. */
+QListWidget::indicator { width: 15px; height: 15px; margin-right: 6px;
+                         border: 1px solid rgba(255,255,255,0.28);
+                         border-radius: 4px; background: rgba(255,255,255,0.04); }
+QListWidget::indicator:checked { background: #a855f7; border-color: #a855f7; }
+QListWidget::indicator:hover { border-color: #a855f7; }
 QTreeWidget::item:selected, QListWidget::item:selected { background: #3b2a52; }
 QHeaderView::section { background: #221c2b; color: #9a9490; border: 0; padding: 5px; }
 QLabel#status { padding: 4px 8px; border-radius: 6px; }

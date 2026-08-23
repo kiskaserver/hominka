@@ -7,6 +7,7 @@
 
 import json
 
+from . import feed as chatfeed
 from . import update as updater
 from .paths import CONFIG_PATH
 from .urls import site_chat_url
@@ -41,6 +42,7 @@ class ConfigMixin:
         self.site_url = (cfg.get("siteChatUrl") or "").strip()
         self.panel.site_edit.setText(self.site_url)
         self.custom_css = cfg.get("customCss") or ""
+        self.chat_layout = chatfeed.clean_layout(cfg.get("chatLayout"))
         self.keep_top = bool(cfg.get("keepTop", True))
         # Дзеркало в RTSS вмикаємо не тут, а нижче — після того, як прочитаємо
         # канал оновлень. Інакше виходило, що збережене «rtss: true» оживало
@@ -53,6 +55,7 @@ class ConfigMixin:
         self.panel.keep_top.blockSignals(False)
         if self.feed is not None:
             self.feed.custom_css = self.custom_css
+            self.feed.layout = self.chat_layout
         # Ми щойно оновилися? Тоді перше, що бачить людина, — за чим саме
         # закривалося вікно. Позначку одразу гасимо: показуємо один раз.
         was = (cfg.get("updatedTo") or "").strip()
@@ -124,6 +127,7 @@ class ConfigMixin:
                     "myChannel": self.my_channel,
                     "siteChatUrl": self.site_url,
                     "customCss": self.custom_css,
+                    "chatLayout": self.chat_layout,
                     "keepTop": self.keep_top,
                     "rtss": self.rtss_on,
                     "updatedTo": self.updated_to,

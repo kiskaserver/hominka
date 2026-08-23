@@ -56,9 +56,16 @@ PAGE = """<!doctype html>
   .b { display:inline-block; padding:0 .35em; border-radius:.35em; margin-right:.25em;
        font:800 .55em/1.7 'Segoe UI'; vertical-align:.15em; text-shadow:none; }
   .n { margin-right:.35em; }
+  /* Двокрапка не всередині ніка, а після нього: коли нік переставляють у
+     кінець рядка, «привіт усім Vasya:» виглядає безглуздо — а так її
+     прибирають одним правилом .n::after { content:''; }. */
+  .n::after { content: ':'; }
   .money { display:inline-block; background:#fbbf24; color:#111; text-shadow:none;
            padding:0 .4em; border-radius:.35em; margin-right:.35em; font-weight:800;
            font-size:.75em; vertical-align:.1em; }
+  /* Текст повідомлення — теж елемент. Доти він був голим текстовим вузлом:
+     ні стилізувати його, ні переставити не було чим. */
+  .t { }
   .re { color:#a1a1aa; font-size:.8em; margin-right:.3em; }
   .em { height:1.5em; width:auto; vertical-align:-0.35em; margin:0 1px; }
   .at { background:rgba(250,204,21,.22); color:#fde68a; border-radius:.3em; padding:0 .2em; }
@@ -97,7 +104,38 @@ function body(text, emotes) {
 
 function trim() { while (list.children.length > MAX) list.removeChild(list.firstChild); }
 
+// Рядок збирається з частин, і кожна вміє намалювати себе сама. Тоді порядок
+// частин — звичайний список, який можна переставити, а не намертво зашита
+// послідовність плюсів.
+const PARTS = {
+  ico:    e => ICONS[e.platform] || '',
+  badges: e => (e.badges || []).map(b => {
+            const s = BADGES[b];
+            return s ? '<span class="b" style="background:' + s[1] + ';color:' + s[2] + '">'
+                       + s[0] + '</span>' : '';
+          }).join(''),
+  reply:  e => e.reply ? '<span class="re">↳ ' + esc(e.reply) + '</span>' : '',
+  name:   e => {
+            const color = /^#[0-9a-fA-F]{3,8}$/.test(e.color || '') ? e.color : '#f87171';
+            return '<span class="n" style="color:' + color + '">' + esc(e.name) + '</span>';
+          },
+  money:  e => e.amount ? '<span class="money">' + esc(e.amount) + '</span>' : '',
+  // Системні події займають те саме місце, що й текст повідомлення: місце в
+  // рядку одне, а вигляд у них різний.
+  text:   e => e.kind === 'system'
+            ? '<span class="sys">' + esc(e.text) + '</span>'
+            : '<span class="t">' + body(e.text, e.emotes) + '</span>',
+};
+const ORDER = ['ico', 'badges', 'reply', 'name', 'money', 'text'];
+let layout = __LAYOUT__;
+
 window.fts = {
+  // Порядок задає програма (⚙ → свій CSS → «Порядок»). Невідомі імена мовчки
+  // пропускаємо: чужий чи застарілий config.json не має ламати чат.
+  setLayout(a) {
+    const clean = (a || []).filter(id => PARTS[id]);
+    layout = clean.length ? clean : ORDER.slice();
+  },
   add(e) {
     const d = document.createElement('div');
     d.className = 'm' + (e.amount ? ' paid' : '');
@@ -108,21 +146,11 @@ window.fts = {
     // Twitch от Kick, не разбирая содержимое строки.
     d.dataset.platform = e.platform || 'site';
     d.dataset.kind = e.kind === 'system' ? 'system' : (e.amount ? 'money' : 'message');
-    if (e.kind === 'system') {
-      d.innerHTML = (ICONS[e.platform] || '') + '<span class="sys">' + esc(e.text) + '</span>';
-    } else {
-      let h = ICONS[e.platform] || '';
-      for (const b of e.badges || []) {
-        const s = BADGES[b];
-        if (s) h += '<span class="b" style="background:' + s[1] + ';color:' + s[2] + '">' + s[0] + '</span>';
-      }
-      if (e.reply) h += '<span class="re">↳ ' + esc(e.reply) + '</span>';
-      const color = /^#[0-9a-fA-F]{3,8}$/.test(e.color || '') ? e.color : '#f87171';
-      h += '<span class="n" style="color:' + color + '">' + esc(e.name) + ':</span>';
-      if (e.amount) h += '<span class="money">' + esc(e.amount) + '</span>';
-      h += body(e.text, e.emotes);
-      d.innerHTML = h;
-    }
+    // Що саме сталося: рейд, підписка, подарунок, біти. Без цього всі події
+    // площадки виглядали однаково, і підсвітити рейд окремо від підписки не
+    // було чим.
+    if (e.event) d.dataset.event = e.event;
+    d.innerHTML = layout.map(id => PARTS[id](e)).join('');
     list.appendChild(d);
     trim();
   },
@@ -142,7 +170,47 @@ window.fts = {
 """
 
 
-def page_html(custom_css: str = "") -> str:
+# Частини рядка в тому порядку, в якому вони йшли завжди. Список тут, а не в
+# налаштуваннях: це властивість самої верстки, а config.json лише каже, як їх
+# переставити.
+PARTS = (
+    ("ico", "Значок площадки", "Логотип Twitch, Kick або YouTube."),
+    ("badges", "Плашки автора", "MOD, VIP, SUB, HOST і решта."),
+    ("reply", "Кому відповідають", "Рядок «↳ нік»."),
+    ("name", "Нік автора", "Імʼя кольором площадки, з двокрапкою."),
+    ("money", "Сума донату", "Плашка з сумою — лише в платних."),
+    ("text", "Текст повідомлення", "Сам текст, емоути й системні події."),
+)
+
+DEFAULT_LAYOUT = [pid for pid, _short, _desc in PARTS]
+
+
+def clean_layout(layout) -> list:
+    """Порядок частин, яким можна користуватися.
+
+    Приймаємо будь-що: config.json люди правлять руками, а набір частин
+    змінюється з версіями. Невідоме викидаємо, зниклі частини дописуємо в
+    кінець — так нова частина зʼявляється у всіх, а не лише в тих, хто ще не
+    чіпав налаштування.
+
+    Вимкнена частина лишається в списку з мінусом («-reply»), а не зникає з
+    нього. Інакше «вимкнути» і «зникло з нової версії» — те саме, і повернути
+    частину на її місце вже нікуди: вона додалася б у кінець рядка.
+    """
+    known = set(DEFAULT_LAYOUT)
+    out, seen = [], set()
+    for raw in (layout or []):
+        pid = raw[1:] if isinstance(raw, str) and raw.startswith("-") else raw
+        if pid in known and pid not in seen:
+            out.append(raw)
+            seen.add(pid)
+    if not out:
+        return list(DEFAULT_LAYOUT)
+    out += [pid for pid in DEFAULT_LAYOUT if pid not in seen]
+    return out
+
+
+def page_html(custom_css: str = "", layout=None) -> str:
     """Сторінка стрічки. custom_css вставляється в окремий тег нижче базового.
 
     Екрануємо лише «</style»: усе інше в CSS нешкідливе, а от закритий тег
@@ -151,7 +219,18 @@ def page_html(custom_css: str = "") -> str:
     safe = (custom_css or "").replace("</style", "<\\/style")
     return (PAGE.replace("__ICONS__", json.dumps(ICONS))
                 .replace("__BADGES__", json.dumps(BADGE_LABELS))
+                .replace("__LAYOUT__", json.dumps(clean_layout(layout)))
                 .replace("__USER_CSS__", safe))
+
+
+def apply_layout_js(layout) -> str:
+    """JS, який міняє порядок частин на живій сторінці.
+
+    Уже намальовані рядки лишаються як були: вихідної події в DOM немає, і
+    перескладати нема з чого. Наступні йдуть новим порядком — за пів хвилини
+    жвавого чату старих на екрані не лишається.
+    """
+    return "window.fts&&fts.setLayout(%s)" % json.dumps(clean_layout(layout))
 
 
 def apply_css_js(custom_css: str) -> str:

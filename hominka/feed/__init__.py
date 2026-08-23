@@ -6,9 +6,13 @@
 """
 
 from .feed import PACE_MS, ChatFeed
-from .page import BADGE_LABELS, ICONS, PAGE, apply_css_js, page_html
+from .page import (
+    BADGE_LABELS, DEFAULT_LAYOUT, ICONS, PAGE, PARTS, apply_css_js,
+    apply_layout_js, clean_layout, page_html,
+)
 
-__all__ = ["ChatFeed", "PACE_MS", "PAGE", "ICONS", "BADGE_LABELS",
-           "page_html", "apply_css_js"]
+__all__ = ["ChatFeed", "PACE_MS", "PAGE", "ICONS", "BADGE_LABELS", "PARTS",
+           "DEFAULT_LAYOUT", "page_html", "apply_css_js", "apply_layout_js",
+           "clean_layout"]
 
 

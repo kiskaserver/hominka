@@ -191,6 +191,7 @@ class TwitchChat(QObject):
             emotes=parse_emotes(tags.get("emotes", ""), text),
             reply=tags.get("reply-parent-display-name", ""),
             amount=amount,
+            event="bits" if amount else "",
         ))
 
     def _usernotice(self, tags, params):
@@ -198,19 +199,25 @@ class TwitchChat(QObject):
         user = tags.get("display-name") or tags.get("login") or "Anonymous"
         kind = tags.get("msg-id", "")
         body = params[1] if len(params) > 1 else ""
+        event = ""
         if kind == "raid":
             text = "%s привів рейд: %s глядачів" % (user, tags.get("msg-param-viewerCount", "?"))
+            event = "raid"
         elif kind == "announcement":
             text = "%s: %s" % (user, body) if body else ""
+            event = "announce"
         elif kind in ("sub", "resub", "subgift", "anonsubgift",
                       "submysterygift", "anonsubmysterygift",
                       "primepaidupgrade", "giftpaidupgrade", "anongiftpaidupgrade"):
             # Свій текст події Twitch уже зібрав — беремо його, а не переказуємо.
             text = tags.get("system-msg", "") or ("%s: підписка" % user)
+            # Подарунок і власна підписка — різні приводи, і оформлюють їх
+            # по-різному: одне вітають, друге дякують.
+            event = "gift" if "gift" in kind else "sub"
         else:
             text = tags.get("system-msg", "")
         if text.strip():
-            self.event.emit(cs.system(cs.TWITCH, text.strip()))
+            self.event.emit(cs.system(cs.TWITCH, text.strip(), event))
 
 
 # Використовується тестами й налаштуваннями: чи схожий рядок на канал Twitch.

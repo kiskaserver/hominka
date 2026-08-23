@@ -6,9 +6,9 @@ import re
 from PySide6.QtCore import Qt, QTimer, QUrl
 from PySide6.QtGui import QColor, QIcon, QTextCursor
 from PySide6.QtWidgets import (
-    QHBoxLayout, QLabel, QListWidget, QListWidgetItem, QMainWindow, QPushButton,
-    QSizeGrip, QSplitter, QTabWidget, QTreeWidget, QTreeWidgetItem, QVBoxLayout,
-    QWidget,
+    QAbstractItemView, QHBoxLayout, QLabel, QListWidget, QListWidgetItem,
+    QMainWindow, QPushButton, QSizeGrip, QSplitter, QTabWidget, QTreeWidget,
+    QTreeWidgetItem, QVBoxLayout, QWidget,
 )
 from PySide6.QtWebEngineWidgets import QWebEngineView
 
@@ -157,6 +157,7 @@ class CssEditor(QMainWindow):
         base.setPlainText(_base_css())
         tabs.addTab(base, "Типовий CSS")
 
+        tabs.addTab(self._order(), "Порядок")
         tabs.addTab(self._reference(), "Класи")
         tabs.addTab(self._recipes(), "Приклади")
         lay.addWidget(tabs, 1)
@@ -173,6 +174,102 @@ class CssEditor(QMainWindow):
         hint.setWordWrap(True)
         lay.addWidget(hint)
         return box
+
+    # --- порядок частин рядка ---
+    def _order(self) -> QWidget:
+        """Що з чого складається рядок чату і в якій послідовності.
+
+        CSS цього не вміє: текст повідомлення живе в потоці рядка, і жоден
+        `order` його не зрушить. Тому порядок — не стиль, а окреме
+        налаштування, і виглядати воно має як список, а не як правило.
+        """
+        box = QWidget(self)
+        lay = QVBoxLayout(box)
+        lay.setContentsMargins(0, 6, 0, 0)
+        lay.setSpacing(6)
+
+        self.order_list = QListWidget(box)
+        self.order_list.setDragDropMode(QAbstractItemView.InternalMove)
+        self.order_list.setDefaultDropAction(Qt.MoveAction)
+        self.order_list.itemChanged.connect(self._order_changed)
+        self.order_list.model().rowsMoved.connect(self._order_changed)
+        lay.addWidget(self.order_list, 1)
+
+        row = QHBoxLayout()
+        up = QPushButton("↑ Вище", box)
+        up.clicked.connect(lambda: self._move_part(-1))
+        row.addWidget(up)
+        down = QPushButton("↓ Нижче", box)
+        down.clicked.connect(lambda: self._move_part(1))
+        row.addWidget(down)
+        row.addStretch(1)
+        back = QPushButton("Типовий порядок", box)
+        back.clicked.connect(lambda: self.set_layout(chatfeed.DEFAULT_LAYOUT))
+        row.addWidget(back)
+        lay.addLayout(row)
+
+        hint = QLabel("Перетягніть або посуньте стрілками. Галочка вимикає частину — "
+                      "вона лишається на своєму місці й повертається туди ж. "
+                      "Двокрапку після ніка прибирають правилом .n::after { content: \'\'; }", box)
+        hint.setObjectName("hint")
+        hint.setWordWrap(True)
+        lay.addWidget(hint)
+        self.set_layout(getattr(self.win, "chat_layout", None))
+        return box
+
+    def set_layout(self, layout):
+        """Наповнює список частин порядком, який зараз діє."""
+        self.order_list.blockSignals(True)
+        self.order_list.clear()
+        titles = {pid: (short, desc) for pid, short, desc in chatfeed.PARTS}
+        for raw in chatfeed.clean_layout(layout):
+            off = raw.startswith("-")
+            pid = raw[1:] if off else raw
+            short, desc = titles.get(pid, (pid, ""))
+            item = QListWidgetItem(short)
+            item.setData(Qt.UserRole, pid)
+            item.setToolTip(desc)
+            item.setFlags(item.flags() | Qt.ItemIsUserCheckable)
+            item.setCheckState(Qt.Unchecked if off else Qt.Checked)
+            self.order_list.addItem(item)
+        self.order_list.blockSignals(False)
+        self._order_changed()
+
+    def layout_parts(self) -> list:
+        """Порядок у тому вигляді, в якому він лягає в config.json."""
+        out = []
+        for i in range(self.order_list.count()):
+            item = self.order_list.item(i)
+            pid = item.data(Qt.UserRole)
+            out.append(pid if item.checkState() == Qt.Checked else "-" + pid)
+        return out
+
+    def _move_part(self, delta: int):
+        row = self.order_list.currentRow()
+        if row < 0:
+            return
+        new_row = row + delta
+        if not 0 <= new_row < self.order_list.count():
+            return
+        item = self.order_list.takeItem(row)
+        self.order_list.insertItem(new_row, item)
+        self.order_list.setCurrentRow(new_row)
+        self._order_changed()
+
+    def _order_changed(self, *_a):
+        """Показує новий порядок одразу — інакше його підбирають наосліп."""
+        parts = self.layout_parts()
+        # Хоч щось на екрані лишитися мусить: рядок без жодної частини — це
+        # порожній рядок, і людина вирішить, що чат зламався.
+        if not any(not p.startswith("-") for p in parts):
+            item = self.order_list.item(self.order_list.count() - 1)
+            self.order_list.blockSignals(True)
+            item.setCheckState(Qt.Checked)
+            self.order_list.blockSignals(False)
+            parts = self.layout_parts()
+        if getattr(self, "_preview_ready", False):
+            self.preview.page().runJavaScript(chatfeed.apply_layout_js(parts))
+            self.fill_preview()
 
     def _reference(self) -> QWidget:
         tree = QTreeWidget(self)
@@ -305,10 +402,16 @@ class CssEditor(QMainWindow):
     def _on_preview_loaded(self, ok: bool):
         self._preview_ready = bool(ok)
         if ok:
+            self.preview.page().runJavaScript(
+                chatfeed.apply_layout_js(self.layout_parts()))
             self.fill_preview()
             self.apply_preview()
 
     def save(self):
+        # Порядок частин зберігаємо завжди: помилок у ньому не буває, а
+        # прив'язувати його до правильності CSS означало б не зберегти те, що
+        # людина щойно переставила, через чужу помилку в іншій вкладці.
+        self.win.set_chat_layout(self.layout_parts())
         if not self.validate():
             # Не забороняємо зберегти зламане: людина може дописати завтра, а
             # браузер однаково викине лише зіпсоване правило. Але мовчати не
@@ -319,8 +422,10 @@ class CssEditor(QMainWindow):
 
     def reset(self):
         self.editor.setPlainText("")
+        self.set_layout(chatfeed.DEFAULT_LAYOUT)
         self.apply_preview()
         self.win.set_custom_css("")
+        self.win.set_chat_layout(chatfeed.DEFAULT_LAYOUT)
 
     def resizeEvent(self, e):
         super().resizeEvent(e)

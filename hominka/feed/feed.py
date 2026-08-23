@@ -5,7 +5,7 @@ import time
 
 from PySide6.QtCore import QObject, QTimer, QUrl
 
-from .page import apply_css_js, page_html
+from .page import DEFAULT_LAYOUT, apply_css_js, apply_layout_js, page_html
 
 # Мінімальний проміжок між рядками, коли черга розсмоктується. Саме він і
 # рятує від «каші»: навіть якщо площадки віддали двадцять повідомлень за раз,
@@ -25,6 +25,9 @@ class ChatFeed(QObject):
         super().__init__(parent)
         self.view = view
         self.custom_css = ""
+        # Порядок частин рядка (див. page.PARTS). Список, а не рядок: його
+        # переставляють у ⚙ → свій CSS → «Порядок».
+        self.layout = list(DEFAULT_LAYOUT)
         self.ready = False
         self._queue = []          # чекають завантаження сторінки
         self._delayed = []        # (коли показати, подія)
@@ -49,13 +52,24 @@ class ChatFeed(QObject):
         self.ready = False
         self._queue = []
         self._delayed = []
-        self.view.setHtml(page_html(self.custom_css), QUrl("https://stream.svitix.com/"))
+        self.view.setHtml(page_html(self.custom_css, self.layout),
+                          QUrl("https://stream.svitix.com/"))
 
     def set_custom_css(self, css: str):
         """Новий свій CSS — одразу на екран, не чекаючи перезавантаження."""
         self.custom_css = css or ""
         if self.ready:
             self.view.page().runJavaScript(apply_css_js(self.custom_css))
+
+    def set_layout(self, layout):
+        """Новий порядок частин — так само одразу, без перезавантаження.
+
+        Перезавантажити було б простіше, але воно змело б увесь чат, який
+        зараз на екрані, — а порядок підбирають саме дивлячись на живі рядки.
+        """
+        self.layout = list(layout or DEFAULT_LAYOUT)
+        if self.ready:
+            self.view.page().runJavaScript(apply_layout_js(self.layout))
 
     def on_loaded(self):
         self.ready = True
