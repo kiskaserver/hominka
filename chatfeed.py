@@ -72,7 +72,12 @@ PAGE = """<!doctype html>
   .sys { color:#e9d5ff; font-style:italic; font-size:.85em; }
   .paid { background:rgba(251,191,36,.16); border-left:3px solid #fbbf24;
           padding:2px 6px; border-radius:0 8px 8px 0; }
-</style></head><body><div id="list"></div>
+</style>
+<!-- Свій CSS користувача. Окремим тегом і НИЖЧЕ базового: так будь-яке
+     правило перебиває типове без !important, а «скинути до типових» — це
+     просто спорожнити цей тег. -->
+<style id="userCss">__USER_CSS__</style>
+</head><body><div id="list"></div>
 <script>
 const list = document.getElementById('list');
 const MAX = 80;
@@ -105,6 +110,11 @@ window.fts = {
     d.className = 'm' + (e.amount ? ' paid' : '');
     if (e.id) d.dataset.id = e.id;
     if (e.nick) d.dataset.nick = e.nick;
+    // Площадка и вид сообщения — атрибутами: по ним пишется свой CSS
+    // («.m[data-platform="twitch"]»), и это единственный способ отличить
+    // Twitch от Kick, не разбирая содержимое строки.
+    d.dataset.platform = e.platform || 'site';
+    d.dataset.kind = e.kind === 'system' ? 'system' : (e.amount ? 'money' : 'message');
     if (e.kind === 'system') {
       d.innerHTML = (ICONS[e.platform] || '') + '<span class="sys">' + esc(e.text) + '</span>';
     } else {
@@ -139,9 +149,27 @@ window.fts = {
 """
 
 
-def page_html() -> str:
+def page_html(custom_css: str = "") -> str:
+    """Сторінка стрічки. custom_css вставляється в окремий тег нижче базового.
+
+    Екрануємо лише «</style»: усе інше в CSS нешкідливе, а от закритий тег
+    усередині стилю вирвався б у розмітку і зробив із CSS довільний HTML.
+    """
+    safe = (custom_css or "").replace("</style", "<\\/style")
     return (PAGE.replace("__ICONS__", json.dumps(ICONS))
-                .replace("__BADGES__", json.dumps(BADGE_LABELS)))
+                .replace("__BADGES__", json.dumps(BADGE_LABELS))
+                .replace("__USER_CSS__", safe))
+
+
+def apply_css_js(custom_css: str) -> str:
+    """JS, який міняє свій CSS на живій сторінці — без перезавантаження.
+
+    Перезавантаження скинуло б усе, що вже написали в чаті, а стилі
+    підбирають саме дивлячись на живі повідомлення."""
+    return ("(function(c){var s=document.getElementById('userCss');"
+            "if(!s){s=document.createElement('style');s.id='userCss';"
+            "document.head.appendChild(s);} s.textContent=c;})(%s)"
+            % json.dumps(custom_css or ""))
 
 
 # Мінімальний проміжок між рядками, коли черга розсмоктується. Саме він і
@@ -161,6 +189,7 @@ class ChatFeed(QObject):
     def __init__(self, view, parent=None):
         super().__init__(parent)
         self.view = view
+        self.custom_css = ""
         self.ready = False
         self._queue = []          # чекають завантаження сторінки
         self._delayed = []        # (коли показати, подія)
@@ -185,7 +214,13 @@ class ChatFeed(QObject):
         self.ready = False
         self._queue = []
         self._delayed = []
-        self.view.setHtml(page_html(), QUrl("https://stream.svitix.com/"))
+        self.view.setHtml(page_html(self.custom_css), QUrl("https://stream.svitix.com/"))
+
+    def set_custom_css(self, css: str):
+        """Новий свій CSS — одразу на екран, не чекаючи перезавантаження."""
+        self.custom_css = css or ""
+        if self.ready:
+            self.view.page().runJavaScript(apply_css_js(self.custom_css))
 
     def on_loaded(self):
         self.ready = True

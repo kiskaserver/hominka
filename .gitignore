@@ -11,3 +11,4 @@ dist-linux/
 # отброшенные локали Chromium), и без него release.py собрать нечего.
 Hominka.spec
 profile/
+.keys/

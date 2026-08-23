@@ -38,6 +38,8 @@ import tempfile
 import zipfile
 from datetime import date
 
+import signing
+
 HERE = os.path.dirname(os.path.abspath(__file__))
 DIST = os.path.join(HERE, "dist")
 EXE = os.path.join(DIST, "Hominka.exe")
@@ -47,6 +49,11 @@ SSH_HOST = os.environ.get("HOMINKA_SSH", "user@your-server")
 REMOTE_DIR = os.environ.get("HOMINKA_DIR", "/opt/stream/updates/hominka")
 BASE_URL = "https://update.svitix.com/hominka/"
 
+# Приватний ключ підпису випусків. Поруч із репозиторієм, а не в ньому: у git
+# йому не місце ніколи. Без нього випуск не збереться — і це правильно,
+# непідписане оновлення програма 2.0+ не поставить.
+KEY_PATH = os.environ.get("HOMINKA_KEY", os.path.join(HERE, ".keys", "hominka_release.key"))
+
 KINDS = ["major", "minor", "patch", "hotfix"]
 CHANNELS = ["stable", "beta", "dev"]
 HISTORY_LEN = 10  # скільки минулих випусків тримаємо в маніфесті
@@ -55,6 +62,21 @@ HISTORY_LEN = 10  # скільки минулих випусків тримає�
 def run(cmd, **kw):
     print("$", " ".join(cmd))
     subprocess.run(cmd, check=True, **kw)
+
+
+def build_linux(version: str) -> str:
+    """Збирає Linux-версію в контейнері й повертає шлях до архіву.
+
+    Робиться в тому ж випуску, що й Windows, і за замовчуванням — саме щоб
+    версії не розходилися. Розійдуться вони тихо: людина на Linux просто
+    лишиться на старій, не знаючи, що вийшла нова.
+    """
+    out = os.path.join(DIST, "Hominka-%s-linux64.zip" % version)
+    run(["docker", "build", "-q", "-t", "hominka-linux", "-f", "linux/Dockerfile", "."], cwd=HERE)
+    run(["docker", "run", "--rm", "-v", "%s:/src" % HERE.replace("\\", "/"), "hominka-linux"], cwd=HERE)
+    if not os.path.isfile(out):
+        raise SystemExit("контейнер не залишив %s" % out)
+    return out
 
 
 def build_exe():
@@ -115,6 +137,25 @@ def pack(version: str, exe_path: str = "", suffix: str = "win64") -> str:
     return out
 
 
+def sign_manifest(manifest: dict):
+    """Підписує випуск приватним ключем і кладе підпис у маніфест."""
+    if not os.path.isfile(KEY_PATH):
+        raise SystemExit(
+            "немає ключа підпису: %s\n"
+            "Без нього випуск не поставиться на машини з версією 2.0+.\n"
+            "Якщо ключ загублено — згенеруйте новий і випустіть версію, яка знає обидва." % KEY_PATH)
+    with open(KEY_PATH, encoding="utf-8") as f:
+        secret = signing.unb64(f.read().strip())
+    manifest["signature"] = signing.b64(signing.sign(secret, signing.release_payload(manifest)))
+    # Перевіряємо власний підпис одразу: помилку тут видно розробнику, а не
+    # користувачу, у якого оновлення просто не поставиться.
+    if not signing.verify(signing.public_key(secret),
+                          signing.unb64(manifest["signature"]),
+                          signing.release_payload(manifest)):
+        raise SystemExit("підпис не проходить власну перевірку — випуск скасовано")
+    print("підписано ключем %s…" % signing.b64(signing.public_key(secret))[:12])
+
+
 def sha256_of(path: str) -> str:
     h = hashlib.sha256()
     with open(path, "rb") as f:
@@ -154,7 +195,9 @@ def main():
                     help="ставити наполегливо (для термінових виправлень)")
     ap.add_argument("--no-build", action="store_true", help="взяти вже зібране в dist/")
     ap.add_argument("--linux-zip", default="",
-                    help="архів збірки для Linux (див. build_linux.sh) — поїде в той самий випуск")
+                    help="готовий архів для Linux; за замовчуванням збираємо самі в контейнері")
+    ap.add_argument("--no-linux", action="store_true",
+                    help="випустити без Linux-збірки (версії розійдуться — лише якщо інакше ніяк)")
     ap.add_argument("--reuse", action="store_true",
                     help="архів цієї версії вже на сервері — лише переписати маніфест каналу")
     ap.add_argument("--dry-run", action="store_true", help="нічого не завантажувати")
@@ -187,16 +230,23 @@ def main():
             raise SystemExit("--reuse: не знайшов уже випущену версію %s" % args.version)
     else:
         stamp_version(args.version)
+        # Linux — ПЕРШИМ: контейнер бере версію з уже проставленого коду, і
+        # робити це після Windows-збірки означало б збирати різні речі.
+        linux_zip = args.linux_zip
+        if not linux_zip and not args.no_linux:
+            linux_zip = build_linux(args.version)
         if not args.no_build:
             build_exe()
         win_zip = pack(args.version, EXE, "win64")
         uploads.append(win_zip)
         files.append(entry(args.version, win_zip, "win64"))
-        if args.linux_zip:
-            if not os.path.isfile(args.linux_zip):
-                raise SystemExit("немає %s" % args.linux_zip)
-            uploads.append(args.linux_zip)
-            files.append(entry(args.version, args.linux_zip, "linux64"))
+        if linux_zip:
+            if not os.path.isfile(linux_zip):
+                raise SystemExit("немає %s" % linux_zip)
+            uploads.append(linux_zip)
+            files.append(entry(args.version, linux_zip, "linux64"))
+        elif args.no_linux:
+            print("УВАГА: випуск без Linux-збірки — версії розійдуться")
         for f in files:
             print("%s: %.1f МБ, sha256 %s…" % (f["platform"], f["size"] / 1e6, f["sha256"][:16]))
 
@@ -206,6 +256,8 @@ def main():
     win = next((f for f in files if f["platform"] == "win64"), None)
     if win:
         manifest["file"] = win
+
+    sign_manifest(manifest)
 
     # Історія: попередній випуск каналу зсувається вниз.
     prev = fetch_manifest(args.channel)

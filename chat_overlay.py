@@ -63,7 +63,7 @@ import updater
 # === Налаштування за замовчуванням ==========================================
 APP_NAME = "Hominka"          # від укр. «гомін» — гомін голосів у чаті
 APP_ICON = "hominka.ico"
-APP_VERSION = "1.9.0"
+APP_VERSION = "2.0.0"
 APP_AUTHOR = "Mykyta Vinnyk"
 # Посилання на чат сайту вписує сам стрімер у ⚙ — тут його немає навмисно.
 #
@@ -223,6 +223,19 @@ def _hwnd(win) -> int:
 FILE_ATTRIBUTE_HIDDEN = 0x2
 
 
+def splash_text(text: str):
+    """Рядок під смужкою на заставці.
+
+    Поки триває розпаковування, туди пише сам bootloader; далі — ми, бо він
+    уже віддав керування, а до появи вікна ще секунда-дві на запуск Qt.
+    """
+    try:
+        import pyi_splash          # існує лише всередині збірки зі splash
+        pyi_splash.update_text(text)
+    except Exception:
+        pass
+
+
 def close_splash():
     """Прибирає заставку, щойно з'явилося справжнє вікно.
 
@@ -231,7 +244,7 @@ def close_splash():
     запускається», але зняти її мусимо ми: сама вона висітиме поверх усього.
     """
     try:
-        import pyi_splash          # існує лише всередині збірки зі splash
+        import pyi_splash
         pyi_splash.close()
     except Exception:
         pass
@@ -1280,6 +1293,16 @@ class SettingsPanel(QWidget):
         row.addWidget(plus)
         row.addStretch(1)
         lay.addLayout(row)
+
+        # Свій CSS — окремим вікном: у полі на три сантиметри код не пишуть.
+        lay.addSpacing(2)
+        css = QPushButton("Свій CSS для чату…", self)
+        css.setObjectName("ghost")
+        css.setFixedHeight(28)
+        css.setToolTip("Повноцінний редактор: приклад чату поруч, довідник класів, "
+                       "перевірка синтаксису. Від захоплення екрана вікно теж сховане.")
+        css.clicked.connect(self.win.open_css_editor)
+        lay.addWidget(css)
         return card
 
     # --- секція «Оновлення» --------------------------------------------------
@@ -1650,6 +1673,10 @@ class Overlay(QMainWindow):
         # Чат сайту: посилання з ⚙ (config.json). Порожнє, поки не вписали —
         # тоді вікно чесно каже, чого йому бракує, замість порожньої сторінки.
         self.site_url = ""
+        # Свій CSS для чату (редактор — css_editor.py). Порожній = типове
+        # оформлення; воно й є те, що людина бачить, поки нічого не змінювала.
+        self.custom_css = ""
+        self.css_window = None
         # Слід від щойно встановленого оновлення (пишеться перед перезапуском).
         self.updated_to = ""
         self.updated_notes = ""
@@ -1914,6 +1941,39 @@ class Overlay(QMainWindow):
         self.panel.set_source_status(self)
         self.refresh_source()
 
+    def set_custom_css(self, css: str):
+        """Свій CSS — у вікно чату негайно і в config.json.
+
+        Негайно — принципово: стилі підбирають, дивлячись на живий чат, а не
+        перезапускаючи програму після кожної правки.
+        """
+        self.custom_css = css or ""
+        self.save_config()
+        if self.feed is not None:
+            self.feed.set_custom_css(self.custom_css)
+        if self.mode == "web":
+            self._inject_custom_css()
+
+    def _inject_custom_css(self):
+        """Кладе свій CSS і на звичайну сторінку чату (сайт або YouTube).
+
+        Селектори там чужі, але людина, яка полізла в CSS, з чужими розбереться
+        — а от «мій CSS працює тільки в одному з трьох режимів» пояснити було б
+        нічим.
+        """
+        if not self.custom_css:
+            return
+        self.view.page().runJavaScript(chatfeed.apply_css_js(self.custom_css))
+
+    def open_css_editor(self):
+        """Відкриває редактор CSS (вікно створюється раз і живе далі)."""
+        import css_editor
+        if self.css_window is None:
+            self.css_window = css_editor.CssEditor(self)
+        self.css_window.show()
+        self.css_window.raise_()
+        self.css_window.activateWindow()
+
     def set_chat_delay(self, seconds: int):
         self.chat_delay = max(0, int(seconds))
         if self.feed is not None:
@@ -2052,17 +2112,27 @@ class Overlay(QMainWindow):
             self.panel.set_chat_error(text)
 
     def _title_for(self) -> str:
+        """Назва у смужці вікна: спершу програма, потім що саме показано.
+
+        Просто «Немає джерела» читалося як помилка невідомо чия — на екрані ж
+        не написано, чиє це вікно.
+        """
         if self.mode == "feed":
-            return "Чат"
+            sources = ", ".join(self.active_sources())
+            return "Hominka — %s" % sources if sources else "Hominka"
         if self.auto_video:
-            return "Мій стрім"
-        return "Чат" if self.url else "Немає джерела"
+            return "Hominka — мій ефір"
+        if self.url:
+            return "Hominka — чат"
+        return "Hominka — джерело не вибрано"
 
     def _on_loaded(self, ok: bool):
         self.view.setZoomFactor(self.zoom)
         if ok and self.mode == "feed":
             self.feed.on_loaded()
             return
+        if ok:
+            self._inject_custom_css()
         if ok and self.is_yt:
             # гарний прозорий стиль поверх YouTube-чату
             self.view.page().runJavaScript(YT_STYLE_JS)
@@ -2207,6 +2277,9 @@ class Overlay(QMainWindow):
         # сильніший: ним відкривають чужий чат для налагодження.
         self.site_url = (cfg.get("siteChatUrl") or "").strip()
         self.panel.site_edit.setText(self.site_url)
+        self.custom_css = cfg.get("customCss") or ""
+        if self.feed is not None:
+            self.feed.custom_css = self.custom_css
         # Ми щойно оновилися? Тоді перше, що бачить людина, — за чим саме
         # закривалося вікно. Позначку одразу гасимо: показуємо один раз.
         was = (cfg.get("updatedTo") or "").strip()
@@ -2268,6 +2341,7 @@ class Overlay(QMainWindow):
                     "youtubeChannelId": self.yt_channel_id,
                     "myChannel": self.my_channel,
                     "siteChatUrl": self.site_url,
+                    "customCss": self.custom_css,
                     "updatedTo": self.updated_to,
                     "updatedNotes": self.updated_notes,
                     "chatDelay": self.chat_delay,
@@ -2314,6 +2388,7 @@ def main():
     url = sys.argv[1] if len(sys.argv) > 1 else None
     os.environ.setdefault("QTWEBENGINE_CHROMIUM_FLAGS", "--enable-features=TranslucentWindows")
     hide_internal_folder()
+    splash_text("Запускаю…")
     app = QApplication(sys.argv)
     # Фільтр подій усього застосунку ставимо ТІЛЬКИ у Windows, і не з обережності.
     #
@@ -2334,6 +2409,7 @@ def main():
     app.setOrganizationName(APP_AUTHOR)
     app.setWindowIcon(QIcon(resource_path(APP_ICON)))
     app.setQuitOnLastWindowClosed(True)
+    splash_text("Відкриваю чат…")
     win = Overlay(url)
     win.show()
     sys.exit(app.exec())

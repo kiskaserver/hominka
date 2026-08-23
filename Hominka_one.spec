@@ -34,7 +34,7 @@ a = Analysis(
     ['chat_overlay.py'],
     pathex=[],
     binaries=[],
-    datas=[('hominka.ico', '.'), ('hominka.png', '.')],
+    datas=[('hominka.ico', '.'), ('hominka.png', '.'), ('splash.png', '.')],
     hiddenimports=[],
     hookspath=[],
     hooksconfig={},
@@ -53,11 +53,20 @@ a.datas = [d for d in a.datas if keep(d)]
 
 pyz = PYZ(a.pure)
 
+# Заставка з рядком прогресу.
+#
+# text_pos — це не прикраса: саме він вмикає текст, у який bootloader пише, що
+# зараз розпаковує. Без нього людина дивиться на нерухому картинку і не знає,
+# чи взагалі щось відбувається. Перед появою вікна текст замінюємо своїм
+# (див. close_splash / splash_text у chat_overlay).
 splash = Splash(
-    'hominka.png',
+    'splash.png',
     binaries=a.binaries,
     datas=a.datas,
-    text_pos=None,
+    text_pos=(36, 192),
+    text_size=9,
+    text_color='#9a9490',
+    text_default='Готуюсь до запуску…',
     minify_script=True,
     always_on_top=True,
 )
