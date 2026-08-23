@@ -39,7 +39,8 @@ import zipfile
 from datetime import date
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-DIST = os.path.join(HERE, "dist", "Hominka")
+DIST = os.path.join(HERE, "dist")
+EXE = os.path.join(DIST, "Hominka.exe")
 
 # Куди кладемо. Змінюється лише разом із сервером, тому не в аргументах.
 SSH_HOST = os.environ.get("HOMINKA_SSH", "user@your-server")
@@ -57,14 +58,16 @@ def run(cmd, **kw):
 
 
 def build_exe():
-    """PyInstaller. Версію в .exe бере з version_info.txt — його оновлюємо теж."""
+    """PyInstaller за Hominka_one.spec — збірка ОДНИМ файлом.
+
+    Раніше збирали текою: поруч із .exe лежала тека _internal на 340 МБ. Тепер
+    усе всередині Hominka.exe, а заставку (splash) і відкидання зайвих мовних
+    файлів описує сам spec. Версію .exe бере з version_info.txt — його
+    оновлюємо теж."""
     py = os.path.join(HERE, ".venv", "Scripts", "python.exe")
     if not os.path.isfile(py):
         py = sys.executable
-    run([py, "-m", "PyInstaller", "--noconfirm", "--clean", "--windowed",
-         "--name", "Hominka", "--icon", "hominka.ico",
-         "--version-file", "version_info.txt", "--add-data", "hominka.ico;.",
-         "chat_overlay.py"], cwd=HERE)
+    run([py, "-m", "PyInstaller", "--noconfirm", "--clean", "Hominka_one.spec"], cwd=HERE)
 
 
 def stamp_version(version: str):
@@ -92,37 +95,23 @@ def stamp_version(version: str):
     print("версію проставлено:", version)
 
 
-# Що НІКОЛИ не потрапляє в архів оновлення.
-#
-# Запуск зібраної програми з dist/ лишає поруч свої робочі файли, і спакувати
-# їх означало б: (1) затерти оновленням чужі налаштування — підмінник копіює
-# архів ПОВЕРХ встановленого; (2) роздати всім свій профіль браузера, тобто
-# власні куки входу в YouTube. Друге — вже не незручність, а видані ключі.
-PACK_SKIP_FILES = {"config.json"}
-PACK_SKIP_DIRS = {"profile"}
+def pack(version: str, exe_path: str = "", suffix: str = "win64") -> str:
+    """Кладе один файл програми в zip.
 
-
-def pack(version: str) -> str:
-    """Пакує ВМІСТ dist/Hominka (без зайвої теки зверху) — так оновлювач просто
-    кладе архів поверх встановленої програми."""
-    if not os.path.isfile(os.path.join(DIST, "Hominka.exe")):
-        raise SystemExit("немає %s — спершу зберіть (без --no-build)" % DIST)
-    out = os.path.join(tempfile.gettempdir(), "Hominka-%s-win64.zip" % version)
+    Раніше пакували цілу теку і мусили пильнувати, щоб у неї не потрапили
+    config.json і тека profile — тобто чужі налаштування й куки входу. Тепер
+    програма — один файл, і пакувати більше нічого: те, що лежить поруч,
+    належить користувачу і в оновлення не їде за визначенням.
+    """
+    exe_path = exe_path or EXE
+    if not os.path.isfile(exe_path):
+        raise SystemExit("немає %s — спершу зберіть (без --no-build)" % exe_path)
+    out = os.path.join(tempfile.gettempdir(), "Hominka-%s-%s.zip" % (version, suffix))
     if os.path.exists(out):
         os.remove(out)
     print("пакую", out)
-    skipped = 0
     with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED, compresslevel=6) as z:
-        for root, dirs, files in os.walk(DIST):
-            dirs[:] = [d for d in dirs if d not in PACK_SKIP_DIRS]
-            for name in files:
-                if name in PACK_SKIP_FILES:
-                    skipped += 1
-                    continue
-                full = os.path.join(root, name)
-                z.write(full, os.path.relpath(full, DIST))
-    if skipped:
-        print("не пакували робочих файлів:", skipped)
+        z.write(exe_path, os.path.basename(exe_path))
     return out
 
 
@@ -145,6 +134,16 @@ def fetch_manifest(channel: str) -> dict:
         return {}
 
 
+def entry(version: str, zip_path: str, platform: str) -> dict:
+    """Опис одного файлу випуску для маніфесту."""
+    return {
+        "platform": platform,
+        "url": BASE_URL + "files/" + os.path.basename(zip_path),
+        "size": os.path.getsize(zip_path),
+        "sha256": sha256_of(zip_path),
+    }
+
+
 def main():
     ap = argparse.ArgumentParser(description="Випуск Hominka на update.svitix.com")
     ap.add_argument("--version", required=True)
@@ -154,13 +153,12 @@ def main():
     ap.add_argument("--mandatory", action="store_true",
                     help="ставити наполегливо (для термінових виправлень)")
     ap.add_argument("--no-build", action="store_true", help="взяти вже зібране в dist/")
+    ap.add_argument("--linux-zip", default="",
+                    help="архів збірки для Linux (див. build_linux.sh) — поїде в той самий випуск")
     ap.add_argument("--reuse", action="store_true",
                     help="архів цієї версії вже на сервері — лише переписати маніфест каналу")
     ap.add_argument("--dry-run", action="store_true", help="нічого не завантажувати")
     args = ap.parse_args()
-
-    name = "Hominka-%s-win64.zip" % args.version
-    url = BASE_URL + "files/" + name
 
     manifest = {
         "product": "hominka",
@@ -170,29 +168,44 @@ def main():
         "mandatory": bool(args.mandatory),
         "releasedAt": date.today().isoformat(),
         "notes": args.notes,
-        "file": {"platform": "win64", "url": url},
     }
 
+    uploads = []          # (локальний файл, ім'я на сервері)
+    files = []            # записи для маніфесту
+
     if args.reuse:
-        # Просування вже випущеного архіву в інший канал: розмір і хеш беремо
-        # з маніфесту, де він уже є, — перезбирати заради цього нічого не треба.
+        # Просування вже випущеного архіву в інший канал: розміри й хеші беремо
+        # з маніфесту, де вони вже є, — перезбирати заради цього нічого не треба.
         for ch in CHANNELS:
             old = fetch_manifest(ch)
-            if old.get("version") == args.version and old.get("file", {}).get("sha256"):
-                manifest["file"].update({k: old["file"][k] for k in ("size", "sha256")})
+            if old.get("version") != args.version:
+                continue
+            files = old.get("files") or ([old["file"]] if old.get("file") else [])
+            if files:
                 break
-        if "sha256" not in manifest["file"]:
+        if not files:
             raise SystemExit("--reuse: не знайшов уже випущену версію %s" % args.version)
-        zip_path = ""
     else:
         stamp_version(args.version)
         if not args.no_build:
             build_exe()
-        zip_path = pack(args.version)
-        manifest["file"]["size"] = os.path.getsize(zip_path)
-        manifest["file"]["sha256"] = sha256_of(zip_path)
-        print("розмір %.1f МБ, sha256 %s" % (manifest["file"]["size"] / 1e6,
-                                             manifest["file"]["sha256"][:16] + "…"))
+        win_zip = pack(args.version, EXE, "win64")
+        uploads.append(win_zip)
+        files.append(entry(args.version, win_zip, "win64"))
+        if args.linux_zip:
+            if not os.path.isfile(args.linux_zip):
+                raise SystemExit("немає %s" % args.linux_zip)
+            uploads.append(args.linux_zip)
+            files.append(entry(args.version, args.linux_zip, "linux64"))
+        for f in files:
+            print("%s: %.1f МБ, sha256 %s…" % (f["platform"], f["size"] / 1e6, f["sha256"][:16]))
+
+    manifest["files"] = files
+    # "file" лишаємо заради вже встановлених програм: вони знають тільки його.
+    # Там завжди Windows — саме такі збірки й ходили по цьому полю раніше.
+    win = next((f for f in files if f["platform"] == "win64"), None)
+    if win:
+        manifest["file"] = win
 
     # Історія: попередній випуск каналу зсувається вниз.
     prev = fetch_manifest(args.channel)
@@ -211,16 +224,17 @@ def main():
         return
 
     run(["ssh", SSH_HOST, "mkdir -p %s/files" % REMOTE_DIR])
-    if zip_path:
-        # Спершу файл, потім маніфест: якщо перервати посередині, канал ще
-        # вказує на стару (робочу) версію, а не на архів, якого немає.
-        run(["scp", zip_path, "%s:%s/files/%s" % (SSH_HOST, REMOTE_DIR, name)])
+    # Спершу файли, потім маніфест: якщо перервати посередині, канал ще вказує
+    # на стару (робочу) версію, а не на архів, якого немає.
+    for path in uploads:
+        run(["scp", path, "%s:%s/files/%s" % (SSH_HOST, REMOTE_DIR, os.path.basename(path))])
     run(["scp", local_manifest, "%s:%s/%s.json" % (SSH_HOST, REMOTE_DIR, args.channel)])
-    print("\nГотово: %s%s.json → %s" % (BASE_URL, args.channel, args.version))
+    print()
+    print("Готово: %s%s.json → %s" % (BASE_URL, args.channel, args.version))
 
-    if zip_path:
-        shutil.copy(zip_path, os.path.join(HERE, "dist", name))
-        print("копія архіву: dist/%s" % name)
+    for path in uploads:
+        shutil.copy(path, os.path.join(DIST, os.path.basename(path)))
+        print("копія архіву: dist/%s" % os.path.basename(path))
 
 
 if __name__ == "__main__":

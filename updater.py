@@ -69,6 +69,12 @@ from PySide6.QtCore import QObject, Signal
 # Базова адреса оновлень. Змінюється разом із доменом, тому окремою константою.
 UPDATE_BASE = "https://update.svitix.com/hominka/"
 
+# Для якої системи шукати файл у маніфесті. Випуск один, файлів у ньому може
+# бути кілька: Windows і Linux оновлюються з того самого каналу, але качати
+# мусять різні архіви.
+PLATFORM = "win64" if sys.platform == "win32" else "linux64"
+IS_WINDOWS = sys.platform == "win32"
+
 # Канали оновлень. Порядок = від найспокійнішого до найсвіжішого.
 CHANNELS = [
     ("stable", "Стабільна", "Перевірені випуски. Рекомендовано."),
@@ -137,9 +143,27 @@ class Release:
         return "%s %s (%s)" % (channel_label(self.channel), self.version, kind_label(self.kind))
 
 
+def file_for_platform(data: dict) -> dict:
+    """Файл випуску для цієї системи.
+
+    Старі маніфести знають лише "file" (там завжди був Windows) — їх читаємо
+    як і раніше, інакше вже встановлені програми перестали б оновлюватися.
+    Нові додають "files": список по одному запису на систему.
+    """
+    for f in data.get("files") or []:
+        if (f or {}).get("platform") == PLATFORM:
+            return f
+    f = data.get("file") or {}
+    if f and f.get("platform", "win64") == PLATFORM:
+        return f
+    return {}
+
+
 def parse_manifest(raw: bytes, channel: str) -> Release:
     data = json.loads(raw.decode("utf-8"))
-    f = data.get("file") or {}
+    f = file_for_platform(data)
+    if not f:
+        raise ValueError("для цієї системи (%s) випуску немає" % PLATFORM)
     rel = Release(
         channel=data.get("channel") or channel,
         version=str(data.get("version") or ""),
@@ -288,11 +312,14 @@ def install(zip_path: str, app_dir: str) -> str:
 
     Повертає команду, яку запустили (для журналу), або кидає виняток.
 
-    Windows тримає запущений .exe заблокованим, тому підміняє теку окремий
-    процес: він чекає, поки ми закриємось, копіює нове поверх старого і
-    запускає програму знову. Копіюємо, а не перейменовуємо теку, — щоб
-    вціліли config.json і будь-що інше, що користувач поклав поруч.
+    Запущену програму не можна перезаписати саму собою (у Windows файл узагалі
+    заблокований), тому підміну робить окремий процес: він чекає, поки ми
+    закриємось, копіює нове поверх старого і запускає програму знову.
+    Копіюємо, а не перейменовуємо теку, — щоб вціліли config.json і будь-що
+    інше, що користувач поклав поруч.
     """
+    if not IS_WINDOWS:
+        return _install_posix(zip_path, app_dir)
     staging = os.path.join(os.path.dirname(app_dir.rstrip("\\/")), "Hominka_update")
     if os.path.exists(staging):
         shutil.rmtree(staging, ignore_errors=True)
@@ -326,6 +353,53 @@ def install(zip_path: str, app_dir: str) -> str:
     return " ".join(cmd)
 
 
+def _install_posix(zip_path: str, app_dir: str) -> str:
+    """Те саме для Linux: чекаємо виходу, копіюємо, повертаємо право на запуск.
+
+    Права з zip не приїжджають (формат їх не зберігає в тому вигляді, на який
+    можна покластися), тому chmod робимо самі — інакше після оновлення файл
+    просто не запуститься.
+    """
+    staging = os.path.join(os.path.dirname(app_dir.rstrip("/")), "Hominka_update")
+    shutil.rmtree(staging, ignore_errors=True)
+    os.makedirs(staging, exist_ok=True)
+    with zipfile.ZipFile(zip_path) as z:
+        z.extractall(staging)
+    try:
+        os.remove(zip_path)
+    except OSError:
+        pass
+    cleanup_downloads()
+
+    inner = os.path.join(staging, "Hominka")
+    src = inner if os.path.isfile(os.path.join(inner, "Hominka")) else staging
+    if not os.path.isfile(os.path.join(src, "Hominka")):
+        raise ValueError("в архіві немає Hominka")
+
+    sh = os.path.join(tempfile.gettempdir(), "hominka-update.sh")
+    with open(sh, "w", encoding="utf-8", newline=chr(10)) as f:
+        f.write(_UPDATE_SH)
+    os.chmod(sh, 0o755)
+    cmd = ["/bin/sh", sh, str(os.getpid()), src, app_dir.rstrip("/"), staging]
+    subprocess.Popen(cmd, start_new_session=True, close_fds=True)
+    return " ".join(cmd)
+
+
+# $1 — pid програми, $2 — тека з новою версією, $3 — тека програми,
+# $4 — тимчасова тека, яку треба прибрати.
+_UPDATE_SH = r"""#!/bin/sh
+LOG="${TMPDIR:-/tmp}/hominka-update.log"
+echo "[$(date)] wait pid=$1 src=$2 dst=$3" >> "$LOG"
+while kill -0 "$1" 2>/dev/null; do sleep 1; done
+cp -a "$2/." "$3/" >> "$LOG" 2>&1
+chmod +x "$3/Hominka" >> "$LOG" 2>&1
+echo "[$(date)] copied, restarting" >> "$LOG"
+("$3/Hominka" >/dev/null 2>&1 &)
+rm -rf "$4"
+rm -f "$0"
+"""
+
+
 # %1 — pid програми, %2 — тека з новою версією, %3 — тека програми,
 # %4 — тимчасова тека, яку треба прибрати.
 #
@@ -352,6 +426,9 @@ if not errorlevel 1 (
 echo [%DATE% %TIME%] copying >> "%LOG%"
 %SYS%\robocopy.exe %2 %3 /E /IS /IT /R:2 /W:1 /NFL /NDL /NJH /NJS >> "%LOG%" 2>&1
 echo [%DATE% %TIME%] robocopy exit=%ERRORLEVEL% >> "%LOG%"
+REM Перехід зі збірки текою на збірку одним файлом: _internal у новій версії
+REM немає, а стара його лишила — 340 МБ, які вже нікому не потрібні.
+if not exist "%~2\_internal" if exist "%~3\_internal" rmdir /s /q "%~3\_internal"
 start "" "%~3\Hominka.exe"
 rmdir /s /q %4
 (goto) 2>nul & del "%~f0"

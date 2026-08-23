@@ -63,7 +63,7 @@ import updater
 # === Налаштування за замовчуванням ==========================================
 APP_NAME = "Hominka"          # від укр. «гомін» — гомін голосів у чаті
 APP_ICON = "hominka.ico"
-APP_VERSION = "1.8.0"
+APP_VERSION = "1.9.0"
 APP_AUTHOR = "Mykyta Vinnyk"
 # Посилання на чат сайту вписує сам стрімер у ⚙ — тут його немає навмисно.
 #
@@ -77,15 +77,53 @@ UI_LANG = "uk"  # мова, якою програма просить серве�
 # Сторінка на місці чату, поки джерело не задано.
 NO_SOURCE_HTML = """
 <html><head><meta charset="utf-8"><style>
-  html,body{margin:0;height:100%;background:transparent;font:14px/1.5 "Segoe UI",sans-serif;color:#e7e2df}
-  div{height:100%;display:flex;flex-direction:column;gap:6px;align-items:center;justify-content:center;text-align:center;padding:16px}
-  b{color:#c9a4ff}
+  /* overflow:hidden — вікно чату без смуги прокрутки. Вона тут не потрібна
+     нікому: підказка коротка, а смуга збоку виглядає як зламана сторінка. */
+  html,body{margin:0;height:100%;overflow:hidden;background:transparent;
+            font:14px/1.5 "Segoe UI",sans-serif;color:#e7e2df}
+  div{box-sizing:border-box;height:100%;display:flex;flex-direction:column;gap:8px;
+      align-items:center;justify-content:center;text-align:center;padding:16px}
+  b{color:#c9a4ff;font-size:14px}
   span{color:#9a9490;font-size:12px}
 </style></head><body><div>
-  <b>Джерело чату не задано</b>
-  <span>Відкрий ⚙ і встав посилання на чат сайту<br>(в адмінці: Віджети → Адреси для OBS → Чат)<br>або назви свій канал Twitch / Kick / YouTube.</span>
+  <b>Чат ще не вибрано</b>
+  <span>Натисни ⚙ і впиши свій канал —<br>YouTube, Twitch або Kick.</span>
 </div></body></html>
 """
+
+
+def update_status_html(rel) -> str:
+    """Опис оновлення для ⚙ — рядками, а не суцільною стрічкою.
+
+    Раніше це був один довгий рядок «Доступно: Стабільна 1.8.0 (нові
+    можливості). Що нового: …» — його доводилося дочитувати, щоб зрозуміти
+    навіть номер версії. Тепер зверху версія, під нею список змін.
+    """
+    head = "Доступно <b>%s</b> · %s · %s" % (
+        esc(rel.version), esc(updater.channel_label(rel.channel)), esc(updater.kind_label(rel.kind)))
+    items = split_notes(rel.notes)
+    if not items:
+        return head
+    body = "".join("<br>• %s" % esc(i) for i in items)
+    return head + "<br><span style='color:#8f8a86'>Що нового:</span>" + body
+
+
+def split_notes(notes: str) -> list:
+    """Розбиває опис змін на пункти.
+
+    Опис пишеться однією фразою, але майже завжди складається з кількох
+    речень — саме їх і показуємо окремими рядками, інакше в панелі суцільна
+    стіна тексту.
+    """
+    text = " ".join((notes or "").split())
+    if not text:
+        return []
+    parts = re.split(r"(?<=[.!?;])\s+", text)
+    return [p.strip(" ;") for p in parts if p.strip(" ;")]
+
+
+def esc(text: str) -> str:
+    return (str(text).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;"))
 
 
 def resource_path(name: str) -> str:
@@ -151,6 +189,17 @@ def build_profile(parent) -> QWebEngineProfile:
 ACCENT_ACTIVE = "#a855f7"   # рамка у звичайному режимі (фіолетова)
 ACCENT_LOCKED = "#22c55e"   # рамка у режимі клік-крізь (зелена)
 
+# === Платформа ==============================================================
+#
+# Вікно, невидиме для OBS, — це Windows-трюк (SetWindowDisplayAffinity). У
+# Linux такого немає ні в X11, ні у Wayland: жодне API не дозволяє сказати
+# «мене не знімати». Але воно там і не потрібне так гостро — на Linux стрімер
+# знімає ГРУ, а не екран: OBS має «Window Capture (Xcomposite)» під X11,
+# «Window Capture (PipeWire)» під Wayland і obs-vkcapture для ігор. Усі троє
+# знімають одне конкретне вікно, а наше — інше, тож у кадр воно не потрапляє.
+# Ловить оверлей лише захоплення всього екрана — про це й пишемо людині.
+IS_WINDOWS = sys.platform == "win32"
+
 # === WinAPI константи =======================================================
 WDA_EXCLUDEFROMCAPTURE = 0x00000011
 GWL_EXSTYLE = -20
@@ -163,7 +212,7 @@ MOD_NOREPEAT = 0x4000
 VK_SPACE = 0x20
 HOTKEY_ID = 1
 
-user32 = ctypes.windll.user32
+user32 = ctypes.windll.user32 if IS_WINDOWS else None
 
 
 def _hwnd(win) -> int:
@@ -174,22 +223,35 @@ def _hwnd(win) -> int:
 FILE_ATTRIBUTE_HIDDEN = 0x2
 
 
-def hide_internal_folder():
-    """Ховає службові теки поруч із програмою.
+def close_splash():
+    """Прибирає заставку, щойно з'явилося справжнє вікно.
 
-    Поруч із .exe PyInstaller кладе теку зі своїми потрухами (близько 500 МБ),
-    і бачити її користувачу ні до чого. Запакувати все всередину .exe не
-    вийшло: збірка одним файлом розпаковує 583 МБ у тимчасову теку ПРИ КОЖНОМУ
-    запуску, а вікно так і не з'являється (перевірено). Тому тека лишається на
-    місці, просто не потрапляє на очі.
-
-    Робиться щоразу при старті: після оновлення теку копіюють наново, і атрибут
-    з неї злітає.
+    Збірка одним файлом розпаковує себе при кожному запуску, і до появи вікна
+    минає кілька секунд. Заставка — єдине, що в цей час каже «програма
+    запускається», але зняти її мусимо ми: сама вона висітиме поверх усього.
     """
-    if not getattr(sys, "frozen", False):
+    try:
+        import pyi_splash          # існує лише всередині збірки зі splash
+        pyi_splash.close()
+    except Exception:
+        pass
+
+
+def hide_internal_folder():
+    """Ховає службову теку профілю поруч із програмою.
+
+    Тека _internal тут більше не з'являється: збірка одним файлом тримає все
+    всередині .exe (див. Hominka_one.spec). Але після оновлення зі старої
+    версії вона може лишитися на диску — тоді ховаємо і її, щоб не плуталася
+    під ногами.
+
+    Робиться щоразу при старті: після оновлення теки копіюють наново, і атрибут
+    з них злітає.
+    """
+    if not getattr(sys, "frozen", False) or not IS_WINDOWS:
         return
     here = os.path.dirname(sys.executable)
-    # profile — кеш браузера, теж службовий. config.json НЕ ховаємо: це
+    # profile — кеш браузера, службовий. config.json НЕ ховаємо: це
     # налаштування користувача, і шукати їх у прихованому — знущання.
     for name in ("_internal", "profile"):
         folder = os.path.join(here, name)
@@ -202,6 +264,8 @@ def hide_internal_folder():
 
 
 def exclude_from_capture(win) -> bool:
+    if not IS_WINDOWS:
+        return False
     try:
         return bool(user32.SetWindowDisplayAffinity(_hwnd(win), WDA_EXCLUDEFROMCAPTURE))
     except Exception:
@@ -210,6 +274,8 @@ def exclude_from_capture(win) -> bool:
 
 def _is_excluded(hwnd: int) -> bool:
     """Чи вже приховане вікно від захоплення (щоб не смикати WinAPI даремно)."""
+    if not IS_WINDOWS:
+        return True
     value = wintypes.DWORD()
     try:
         if not user32.GetWindowDisplayAffinity(hwnd, ctypes.byref(value)):
@@ -245,6 +311,8 @@ def hide_new_windows_from_capture():
     Дешевше пройтися по верхньорівневих вікнах, ніж вгадувати, яке з них Qt
     створить наступним.
     """
+    if not IS_WINDOWS:
+        return
     app = QApplication.instance()
     if app is None:
         return
@@ -260,13 +328,26 @@ def hide_new_windows_from_capture():
 
 
 def set_click_through(win, enabled: bool):
-    hwnd = _hwnd(win)
-    ex = user32.GetWindowLongW(hwnd, GWL_EXSTYLE)
-    if enabled:
-        ex |= WS_EX_TRANSPARENT | WS_EX_LAYERED
-    else:
-        ex &= ~WS_EX_TRANSPARENT
-    user32.SetWindowLongW(hwnd, GWL_EXSTYLE, ex)
+    """Миша йде крізь вікно в гру.
+
+    У Windows це прапорець стилю, який можна змінити на льоту. У Linux того ж
+    домагаємось прапорцем вікна Qt — але він діє лише при показі, тому вікно
+    доводиться перепоказати; геометрію при цьому зберігаємо самі, інакше
+    менеджер вікон поставить його, куди йому зручно.
+    """
+    if IS_WINDOWS:
+        hwnd = _hwnd(win)
+        ex = user32.GetWindowLongW(hwnd, GWL_EXSTYLE)
+        if enabled:
+            ex |= WS_EX_TRANSPARENT | WS_EX_LAYERED
+        else:
+            ex &= ~WS_EX_TRANSPARENT
+        user32.SetWindowLongW(hwnd, GWL_EXSTYLE, ex)
+        return
+    geo = win.geometry()
+    win.setWindowFlag(Qt.WindowTransparentForInput, enabled)
+    win.show()
+    win.setGeometry(geo)
 
 
 # === Пошук власної трансляції ===============================================
@@ -1110,7 +1191,7 @@ class SettingsPanel(QWidget):
     def _chat_card(self) -> QFrame:
         card, lay = self._card("Чат")
 
-        lay.addWidget(self._label("Мій канал"))
+        lay.addWidget(self._label("YouTube"))
         self.channel_edit = QLineEdit(self)
         self.channel_edit.setPlaceholderText("@нік, посилання на канал або UC…")
         self.channel_edit.returnPressed.connect(self._apply_channel)
@@ -1131,12 +1212,13 @@ class SettingsPanel(QWidget):
         self.kick_edit.editingFinished.connect(self._apply_extra)
         lay.addWidget(self.kick_edit)
 
-        lay.addWidget(self._label("Чат сайту"))
+        lay.addWidget(self._label("Свій чат за посиланням"))
         self.site_edit = QLineEdit(self)
-        self.site_edit.setPlaceholderText("https://…/overlay/chat?key=…")
+        self.site_edit.setPlaceholderText("не обов'язково — сторінка чату")
         self.site_edit.setToolTip(
-            "Готове посилання лежить в адмінці: Віджети → Адреси для OBS → Чат. "
-            "Мову й особистий режим (raw) програма дописує сама.")
+            "Якщо у вас свій сайт зі своїм чатом — вставте сюди посилання на "
+            "його сторінку. Для звичайних площадок це поле не потрібне: "
+            "досить назвати канал вище.")
         self.site_edit.returnPressed.connect(self._apply_site)
         self.site_edit.editingFinished.connect(self._apply_site)
         lay.addWidget(self.site_edit)
@@ -1226,6 +1308,7 @@ class SettingsPanel(QWidget):
         self.upd_status = QLabel(f"Версія {APP_VERSION}", self)
         self.upd_status.setObjectName("dim")
         self.upd_status.setWordWrap(True)
+        self.upd_status.setTextFormat(Qt.RichText)
         lay.addWidget(self.upd_status)
         return card
 
@@ -1442,10 +1525,24 @@ class UpdateBanner(QFrame):
         lay.setContentsMargins(10, 5, 6, 5)
         lay.setSpacing(6)
 
+        # Дві сходинки замість одного рядка: зверху — що саме прийшло, під ним
+        # дрібнішим — що змінилося. Раніше опис змін був лише в підказці при
+        # наведенні та в ⚙, тобто там, куди людина не дивиться, і оновлення
+        # виглядало як пропозиція «постав щось».
+        col = QVBoxLayout()
+        col.setContentsMargins(0, 0, 0, 0)
+        col.setSpacing(1)
         self.text = QLabel("", self)
         self.text.setWordWrap(True)
         self.text.setMinimumWidth(0)     # інакше QLabel вимагає ширини на весь рядок
-        lay.addWidget(self.text, 1)
+        col.addWidget(self.text)
+        self.note = QLabel("", self)
+        self.note.setWordWrap(True)
+        self.note.setMinimumWidth(0)
+        self.note.setStyleSheet("color:#d6c7e8; font:10px 'Segoe UI';")
+        self.note.hide()
+        col.addWidget(self.note)
+        lay.addLayout(col, 1)
 
         self.bar = QProgressBar(self)
         self.bar.setStyleSheet(PROGRESS_CSS)
@@ -1470,19 +1567,42 @@ class UpdateBanner(QFrame):
         self.hide()
 
     def show_release(self, rel):
-        """У смужці — тільки версія і вид оновлення.
-
-        Опис змін сюди не влазить: вікно чату вузьке, і довгий текст
-        обрізався на півслові. Повністю він видно у ⚙ («Оновлення») і в
-        підказці при наведенні.
-        """
+        """Версія, вид оновлення і — головне — що в ньому змінилося."""
         self.text.setText("Є оновлення %s · %s" % (rel.version, updater.kind_label(rel.kind)))
-        note = " ".join(rel.notes.split())
+        note = " ".join((rel.notes or "").split())
+        self._set_note(note)
         self.text.setToolTip(note)
         self.setToolTip(note)
         self.bar.hide()
+        self.go.show()
         self.go.setEnabled(True)
         self.go.setText("Оновити")
+        self.show()
+
+    def _set_note(self, text: str):
+        self.note.setText(text)
+        self.note.setVisible(bool(text))
+
+    def show_installing(self, version: str):
+        """Пояснює, чому вікно зараз зникне.
+
+        Підмінник чекає саме нашого виходу, тож програма мусить закритися — але
+        без цього рядка вона просто пропадала з екрана, і людина лишалася з
+        думкою, що оновлення її зламало.
+        """
+        self.text.setText("Ставлю оновлення %s…" % version)
+        self._set_note("Вікно зараз закриється і за кілька секунд відкриється саме.")
+        self.bar.hide()
+        self.go.setEnabled(False)
+        self.go.setText("Ставлю…")
+        self.show()
+
+    def show_updated(self, version: str, notes: str = ""):
+        """Після перезапуску: оновлення справді сталося, ось воно."""
+        self.text.setText("Оновлено до %s" % version)
+        self._set_note(" ".join((notes or "").split()))
+        self.bar.hide()
+        self.go.hide()
         self.show()
 
     def show_ready(self, rel):
@@ -1492,6 +1612,7 @@ class UpdateBanner(QFrame):
         перезапускалася: посеред стріму це щонайменше неввічливо.
         """
         self.text.setText("Оновлення %s завантажено" % rel.version)
+        self._set_note("Натисніть «Встановити» — програма перезапуститься.")
         self.bar.hide()
         self.go.setEnabled(True)
         self.go.setText("Встановити")
@@ -1508,8 +1629,10 @@ class UpdateBanner(QFrame):
             self.bar.setRange(0, 0)  # невідомий розмір — «біжуча» смужка
 
     def show_error(self, msg: str):
-        self.text.setText("Оновлення не вдалося: " + msg)
+        self.text.setText("Оновлення не вдалося")
+        self._set_note(msg)
         self.bar.hide()
+        self.go.show()
         self.go.setEnabled(True)
         self.go.setText("Ще раз")
         self.show()
@@ -1527,6 +1650,9 @@ class Overlay(QMainWindow):
         # Чат сайту: посилання з ⚙ (config.json). Порожнє, поки не вписали —
         # тоді вікно чесно каже, чого йому бракує, замість порожньої сторінки.
         self.site_url = ""
+        # Слід від щойно встановленого оновлення (пишеться перед перезапуском).
+        self.updated_to = ""
+        self.updated_notes = ""
         self.url = resolve_chat_url(url) if url else ""
         self.is_yt = is_youtube(self.url)
 
@@ -1597,7 +1723,10 @@ class Overlay(QMainWindow):
 
         self.grip = SizeGrip(self.frame, ACCENT_ACTIVE)
 
+        self._updated_banner = None
         self._load_config()
+        if self._updated_banner:
+            self.banner.show_updated(*self._updated_banner)
         if not self._cli_url and (self.twitch_channel or self.kick_channel):
             self._start_feed()
         else:
@@ -1686,7 +1815,7 @@ class Overlay(QMainWindow):
                                   % (APP_VERSION, updater.channel_label(self.channel)))
             return
         self.pending = rel
-        self.panel.set_status("Доступно: %s. Що нового: %s" % (rel.title, rel.notes or "—"))
+        self.panel.set_status(update_status_html(rel))
         self.banner.show_release(rel)
         # Панель налаштувань — окреме вікно поверх; поки вона відкрита, смужку
         # з оновленням видно погано. Ховаємо: рішення тепер приймають у ній.
@@ -1723,7 +1852,17 @@ class Overlay(QMainWindow):
                               % (self.pending.version if self.pending else ""))
 
     def install_update(self):
-        """Ставить завантажене й виходить: підмінник чекає саме виходу."""
+        """Ставить завантажене й виходить: підмінник чекає саме виходу.
+
+        Спершу показуємо, що відбувається, і лише потім закриваємось: інакше
+        натискання «Встановити» виглядає як вилітання програми.
+        """
+        if not self.downloaded:
+            return
+        self.banner.show_installing(self.pending.version if self.pending else "")
+        QTimer.singleShot(1200, self._do_install)
+
+    def _do_install(self):
         if not self.downloaded:
             return
         try:
@@ -1731,6 +1870,11 @@ class Overlay(QMainWindow):
             # Канал запам'ятовуємо ДО перезапуску: після нього це вже інша збірка,
             # і без запису вона не знала б, з якої гілки прийшла.
             self.installed_channel = self.channel
+            # Позначка «ми щойно оновлювались»: після перезапуску за нею
+            # програма скаже, що саме сталося, — інакше вона просто зникає й
+            # з'являється, і зрозуміти це неможливо.
+            self.updated_to = self.pending.version if self.pending else ""
+            self.updated_notes = self.pending.notes if self.pending else ""
             self._write_config()
             updater.install(self.downloaded, app_dir)
         except Exception as e:
@@ -2003,10 +2147,12 @@ class Overlay(QMainWindow):
 
     def showEvent(self, e):
         super().showEvent(e)
-        if not exclude_from_capture(self):
+        if IS_WINDOWS and not exclude_from_capture(self):
             print("[chat-overlay] УВАГА: не вдалося виключити з захоплення "
                   "(потрібна Windows 10 2004+/11). OBS може бачити вікно.")
         self._register_hotkey()
+        # Заставка збірки одним файлом: знімаємо її саме тут — вікно вже є.
+        close_splash()
 
     def toggle_click_through(self):
         self.click_through = not self.click_through
@@ -2016,6 +2162,14 @@ class Overlay(QMainWindow):
         self._apply_border(ACCENT_LOCKED if self.click_through else ACCENT_ACTIVE)
 
     def _register_hotkey(self):
+        """Ctrl+Alt+Space з будь-якого вікна.
+
+        Системного гарячого клавіша поза фокусом у Linux немає (це справа
+        менеджера вікон, а не програми), тому там лишається кнопка 🔓 на
+        панелі — і клік-крізь з неї вмикається так само.
+        """
+        if not IS_WINDOWS:
+            return
         try:
             user32.RegisterHotKey(_hwnd(self), HOTKEY_ID,
                                   MOD_CONTROL | MOD_ALT | MOD_NOREPEAT, VK_SPACE)
@@ -2053,6 +2207,13 @@ class Overlay(QMainWindow):
         # сильніший: ним відкривають чужий чат для налагодження.
         self.site_url = (cfg.get("siteChatUrl") or "").strip()
         self.panel.site_edit.setText(self.site_url)
+        # Ми щойно оновилися? Тоді перше, що бачить людина, — за чим саме
+        # закривалося вікно. Позначку одразу гасимо: показуємо один раз.
+        was = (cfg.get("updatedTo") or "").strip()
+        if was and updater.parse_version(APP_VERSION) >= updater.parse_version(was):
+            self._updated_banner = (APP_VERSION, cfg.get("updatedNotes") or "")
+        self.updated_to = ""
+        self.updated_notes = ""
         if not self._cli_url:
             self.url = site_chat_url(self.site_url)
             self.is_yt = False
@@ -2107,6 +2268,8 @@ class Overlay(QMainWindow):
                     "youtubeChannelId": self.yt_channel_id,
                     "myChannel": self.my_channel,
                     "siteChatUrl": self.site_url,
+                    "updatedTo": self.updated_to,
+                    "updatedNotes": self.updated_notes,
                     "chatDelay": self.chat_delay,
                     "twitchChannel": self.twitch_channel,
                     "kickChannel": self.kick_channel,
@@ -2125,10 +2288,11 @@ class Overlay(QMainWindow):
         if self.downloaded:
             updater.cleanup_downloads()
         self._write_config()
-        try:
-            user32.UnregisterHotKey(_hwnd(self), HOTKEY_ID)
-        except Exception:
-            pass
+        if IS_WINDOWS:
+            try:
+                user32.UnregisterHotKey(_hwnd(self), HOTKEY_ID)
+            except Exception:
+                pass
         # Явне прибирання — інакше вікно налаштувань (окреме верхнє вікно) та
         # дочірній QtWebEngineProcess лишають процес висіти після закриття ✕.
         try:
@@ -2151,9 +2315,19 @@ def main():
     os.environ.setdefault("QTWEBENGINE_CHROMIUM_FLAGS", "--enable-features=TranslucentWindows")
     hide_internal_folder()
     app = QApplication(sys.argv)
-    # До створення вікон: інакше перше з них з'явиться незахищеним.
-    guard = CaptureGuard(app)
-    app.installEventFilter(guard)
+    # Фільтр подій усього застосунку ставимо ТІЛЬКИ у Windows, і не з обережності.
+    #
+    # Він потрібен рівно для одного — сховати кожне нове вікно від захоплення
+    # екрана, чого поза Windows не буває. А коштує він дорого: такий фільтр
+    # викликається на КОЖНУ подію КОЖНОГО об'єкта, і PySide мусить збудувати
+    # пітонівську обгортку навіть для внутрішніх об'єктів Qt. У Linux частина
+    # їх приходить із потоків QtWebEngine — і програма падала з SIGSEGV просто
+    # у циклі подій (стек: sendThroughApplicationEventFilters →
+    # PySide::getWrapperForQObject).
+    if IS_WINDOWS:
+        # До створення вікон: інакше перше з них з'явиться незахищеним.
+        guard = CaptureGuard(app)
+        app.installEventFilter(guard)
     app.setApplicationName(APP_NAME)
     app.setApplicationDisplayName(APP_NAME)
     app.setApplicationVersion(APP_VERSION)
@@ -2166,7 +2340,9 @@ def main():
 
 
 if __name__ == "__main__":
-    if sys.platform != "win32":
-        print("Ця програма розрахована на Windows (виключення з захоплення екрана "
-              "працює лише там).")
+    if not IS_WINDOWS:
+        print("[chat-overlay] Linux: вікно НЕ ховається від захоплення — такого "
+              "вміння немає ні в X11, ні у Wayland. Знімайте в OBS не весь "
+              "екран, а гру: Window Capture (Xcomposite / PipeWire) або "
+              "obs-vkcapture. Тоді оверлей у кадр не потрапляє.")
     main()

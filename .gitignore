@@ -4,5 +4,10 @@ __pycache__/
 *.pyc
 build/
 dist/
-*.spec
+build-linux/
+dist-linux/
+# Специи PyInstaller генерирует сам при сборке по флагам — эти не нужны.
+# Hominka_one.spec, наоборот, и ЕСТЬ описание сборки (один файл, заставка,
+# отброшенные локали Chromium), и без него release.py собрать нечего.
+Hominka.spec
 profile/
