@@ -39,7 +39,14 @@ def main():
     app.setApplicationVersion(APP_VERSION)
     app.setOrganizationName(APP_AUTHOR)
     app.setWindowIcon(QIcon(resource_path(APP_ICON)))
-    app.setQuitOnLastWindowClosed(True)
+    # Виходимо разом із вікном ЧАТУ — і більше ні з чим (Overlay.closeEvent
+    # кличе quit() сам).
+    #
+    # Типове правило Qt «вийти, коли закрилося останнє вікно» тут працювало
+    # проти нас: вікно чату оголошене як Qt.Tool, а такі вікна Qt у цьому
+    # підрахунку не бачить. Виходило, що редактор CSS — єдине «справжнє» вікно
+    # програми, і його хрестик гасив увесь чат посеред ефіру.
+    app.setQuitOnLastWindowClosed(False)
     splash_text("Відкриваю чат…", 97)
     win = Overlay(url)
     win.show()

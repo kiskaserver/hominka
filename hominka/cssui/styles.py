@@ -6,9 +6,14 @@ QMainWindow, QWidget { background: #100e14; color: #e7e2df;
 /* Своя рамка замість системної — той самий фіолетовий контур, що у вікна
    чату й панелі налаштувань. */
 QWidget#root { border: 2px solid #a855f7; border-radius: 11px; }
-QPushButton#close { background: transparent; border: 0; color: #b9b3c2;
-                    font-size: 13px; }
+/* Хрестик — як у вікні чату. Padding обнуляємо навмисно: загальне правило
+   QPushButton нижче дає 6px 14px, і в кнопці 26x24 символ виштовхувало за
+   межі — закривати редактор доводилося навпомацки. */
+QPushButton#close { background: rgba(255,255,255,0.06); border: 0;
+                    border-radius: 6px; padding: 0; color: #e4e4e7;
+                    font: 12px 'Segoe UI'; }
 QPushButton#close:hover { background: #dc2626; color: #fff; }
+QPushButton#close:pressed { background: #b91c1c; }
 QPlainTextEdit { background: #1a1620; border: 1px solid rgba(255,255,255,0.08);
                  border-radius: 6px; color: #e7e2df; selection-background-color: #6d28d9; }
 QPushButton { background: rgba(255,255,255,0.07); border: 1px solid rgba(255,255,255,0.10);

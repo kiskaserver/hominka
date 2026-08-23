@@ -90,10 +90,10 @@ class UpdateBanner(QFrame):
         """
         self.pending_warning = (rel.warning or "").strip()
         self.text.setText("Є оновлення %s · %s" % (rel.version, updater.kind_label(rel.kind)))
-        note = " ".join((rel.notes or "").split())
-        self._set_note(note)
-        self.text.setToolTip(note)
-        self.setToolTip(note)
+        # Опис змін показуємо рядком під заголовком — і тільки там. Підказка
+        # виводила той самий текст ще раз, одним довгим рядком через пів
+        # екрана, варто було навести мишу на кнопку «Оновити».
+        self._set_note(" ".join((rel.notes or "").split()))
         self.bar.hide()
         self.go.show()
         self.go.setEnabled(True)
