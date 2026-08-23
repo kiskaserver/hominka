@@ -110,12 +110,20 @@ std::wstring default_dll_path() {
 int wmain(int argc, wchar_t** argv) {
     DWORD pid = 0;
     std::wstring dll_path;
+    // --check: лише сказати, чи можна сюди інжектити (guard + розрядність), не
+    // чіпаючи процес. Програмі це потрібне, щоб показати стан кнопки, не
+    // ризикуючи чужим процесом.
+    bool check_only = false;
 
     for (int i = 1; i < argc; ++i) {
         if (wcscmp(argv[i], L"--exe") == 0 && i + 1 < argc) {
             pid = find_pid_by_exe(argv[++i]);
+        } else if (wcscmp(argv[i], L"--pid") == 0 && i + 1 < argc) {
+            pid = (DWORD)wcstoul(argv[++i], nullptr, 10);
         } else if (wcscmp(argv[i], L"--dll") == 0 && i + 1 < argc) {
             dll_path = argv[++i];
+        } else if (wcscmp(argv[i], L"--check") == 0) {
+            check_only = true;
         } else {
             wchar_t* end = NULL;
             unsigned long v = wcstoul(argv[i], &end, 10);
@@ -144,7 +152,8 @@ int wmain(int argc, wchar_t** argv) {
         return EX_BLOCKED;
     }
 
-    if (!PathFileExistsW(dll_path.c_str())) {
+    // --check не інжектить, тож і DLL йому не потрібна.
+    if (!check_only && !PathFileExistsW(dll_path.c_str())) {
         log("injector: overlay.dll не знайдено поруч");
         fwprintf(stderr, L"overlay.dll not found: %ls\n", dll_path.c_str());
         return EX_ARGS;
@@ -169,6 +178,14 @@ int wmain(int argc, wchar_t** argv) {
                  target64 ? L"64-bit" : L"32-bit");
         CloseHandle(proc);
         return EX_BITNESS;
+    }
+
+    if (check_only) {
+        log("injector: --check для %ls (pid=%lu) — можна", exe, pid);
+        wprintf(L"ok: %ls (pid=%lu, %ls)\n", exe, pid,
+                (bitness_ok && target64) ? L"64-bit" : L"32-bit");
+        CloseHandle(proc);
+        return EX_OK;
     }
 
     SIZE_T bytes = (wcslen(dll_path.c_str()) + 1) * sizeof(wchar_t);

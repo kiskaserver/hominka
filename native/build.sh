@@ -7,7 +7,7 @@
 # native/dist на хості (див. native/build.ps1).
 set -e
 
-SRC="${SRC:-/native}"
+SRC="${SRC:-/src}"
 OUT="${1:-$SRC/dist}"
 mkdir -p "$OUT"
 
@@ -36,6 +36,12 @@ build() {
 
 build x86_64-w64-mingw32-g++ x64
 build i686-w64-mingw32-g++   x86
+
+# Тестовий хост (лише x64): крихітна гра-макет на DX11, щоб було в що інжектити
+# під час перевірки. У випуск не входить, тому й окремо від build().
+echo ">> x64: testhost.exe (для перевірки)"
+x86_64-w64-mingw32-g++ -O2 -s -static -municode -mwindows \
+    "$SRC/testhost/testhost.cpp" -o "$OUT/testhost-x64.exe" -ld3d11 -ldxgi
 
 echo ""
 echo "Готово. У $OUT:"

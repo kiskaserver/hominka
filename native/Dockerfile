@@ -4,9 +4,12 @@
 # готовий mingw-w64 GCC і збираємо обидві розрядності (x86 для старих ігор, x64
 # для решти). Жодного Visual Studio, жодного Windows на етапі збірки.
 #
-# Джерела в образ НЕ вкладаємо навмисно: build.ps1 монтує теку native як том і
-# збирає завжди свіжий код. Копія в образі жила б власним життям і збирала б
-# учорашнє — на цьому вже один раз згоріли.
+# Джерела ВКЛАДАЄМО в образ і компілюємо ПІД ЧАС його складання (RUN build.sh).
+# Це навмисно, і ось чому: bind-mount теки з Windows у контейнер віддає файли з
+# затримкою кешу — два docker run поспіль бачать різний вміст, і збірка тихо
+# компілює вчорашній код. COPY же атомарний: шар кешу COPY зникає рівно тоді,
+# коли джерело змінилося, тож у образі завжди свіжий код. Готові бінарі
+# витягуємо потім через docker cp (див. build.ps1) — теж без bind-mount.
 FROM debian:bookworm-slim
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -15,7 +18,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         make \
     && rm -rf /var/lib/apt/lists/*
 
-# SRC — де лежать джерела в контейнері (том монтується сюди), $1 — куди класти.
-ENV SRC=/work
-WORKDIR /work
-ENTRYPOINT ["/bin/sh", "/work/build.sh"]
+ENV SRC=/src
+COPY . /src
+RUN sh /src/build.sh /out
