@@ -430,6 +430,10 @@ class CssEditor(QMainWindow):
 
         self.preview = QWebEngineView(box)
         self.preview.setMinimumWidth(320)
+        # Прозорий фон, як у справжньому вікні чату: інакше під повідомленнями
+        # біле полотно, і людина підбирає кольори до фону, якого в кадрі немає.
+        self.preview.setAttribute(Qt.WA_TranslucentBackground, True)
+        self.preview.page().setBackgroundColor(Qt.transparent)
         # Шахівка під прозорим фоном: у OBS чат лежить поверх картинки, і
         # суцільно чорна підкладка обманювала б щодо прозорості.
         holder = QWidget(box)
