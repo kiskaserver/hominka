@@ -232,9 +232,14 @@ def main():
     print()
     print("Готово: %s%s.json → %s" % (BASE_URL, args.channel, args.version))
 
+    # Копія архіву поруч — зручність, а не частина випуску: на сервері він уже
+    # лежить. Тому невдача тут не має виглядати як провалений випуск.
     for path in uploads:
-        shutil.copy(path, os.path.join(DIST, os.path.basename(path)))
-        print("копія архіву: dist/%s" % os.path.basename(path))
+        try:
+            shutil.copy(path, os.path.join(DIST, os.path.basename(path)))
+            print("копія архіву: dist/%s" % os.path.basename(path))
+        except OSError as e:
+            print("копію в dist/ зробити не вийшло (%s) — випуск це не зачіпає" % e)
 
 
 if __name__ == "__main__":
