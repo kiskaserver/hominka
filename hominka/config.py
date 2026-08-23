@@ -42,6 +42,11 @@ class ConfigMixin:
         self.panel.site_edit.setText(self.site_url)
         self.custom_css = cfg.get("customCss") or ""
         self.keep_top = bool(cfg.get("keepTop", True))
+        if cfg.get("rtss"):
+            self.set_rtss(True)
+        self.panel.rtss.blockSignals(True)
+        self.panel.rtss.setChecked(self.rtss_on)
+        self.panel.rtss.blockSignals(False)
         self._topmost.enabled = self.keep_top
         self.panel.keep_top.blockSignals(True)
         self.panel.keep_top.setChecked(self.keep_top)
@@ -111,6 +116,7 @@ class ConfigMixin:
                     "siteChatUrl": self.site_url,
                     "customCss": self.custom_css,
                     "keepTop": self.keep_top,
+                    "rtss": self.rtss_on,
                     "updatedTo": self.updated_to,
                     "updatedNotes": self.updated_notes,
                     "chatDelay": self.chat_delay,

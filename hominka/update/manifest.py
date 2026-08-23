@@ -37,6 +37,7 @@ class Release:
     version: str = ""
     kind: str = ""
     notes: str = ""
+    warning: str = ""
     released_at: str = ""
     mandatory: bool = False
     url: str = ""
@@ -75,6 +76,7 @@ def parse_manifest(raw: bytes, channel: str) -> Release:
         version=str(data.get("version") or ""),
         kind=data.get("kind") or "",
         notes=data.get("notes") or "",
+        warning=data.get("warning") or "",
         released_at=data.get("releasedAt") or "",
         mandatory=bool(data.get("mandatory")),
         url=f.get("url") or "",

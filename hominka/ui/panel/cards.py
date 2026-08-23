@@ -165,12 +165,34 @@ class CardsMixin:
         row.addWidget(self.restore_btn)
         lay.addLayout(row)
 
+        # Дзеркало в RTSS: єдиний спосіб побачити чат у виключному
+        # повноекранному режимі без інʼєкції в гру.
+        self.rtss = QCheckBox("Дублювати чат в RTSS (текстом)", self)
+        self.rtss.setToolTip(
+            "RivaTuner Statistics Server уже вміє малювати поверх гри — ми просто "
+            "просимо його показати останні рядки чату. Без аватарок і емоутів, "
+            "зате видно навіть у виключному повноекранному режимі.")
+        self.rtss.toggled.connect(self._toggle_rtss)
+        lay.addWidget(self.rtss)
+
         self.keep_top = QCheckBox("Тримати поверх усіх вікон", self)
         self.keep_top.setToolTip(
             "У рідкісних старих іграх це дає мерехтіння — тоді вимкніть.")
         self.keep_top.toggled.connect(self.win.set_keep_top)
         lay.addWidget(self.keep_top)
         return card
+
+    def _toggle_rtss(self, on: bool):
+        """Вмикає дзеркало і чесно каже, якщо RTSS не запущено."""
+        if on and not self.win.rtss.available():
+            self.rtss.blockSignals(True)
+            self.rtss.setChecked(False)
+            self.rtss.blockSignals(False)
+            self.top_status.setText(
+                "RTSS не запущено. Це окрема безкоштовна програма (йде з MSI "
+                "Afterburner) — запустіть її і спробуйте ще раз.")
+            return
+        self.win.set_rtss(on)
 
     def set_fullscreen_state(self, info: dict):
         """Показує, що зараз попереду, простими словами."""

@@ -2,6 +2,7 @@
 
 from typing import TYPE_CHECKING
 
+from PySide6.QtCore import QTimer
 from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel, QProgressBar, QPushButton, QVBoxLayout
 
 from .. import update as updater
@@ -64,6 +65,13 @@ class UpdateBanner(QFrame):
         self.go.clicked.connect(win.on_update_button)
         lay.addWidget(self.go)
 
+        # Смужка ховається сама: побачив — і досить.
+        self._autohide = QTimer(self)
+        self._autohide.setSingleShot(True)
+        self._autohide.setInterval(25000)
+        self._autohide.timeout.connect(self.hide)
+        self.pending_warning = ""
+
         later = QPushButton("✕", self)
         later.setToolTip("Пізніше")
         later.setFixedSize(22, 22)
@@ -74,7 +82,13 @@ class UpdateBanner(QFrame):
         self.hide()
 
     def show_release(self, rel):
-        """Версія, вид оновлення і — головне — що в ньому змінилося."""
+        """Версія, вид оновлення і — головне — що в ньому змінилося.
+
+        Смужка не висить вічно: показалася, дала прочитати — і зникає. Те, що
+        оновлення є, нікуди не дінеться (⚙ → Оновлення), а рядок «оновіться»
+        поверх гри під час ефіру — це не нагадування, а нав'язування.
+        """
+        self.pending_warning = (rel.warning or "").strip()
         self.text.setText("Є оновлення %s · %s" % (rel.version, updater.kind_label(rel.kind)))
         note = " ".join((rel.notes or "").split())
         self._set_note(note)
@@ -83,12 +97,28 @@ class UpdateBanner(QFrame):
         self.bar.hide()
         self.go.show()
         self.go.setEnabled(True)
-        self.go.setText("Оновити")
+        # Випуск із попередженням не ставлять з одного кліку: спершу його
+        # треба прочитати.
+        self.go.setText("Що це?" if self.pending_warning else "Оновити")
         self.show()
+        self._autohide.start()
 
     def _set_note(self, text: str):
         self.note.setText(text)
         self.note.setVisible(bool(text))
+
+    def show_warning(self):
+        """Показує, чим саме цей випуск особливий, і питає ще раз.
+
+        Другий клік — не формальність: людина має побачити текст, а не
+        погодитися з ним наосліп.
+        """
+        self._autohide.stop()
+        self.text.setText("Перш ніж ставити")
+        self._set_note(self.pending_warning)
+        self.go.setText("Все одно встановити")
+        self.pending_warning = ""
+        self.show()
 
     def show_installing(self, version: str):
         """Пояснює, чому вікно зараз зникне.

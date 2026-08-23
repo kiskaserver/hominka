@@ -76,7 +76,10 @@ class UpdatingMixin:
         self.banner.show_progress(done, total)
 
     def on_update_button(self):
-        """Одна кнопка на два кроки: спершу завантажити, потім встановити."""
+        """Одна кнопка на кілька кроків: попередження → завантажити → встановити."""
+        if getattr(self.banner, "pending_warning", ""):
+            self.banner.show_warning()
+            return
         if self.downloaded:
             self.install_update()
         else:

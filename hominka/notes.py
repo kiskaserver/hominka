@@ -14,6 +14,9 @@ def update_status_html(rel) -> str:
     """
     head = "Доступно <b>%s</b> · %s · %s" % (
         esc(rel.version), esc(updater.channel_label(rel.channel)), esc(updater.kind_label(rel.kind)))
+    warning = " ".join((getattr(rel, "warning", "") or "").split())
+    if warning:
+        head += ("<br><span style='color:#fca5a5'>Увага: %s</span>" % esc(warning))
     items = split_notes(rel.notes)
     if not items:
         return head

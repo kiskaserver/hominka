@@ -26,7 +26,7 @@ from PySide6.QtWebEngineWidgets import QWebEngineView
 from . import feed as chatfeed
 from . import update as updater
 from .config import ConfigMixin
-from . import fullscreen, x11
+from . import fullscreen, rtss, x11
 from .paths import BASE_DIR, resource_path
 from .probe import LiveProbe
 from .sources import SourcesMixin
@@ -123,6 +123,11 @@ class Overlay(SourcesMixin, UpdatingMixin, ConfigMixin, LookMixin, QMainWindow):
         # змогу його вимкнути.
         self.keep_top = True
         self._topmost = fullscreen.TopMostKeeper(self)
+
+        # Дзеркало чату в OSD RTSS — єдиний спосіб побачити чат у виключному
+        # повноекранному режимі, не лізучи в чужий процес (див. rtss.py).
+        self.rtss_on = False
+        self.rtss = rtss.ChatMirror()
 
     def _build_window(self):
         """Рамка без системного заголовка: смужка, смужка оновлення, куточок."""
@@ -374,6 +379,14 @@ class Overlay(SourcesMixin, UpdatingMixin, ConfigMixin, LookMixin, QMainWindow):
             return
         self.panel.set_fullscreen_state(fullscreen.state())
 
+    def set_rtss(self, on: bool):
+        """Вмикає дублювання чату в OSD RTSS."""
+        self.rtss_on = bool(on) and self.rtss.set_enabled(bool(on))
+        if not on:
+            self.rtss.set_enabled(False)
+        self.save_config()
+        return self.rtss_on
+
     def set_keep_top(self, on: bool):
         self.keep_top = bool(on)
         self._topmost.enabled = self.keep_top
@@ -390,6 +403,9 @@ class Overlay(SourcesMixin, UpdatingMixin, ConfigMixin, LookMixin, QMainWindow):
         return fullscreen.restore(fullscreen.changed_window())
 
     def closeEvent(self, e):
+        # Слот OSD чужий, і лишати в ньому свій текст після виходу не можна:
+        # RTSS показуватиме його доти, доки сам не перезапуститься.
+        self.rtss.stop()
         self._stop_readers()
         # Завантажене, але не встановлене оновлення — 220 МБ у тимчасовій теці.
         # Якщо людина закриває програму, не поставивши його, тримати файл

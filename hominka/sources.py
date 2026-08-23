@@ -173,6 +173,10 @@ class SourcesMixin:
         self.readers = []
 
     def _on_chat_event(self, event: dict):
+        # Копія в OSD RTSS, якщо його ввімкнено (див. rtss.py). Робимо це до
+        # стрічки: там подія може затриматися, а в OSD затримка ні до чого.
+        if getattr(self, "rtss_on", False):
+            self.rtss.push(event)
         if self.mode == "feed" and self.feed is not None:
             self.feed.push(event)
 

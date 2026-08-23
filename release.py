@@ -193,6 +193,8 @@ def main():
     ap.add_argument("--notes", required=True, help="що змінилося — це побачить користувач")
     ap.add_argument("--mandatory", action="store_true",
                     help="ставити наполегливо (для термінових виправлень)")
+    ap.add_argument("--warning", default="",
+                    help="попередження, яке людина мусить прочитати ПЕРЕД встановленням")
     ap.add_argument("--no-build", action="store_true", help="взяти вже зібране в dist/")
     ap.add_argument("--linux-zip", default="",
                     help="готовий архів для Linux; за замовчуванням збираємо самі в контейнері")
@@ -212,6 +214,8 @@ def main():
         "releasedAt": date.today().isoformat(),
         "notes": args.notes,
     }
+    if args.warning:
+        manifest["warning"] = args.warning
 
     uploads = []          # (локальний файл, ім'я на сервері)
     files = []            # записи для маніфесту
