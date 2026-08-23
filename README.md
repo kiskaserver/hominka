@@ -231,29 +231,37 @@ python chat_overlay.py https://stream.example.com/overlay/chat?key=...
 ## Як розкладено код
 
 ```
-chat_overlay.py        точка входу і більше нічого
+chat_overlay.py          точка входу і більше нічого
 hominka/
-  app.py               запуск: QApplication, головне вікно
-  overlay.py           саме вікно чату: джерела, налаштування, оновлення
-  ui/panel.py          панель ⚙
-  ui/banner.py         смужка «є оновлення»
-  ui/chrome.py         смужка перетягування і куточок розміру
-  winapi.py            невидимість для OBS, клік-крізь, гаряча клавіша
-  styles.py            оформлення вікна і панелі
-  ytinject.py          JS, який вставляємо в чат YouTube
-  urls.py              розбір посилань і адрес каналів
-  probe.py             пошук власного ефіру на YouTube
-  chatfeed.py          спільна стрічка (сторінка, куди зливаються площадки)
-  chatsources.py       спільний вигляд повідомлення
-  chat_twitch/kick/youtube.py   читачі площадок
-  css_editor.py        вікно «свій CSS»
-  updater.py           оновлення з update.svitix.com
-  signing.py           перевірка підпису випуску (Ed25519)
+  app.py                 запуск: QApplication, головне вікно
+  overlay.py             вікно чату: рамка, геометрія, показ сторінки
+  sources.py             звідки береться чат (площадки, стрічка, ефір)
+  updating.py            перевірка, завантаження і встановлення оновлення
+  config.py              config.json: що зберігаємо і як читаємо
+  look.py                прозорість, кегль, клік-крізь
+  winapi.py              невидимість для OBS, гаряча клавіша
+  urls.py                розбір посилань і адрес каналів
+  probe.py               пошук власного ефіру на YouTube
+  styles.py              оформлення вікна і панелі
+  notes.py, splash.py, paths.py, webprofile.py, version.py
+  ui/
+    panel/               панель ⚙: каркас, картки, дрібні віджети
+    banner.py            смужка «є оновлення»
+    chrome.py            смужка перетягування і куточок розміру
+  feed/                  спільна стрічка: page.py (верстка) + feed.py (черга)
+  yt/                    JS, який вставляємо в чат YouTube (по файлу на вставку)
+  youtube/               читач YouTube: net, session, parse, reader
+  chat_twitch.py, chat_kick.py, chatsources.py
+  cssui/                 вікно «свій CSS»: editor, codeedit, validator, catalog
+  update/                оновлення: channels, manifest, download, install
+  signing.py             перевірка підпису випуску (Ed25519)
 ```
 
 Раніше все, крім читачів, лежало в одному файлі на 2400 рядків: щоб знайти,
 звідки береться чат, доводилося гортати повз чотириста рядків CSS і чужий
-JavaScript для YouTube. Тепер найбільший файл — саме вікно чату.
+JavaScript для YouTube. Тепер найбільший файл — саме вікно чату (≈380 рядків),
+решта менша за 300. Правило просте: файл описує ОДНУ тему, і якщо в ньому
+з'явилася друга — час різати.
 
 ## Свій CSS для чату
 

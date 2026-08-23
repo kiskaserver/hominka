@@ -2,7 +2,7 @@
 
 import re
 
-from . import updater
+from . import update as updater
 
 
 def update_status_html(rel) -> str:

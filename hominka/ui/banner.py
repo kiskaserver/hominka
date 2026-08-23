@@ -4,7 +4,7 @@ from typing import TYPE_CHECKING
 
 from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel, QProgressBar, QPushButton, QVBoxLayout
 
-from .. import updater
+from .. import update as updater
 from ..styles import BTN_CSS, PROGRESS_CSS
 
 if TYPE_CHECKING:                      # тільки для підказок типів
