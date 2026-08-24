@@ -129,6 +129,9 @@ class SourcesMixin:
             self.mode = "web"
             self.url = url
             self._show_url()
+        # Оверлей у грі має показувати те саме джерело.
+        if getattr(self, "game_overlay", None) is not None:
+            self._sync_game_source()
 
     def _show_url(self):
         """Відкриває поточне посилання або пояснює, чого бракує.
@@ -163,6 +166,9 @@ class SourcesMixin:
         # Назву оновлюємо ПІСЛЯ читачів: до цього active_sources() ще не знає,
         # звідки саме береться чат.
         self.bar.title.setText(self._title_for())
+        # Оверлей у грі — на ту саму стрічку.
+        if getattr(self, "game_overlay", None) is not None:
+            self._sync_game_source()
 
     def _add_reader(self, reader):
         reader.event.connect(self._on_chat_event)

@@ -19,11 +19,13 @@ import struct
 import zlib
 from ctypes import wintypes
 
-from PySide6.QtCore import Qt, QTimer, QObject
+from PySide6.QtCore import Qt, QTimer, QUrl, QObject
 from PySide6.QtGui import QImage
+from PySide6.QtWebEngineCore import QWebEnginePage
 from PySide6.QtWebEngineWidgets import QWebEngineView
 
 from . import feed as chatfeed
+from .yt import YT_ALL_MESSAGES_JS, YT_MENTIONS_JS, YT_REACTIONS_JS, YT_STYLE_JS
 
 
 def _diag(msg: str):
@@ -215,6 +217,8 @@ class GameOverlay(QObject):
     IDLE_MS = 1000          # коли нічого не відбувається — знімаємо рідко
     BUSY_MS = 180           # після події деякий час знімаємо часто (анімація появи)
     BUSY_WINDOW = 2.5       # скільки секунд лишатися «активними» після події
+    WEB_MS = 300            # веб-режим: подій нема, сторінка оновлюється сама —
+                            # знімаємо рівним темпом, щоб не проґавити нове
 
     def __init__(self, win):
         # Без батька-QObject: час життя нам задає сам Overlay (кличе close()),
@@ -233,6 +237,13 @@ class GameOverlay(QObject):
         self._in_tick = False
         self._pushed = 0
         self._content_logged = False
+        # Що показуємо: "feed" — спільна стрічка (події через push), "web" —
+        # та сама сторінка, що й головне вікно (сайт-чат чи YouTube), яка сама
+        # малює повідомлення. Головне вікно буває і в тому, і в тому режимі, а
+        # чат у грі має показувати те саме, що бачить стрімер.
+        self.mode = "feed"
+        self.web_url = ""
+        self.is_yt = False
 
         self.writer = SharedFrameWriter()
 
@@ -244,6 +255,12 @@ class GameOverlay(QObject):
                                  Qt.WindowDoesNotAcceptFocus)
         self.view.setAttribute(Qt.WA_TranslucentBackground, True)
         self.view.setAttribute(Qt.WA_ShowWithoutActivating, True)
+        # Той самий профіль браузера, що й головне вікно: у веб-режимі це дає
+        # спільні куки й згоду YouTube — інакше офскрин-сторінка впиралася б у
+        # банер згоди й чату не показала б.
+        profile = getattr(win, "profile", None)
+        if profile is not None:
+            self.view.setPage(QWebEnginePage(profile, self.view))
         self.view.page().setBackgroundColor(Qt.transparent)
         self.view.resize(360, 560)
 
@@ -265,16 +282,43 @@ class GameOverlay(QObject):
         if self.enabled:
             self.view.move(-4000, -4000)
             self.view.show()
-            self.feed.load()
+            self._load_current()
             self._busy_until = _now() + self.BUSY_WINDOW
             self._timer.start(self.BUSY_MS)
-            _diag("увімкнено, розмір вікна %dx%d" % (self.view.width(), self.view.height()))
+            _diag("увімкнено, режим=%s url=%s розмір вікна %dx%d"
+                  % (self.mode, self.web_url or "-", self.view.width(), self.view.height()))
         else:
             # Спершу глушимо таймер — щоб жоден відкладений _tick не записав
             # кадр із enabled=1 уже ПІСЛЯ того, як ми вимкнули чат.
             self._timer.stop()
             self.writer.set_enabled(False)
             self.view.hide()
+
+    def set_source(self, mode: str, url: str, is_yt: bool):
+        """Показувати те саме, що й головне вікно: спільну стрічку або сторінку.
+
+        Головне вікно працює або в режимі стрічки (події через push), або
+        відкриває сторінку чату (сайт/YouTube), яка малює повідомлення сама.
+        Чат у грі має віддзеркалювати саме поточний режим — інакше у веб-режимі
+        (а він типовий) оверлей лишався б порожнім: подій до нього не доходить.
+        """
+        changed = (mode != self.mode) or (url != self.web_url)
+        self.mode = mode
+        self.web_url = url or ""
+        self.is_yt = bool(is_yt)
+        if self.enabled and changed:
+            self._load_current()
+
+    def _load_current(self):
+        """Завантажує в приховане вікно поточне джерело."""
+        self._content_logged = False
+        self._last_crc = 0
+        if self.mode == "feed":
+            self.feed.load()
+        elif self.web_url:
+            self.view.load(QUrl(self.web_url))
+        else:
+            self.feed.load()   # немає url — хоч порожня стрічка, а не біла сторінка
 
     def set_geometry(self, anchor: str, margin_x: int, margin_y: int, opacity: int):
         self.anchor = ANCHOR.get(anchor, 0)
@@ -301,8 +345,9 @@ class GameOverlay(QObject):
         self._wake()
 
     def push(self, event: dict):
-        """Та сама подія, що пішла в головне вікно."""
-        if not self.enabled:
+        """Подія спільної стрічки. У веб-режимі сторінка малює чат сама, тож
+        події їй не потрібні (і не приходять)."""
+        if not self.enabled or self.mode != "feed":
             return
         self._pushed += 1
         if self._pushed == 1:
@@ -317,12 +362,37 @@ class GameOverlay(QObject):
 
     # --- внутрішнє ---
     def _on_loaded(self, ok: bool):
-        if ok:
+        if not ok:
+            return
+        if self.mode == "feed":
             self.feed.on_loaded()
+            _diag("стрічку завантажено (feed)")
+            return
+        # Веб-режим: та сама обробка, що й у головному вікні — свій CSS, а для
+        # YouTube ще й прозорий стиль, показ усіх повідомлень, підсвітка звертань
+        # і панель реакцій. Інакше офскрин-YouTube виглядав би не як чат.
+        page = self.view.page()
+        if self.feed.custom_css:
+            page.runJavaScript(chatfeed.apply_css_js(self.feed.custom_css))
+        if self.is_yt:
+            page.runJavaScript(YT_STYLE_JS)
+            page.runJavaScript(YT_ALL_MESSAGES_JS)
+            page.runJavaScript(YT_MENTIONS_JS)
+            page.runJavaScript(YT_REACTIONS_JS)
+        _diag("сторінку завантажено (web), yt=%s" % self.is_yt)
+        self._wake()
 
     def _wake(self):
-        """Була подія — знімаємо частіше найближчі кілька секунд."""
+        """Була подія — знімаємо частіше найближчі кілька секунд.
+
+        У веб-режимі подій нема, тож переходимо на рівний веб-темп (сторінка
+        оновлюється сама, і треба стабільно її знімати).
+        """
         if not self.enabled:
+            return
+        if self.mode != "feed":
+            if self._timer.interval() != self.WEB_MS:
+                self._timer.start(self.WEB_MS)
             return
         self._busy_until = _now() + self.BUSY_WINDOW
         if self._timer.interval() != self.BUSY_MS:
@@ -360,7 +430,7 @@ class GameOverlay(QObject):
             # чи офскрин-вікно справді намалювало чат, чи віддає прозору пустку
             # (тоді проблема в рендері вікна, а не в подіях). Перший кадр не
             # рахуємо — він порожній за визначенням (сторінка щойно завантажилась).
-            if not self._content_logged and self._pushed > 0:
+            if not self._content_logged and (self._pushed > 0 or self._heartbeat >= 3):
                 self._content_logged = True
                 nb = 0
                 step = max(1, img.width() // 90)
@@ -373,7 +443,9 @@ class GameOverlay(QObject):
                       % (img.width(), img.height(), nb, self.writer.target_pid, self._heartbeat))
 
         # Тихо стало — переходимо на рідкі знімки, щоб не молоти вхолосту.
-        if _now() > self._busy_until and self._timer.interval() != self.IDLE_MS:
+        # У веб-режимі темп рівний (WEB_MS) — там нема подій, які «розбудять».
+        if self.mode == "feed" and _now() > self._busy_until \
+                and self._timer.interval() != self.IDLE_MS:
             self._timer.start(self.IDLE_MS)
 
 

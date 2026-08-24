@@ -415,6 +415,16 @@ class Overlay(SourcesMixin, UpdatingMixin, ConfigMixin, LookMixin, QMainWindow):
                                            self.game_margin_y, self.game_opacity)
         return self.game_overlay
 
+    def _sync_game_source(self):
+        """Каже оверлею гри показувати те саме джерело, що й головне вікно.
+
+        Головне вікно буває в режимі стрічки (події) або відкриває сторінку
+        чату (сайт/YouTube). Без цього оверлей у грі знав лише про стрічку — а
+        у веб-режимі до нього не доходило нічого, і чат був порожній.
+        """
+        if self.game_overlay is not None:
+            self.game_overlay.set_source(self.mode, self.url, self.is_yt)
+
     def set_game_overlay(self, on: bool):
         """Вмикає/вимикає продюсера кадру чату для гри.
 
@@ -425,7 +435,9 @@ class Overlay(SourcesMixin, UpdatingMixin, ConfigMixin, LookMixin, QMainWindow):
             on = False
         self.game_on = bool(on)
         if self.game_on:
-            self._ensure_game_overlay().set_enabled(True)
+            ov = self._ensure_game_overlay()
+            ov.set_source(self.mode, self.url, self.is_yt)
+            ov.set_enabled(True)
         elif self.game_overlay is not None:
             self.game_overlay.set_enabled(False)
         self.save_config()
