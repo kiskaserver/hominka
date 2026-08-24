@@ -48,7 +48,9 @@ class SharedFrameWriter:
     def __init__(self):
         self._h = None
         self._view = None
+        self._mutex = None
         self._seq = 0
+        self.target_pid = 0     # 0 = будь-який процес; ставить set_target()
         self.conflict = False
         if not _IS_WINDOWS:
             return
@@ -57,6 +59,8 @@ class SharedFrameWriter:
         k32.CreateFileMappingW.argtypes = [
             wintypes.HANDLE, wintypes.LPVOID, wintypes.DWORD,
             wintypes.DWORD, wintypes.DWORD, wintypes.LPCWSTR]
+        k32.CreateMutexW.restype = wintypes.HANDLE
+        k32.CreateMutexW.argtypes = [wintypes.LPVOID, wintypes.BOOL, wintypes.LPCWSTR]
         k32.MapViewOfFile.restype = wintypes.LPVOID
         k32.MapViewOfFile.argtypes = [
             wintypes.HANDLE, wintypes.DWORD, wintypes.DWORD,
@@ -66,21 +70,27 @@ class SharedFrameWriter:
         k32.UnmapViewOfFile.argtypes = [wintypes.LPVOID]
         k32.CloseHandle.argtypes = [wintypes.HANDLE]
 
+        # «Інший продюсер вже пише» ловимо ІМЕНОВАНИМ МЮТЕКСОМ, а не тим, що
+        # мапінг уже існує. Мапінг тримає живим і ЧИТАЧ — наша ж DLL у будь-якій
+        # грі, куди її вклали. Тобто поки хоч одна гра з оверлеєм відкрита,
+        # CreateFileMapping завжди каже «вже існує», і перевірка через це
+        # помилково вважала б конфліктом навіть єдину копію Hominka (саме через
+        # це чат і не малювався). Мютекс же чіпає лише продюсер.
+        ERROR_ALREADY_EXISTS = 183
+        self._mutex = k32.CreateMutexW(None, False, "Local\\HominkaOverlayProducer")
+        if self._mutex and k32.GetLastError() == ERROR_ALREADY_EXISTS:
+            self.conflict = True
+            k32.CloseHandle(self._mutex)
+            self._mutex = None
+            return
+
         INVALID = wintypes.HANDLE(-1)
         PAGE_READWRITE = 0x04
+        # Мапінг може вже існувати через читача — це нормально: ми відкриваємо
+        # ТУ САМУ памʼять і пишемо в неї, DLL читає наші кадри.
         self._h = k32.CreateFileMappingW(INVALID, None, PAGE_READWRITE,
                                          0, TOTAL, SHM_NAME)
-        # GetLastError одразу після виклику: імʼя одне на систему, і якщо мапінг
-        # уже існує (183), значить інша копія Hominka вже пише кадр. Двоє в один
-        # буфер — миготіння й каша. Не займаємо його, а чесно кажемо про конфлікт.
-        ERROR_ALREADY_EXISTS = 183
-        err = k32.GetLastError()
-        self.conflict = bool(self._h) and err == ERROR_ALREADY_EXISTS
         if not self._h:
-            return
-        if self.conflict:
-            k32.CloseHandle(self._h)
-            self._h = None
             return
         FILE_MAP_ALL_ACCESS = 0xF001F
         self._view = k32.MapViewOfFile(self._h, FILE_MAP_ALL_ACCESS, 0, 0, TOTAL)
@@ -90,6 +100,14 @@ class SharedFrameWriter:
 
     def ok(self) -> bool:
         return bool(self._view)
+
+    def set_target(self, pid: int):
+        """Процес, у якому дозволено малювати чат (0 = будь-який)."""
+        self.target_pid = int(pid) & 0xFFFFFFFF
+        if self._view:
+            self._begin()
+            struct.pack_into("<I", self._buf, 48, self.target_pid)
+            self._commit_header()
 
     def set_enabled(self, on: bool):
         """Показати/сховати чат у грі, не чіпаючи самого кадру."""
@@ -131,10 +149,11 @@ class SharedFrameWriter:
             return
 
         buf = bytearray(HEADER_SIZE)
-        struct.pack_into("<IIIIIIIiiIII", buf, 0,
+        struct.pack_into("<IIIIIIIiiIIII", buf, 0,
                          MAGIC, VERSION, 0,           # seq заповнимо навколо запису
                          w, h, stride, anchor,
-                         margin_x, margin_y, opacity & 0xFF, 1, heartbeat & 0xFFFFFFFF)
+                         margin_x, margin_y, opacity & 0xFF, 1, heartbeat & 0xFFFFFFFF,
+                         self.target_pid & 0xFFFFFFFF)
         self._buf = buf
 
         # seqlock: непарне → дані → заголовок з парним seq.
@@ -163,6 +182,9 @@ class SharedFrameWriter:
         if self._h:
             k32.CloseHandle(self._h)
             self._h = None
+        if self._mutex:
+            k32.CloseHandle(self._mutex)   # звільняє «продюсер активний»
+            self._mutex = None
 
 
 class GameOverlay(QObject):
@@ -243,6 +265,10 @@ class GameOverlay(QObject):
     def set_size(self, w: int, h: int):
         self.view.resize(max(80, min(MAX_W, w)), max(60, min(MAX_H, h)))
         self._last_crc = 0
+
+    def set_target(self, pid: int):
+        """Малювати чат лише у цій грі (0 = будь-де). Ставиться після інʼєкції."""
+        self.writer.set_target(pid)
 
     def set_custom_css(self, css: str):
         self.feed.set_custom_css(css or "")

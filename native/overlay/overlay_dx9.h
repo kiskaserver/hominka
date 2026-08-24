@@ -6,9 +6,11 @@
 // ній EndScene, ми перехоплюємо кадр будь-якого пристрою гри.
 //
 // Малюємо фіксованим конвеєром (без шейдерів): текстура A8R8G8B8 (у памʼяті це
-// ті самі BGRA, що дає Python) і два трикутники з екранними координатами. Стан
-// пристрою зберігаємо блоком стану й повертаємо назад — гра не має помітити, що
-// ми лізли в її рендер.
+// ті самі BGRA, що дає Python) і два трикутники з екранними координатами.
+// Зберігаємо й повертаємо рівно той стан рендера, який чіпаємо, — Get перед,
+// Set після. Саме «рівно той»: блок стану (CreateStateBlock) тут не можна, його
+// заборонено викликати між BeginScene і EndScene, і на справжній грі це вішало
+// драйвер (див. blit).
 #pragma once
 
 #include <windows.h>
@@ -34,6 +36,9 @@ public:
         FrameView f;
         bool got = reader_.read(&f);
         if (got) {
+            // Малюємо лише у процесі-цілі: інакше чат зʼявився б у кожному
+            // вікні, куди DLL випадково потрапила.
+            if (f.target_pid && f.target_pid != GetCurrentProcessId()) return;
             if (!f.enabled) { enabled_ = false; return; }
             enabled_ = true;
             // Перезаливаємо і коли текстури немає: після Reset пристрою (зміна
@@ -52,17 +57,15 @@ public:
 
     void release() {
         release_texture();
-        if (block_) { block_->Release(); block_ = nullptr; }
         reader_.close();
         ready_ = false;
     }
 
     // Перед Reset пристрою (зміна роздільної здатності/режиму) ресурси
-    // D3DPOOL_DEFAULT і блоки стану стають недійсними — звільняємо їх, а
-    // текстура пересоздасться сама на наступному кадрі.
+    // D3DPOOL_DEFAULT стають недійсними — звільняємо текстуру, вона пересоздасться
+    // сама на наступному кадрі.
     void on_lost() {
         release_texture();
-        if (block_) { block_->Release(); block_ = nullptr; }
     }
 
 private:
@@ -111,14 +114,40 @@ private:
             default:                  x = (float)last_.margin_x; y = (float)last_.margin_y; break;
         }
 
-        // Стан пристрою зберігаємо цілком і повернемо після себе — одним і тим
-        // самим блоком (створити його щокадру було б помітно дорого): Capture
-        // записує поточний стан, Apply повертає його наприкінці.
-        if (!block_) device->CreateStateBlock(D3DSBT_ALL, &block_);
-        if (block_) block_->Capture();
+        // Зберігаємо і повертаємо ЛИШЕ той стан, який чіпаємо. Раніше тут був
+        // CreateStateBlock — а його НЕ МОЖНА викликати між BeginScene і
+        // EndScene (а ми саме там), і на справжній грі це вішало драйвер
+        // намертво (порожній тест-хост це пробачав, L4D2 — ні).
+        IDirect3DVertexShader9* oldVS = nullptr; device->GetVertexShader(&oldVS);
+        IDirect3DPixelShader9* oldPS = nullptr; device->GetPixelShader(&oldPS);
+        IDirect3DBaseTexture9* oldTex = nullptr; device->GetTexture(0, &oldTex);
+        DWORD oldFVF = 0; device->GetFVF(&oldFVF);
 
-        float a = last_.opacity / 255.0f;
-        DWORD alpha = (DWORD)(a * 255.0f) & 0xFF;
+        struct RS { D3DRENDERSTATETYPE s; DWORD v; };
+        RS rs[] = {
+            {D3DRS_LIGHTING,0},{D3DRS_ZENABLE,0},{D3DRS_CULLMODE,0},
+            {D3DRS_ALPHABLENDENABLE,0},{D3DRS_SRCBLEND,0},{D3DRS_DESTBLEND,0},
+            {D3DRS_ALPHATESTENABLE,0},{D3DRS_FOGENABLE,0},{D3DRS_STENCILENABLE,0},
+            {D3DRS_SCISSORTESTENABLE,0},{D3DRS_COLORWRITEENABLE,0},
+            {D3DRS_SRGBWRITEENABLE,0},{D3DRS_TEXTUREFACTOR,0},{D3DRS_SHADEMODE,0},
+        };
+        for (auto& r : rs) device->GetRenderState(r.s, &r.v);
+
+        struct TS { D3DTEXTURESTAGESTATETYPE s; DWORD v; };
+        TS ts[] = {
+            {D3DTSS_COLOROP,0},{D3DTSS_COLORARG1,0},
+            {D3DTSS_ALPHAOP,0},{D3DTSS_ALPHAARG1,0},{D3DTSS_ALPHAARG2,0},
+        };
+        for (auto& t : ts) device->GetTextureStageState(0, t.s, &t.v);
+
+        struct SS { D3DSAMPLERSTATETYPE s; DWORD v; };
+        SS ss[] = {
+            {D3DSAMP_MINFILTER,0},{D3DSAMP_MAGFILTER,0},
+            {D3DSAMP_ADDRESSU,0},{D3DSAMP_ADDRESSV,0},
+        };
+        for (auto& s : ss) device->GetSamplerState(0, s.s, &s.v);
+
+        DWORD alpha = last_.opacity & 0xFF;
 
         device->SetPixelShader(nullptr);
         device->SetVertexShader(nullptr);
@@ -136,7 +165,7 @@ private:
         device->SetRenderState(D3DRS_SCISSORTESTENABLE, FALSE);
         device->SetRenderState(D3DRS_COLORWRITEENABLE, 0x0F);
         device->SetRenderState(D3DRS_SRGBWRITEENABLE, FALSE);
-        // Загальну прозорість домішуємо через TFACTOR × текстура.
+        device->SetRenderState(D3DRS_SHADEMODE, D3DSHADE_GOURAUD);
         device->SetRenderState(D3DRS_TEXTUREFACTOR, D3DCOLOR_ARGB(alpha, 255, 255, 255));
         device->SetTextureStageState(0, D3DTSS_COLOROP, D3DTOP_SELECTARG1);
         device->SetTextureStageState(0, D3DTSS_COLORARG1, D3DTA_TEXTURE);
@@ -158,7 +187,18 @@ private:
         };
         device->DrawPrimitiveUP(D3DPT_TRIANGLESTRIP, 2, v, sizeof(D3D9Vertex));
 
-        if (block_) block_->Apply();
+        // Повертаємо все як було.
+        for (auto& r : rs) device->SetRenderState(r.s, r.v);
+        for (auto& t : ts) device->SetTextureStageState(0, t.s, t.v);
+        for (auto& s : ss) device->SetSamplerState(0, s.s, s.v);
+        device->SetFVF(oldFVF);
+        device->SetTexture(0, oldTex);
+        device->SetVertexShader(oldVS);
+        device->SetPixelShader(oldPS);
+        // Get* додає посилання — знімаємо їх.
+        if (oldTex) oldTex->Release();
+        if (oldVS) oldVS->Release();
+        if (oldPS) oldPS->Release();
     }
 
     void release_texture() {
@@ -169,7 +209,6 @@ private:
 
     SharedFrameReader reader_;
     IDirect3DTexture9* tex_ = nullptr;
-    IDirect3DStateBlock9* block_ = nullptr;
     uint32_t tex_w_ = 0, tex_h_ = 0, tex_seq_ = 0;
     bool enabled_ = false;
     bool ready_ = false;

@@ -34,6 +34,9 @@ public:
             // якщо він у нас уже є.
             if (tex_seq_ == 0 || !tex_enabled_) return;
         } else {
+            // Малюємо лише у процесі-цілі: інакше чат зʼявився б у кожному
+            // вікні, куди DLL випадково потрапила.
+            if (f.target_pid && f.target_pid != GetCurrentProcessId()) return;
             if (!f.enabled) { tex_enabled_ = false; return; }
             tex_enabled_ = true;
             if (f.seq != tex_seq_ || f.width != tex_w_ || f.height != tex_h_) {

@@ -436,6 +436,10 @@ class Overlay(SourcesMixin, UpdatingMixin, ConfigMixin, LookMixin, QMainWindow):
         res = inject.inject(hwnd)
         if res.ok:
             self.set_game_overlay(True)
+            # Малювати чат лише в цій грі — щоб він не зʼявився в іншому вікні,
+            # куди DLL могла потрапити раніше.
+            if self.game_overlay is not None:
+                self.game_overlay.set_target(res.pid)
         return res
 
     def set_game_geometry(self, anchor: str, margin_x: int, margin_y: int, opacity: int):

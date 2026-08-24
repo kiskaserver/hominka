@@ -54,7 +54,10 @@ struct SharedFrameHeader {
     uint32_t opacity;     // 0..255 — загальна прозорість поверх альфи кадру
     uint32_t enabled;     // 0 = не малювати (чат сховано)
     uint32_t heartbeat;   // Python збільшує щопису: DLL бачить, що продюсер живий
-    uint32_t reserved[4];
+    uint32_t target_pid;  // малює лише процес із цим PID (0 = будь-який). Так чат
+                          // не зʼявляється у сторонньому вікні, куди DLL потрапила
+                          // випадково (напр. інший процес зі списку).
+    uint32_t reserved[3];
 };
 #pragma pack(pop)
 

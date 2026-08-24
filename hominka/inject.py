@@ -75,10 +75,11 @@ def _target_is_64(pid: int) -> bool:
 
 
 class Result:
-    def __init__(self, code: int, message: str):
+    def __init__(self, code: int, message: str, pid: int = 0):
         self.code = code
         self.ok = code == EX_OK
         self.message = message
+        self.pid = pid          # PID гри — щоб малювати чат лише в ній
 
 
 def inject(hwnd: int) -> Result:
@@ -111,7 +112,7 @@ def inject(hwnd: int) -> Result:
             continue
         code = proc.returncode
         if code == EX_OK:
-            return Result(EX_OK, "Чат у грі увімкнено.")
+            return Result(EX_OK, "Чат у грі увімкнено.", pid)
         if code == EX_BLOCKED:
             return Result(EX_BLOCKED,
                           "Ця гра із захистом від сторонніх програм (античит) — "
