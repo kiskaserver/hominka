@@ -335,10 +335,12 @@ DWORD WINAPI init_thread(LPVOID) {
             if (dxgi && GetModuleHandleW(L"d3d12.dll")) install_d3d12_queue_hook();
         }
         if (!d9 && d9_mod) d9 = install_d3d9_hook();           // DX9
-        // OpenGL і Vulkan поки не малюємо за замовчуванням: рендер готовий, але
-        // в OpenGL лишається рідкісний нестабільний краш у драйвері, і виставляти
-        // його стрімерам не можна. Вмикається для випробувань змінною HOMINKA_GL.
-        if (!gl && gl_mod && getenv("HOMINKA_GL")) gl = install_gl_hook();
+        // OpenGL малюємо за замовчуванням: колишній рідкісний краш був не в
+        // драйвері, а в самій підміні гарячого wglSwapBuffers (гонка з потоком
+        // рендера) — тепер вона робиться під заморозкою потоків, тож безпечно.
+        // На контексті core-профілю чесно не малюємо (фіксований конвеєр там
+        // заборонено), але й не валимо гру. Vulkan поки за прапорцем.
+        if (!gl && gl_mod) gl = install_gl_hook();
         if (!vk && vk_mod && getenv("HOMINKA_VK")) vk = install_vk_hook();
         // Досить, коли все застосовне поставлено і хоч один хук стоїть.
         bool done = (dxgi || !dxgi_mod) && (d9 || !d9_mod) &&

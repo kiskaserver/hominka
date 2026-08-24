@@ -47,6 +47,10 @@ echo ">> x64: testhost-dx12.exe (для перевірки DX12)"
 x86_64-w64-mingw32-g++ -O2 -s -static -municode -mwindows \
     "$SRC/testhost/testhost_dx12.cpp" -o "$OUT/testhost-dx12-x64.exe" -ld3d12 -ldxgi
 
+echo ">> x64: testhost-gl.exe (для перевірки OpenGL)"
+x86_64-w64-mingw32-g++ -O2 -s -static -municode -mwindows \
+    "$SRC/testhost/testhost_gl.cpp" -o "$OUT/testhost-gl-x64.exe" -lopengl32 -lgdi32
+
 echo ""
 echo "Готово. У $OUT:"
 ls -la "$OUT"

@@ -22,6 +22,21 @@
 #ifndef GL_CURRENT_PROGRAM
 #define GL_CURRENT_PROGRAM 0x8B8D
 #endif
+#ifndef GL_CONTEXT_PROFILE_MASK
+#define GL_CONTEXT_PROFILE_MASK 0x9126
+#endif
+#ifndef GL_CONTEXT_CORE_PROFILE_BIT
+#define GL_CONTEXT_CORE_PROFILE_BIT 0x00000001
+#endif
+#ifndef GL_VERTEX_ARRAY_BINDING
+#define GL_VERTEX_ARRAY_BINDING 0x85B5
+#endif
+#ifndef GL_ACTIVE_TEXTURE
+#define GL_ACTIVE_TEXTURE 0x84E0
+#endif
+#ifndef GL_TEXTURE0
+#define GL_TEXTURE0 0x84C0
+#endif
 
 namespace hominka {
 
@@ -86,6 +101,23 @@ private:
     }
 
     void blit() {
+        // Ключове для стабільності в СУЧАСНИХ GL-іграх (саме тут був
+        // випадковий краш у драйвері вже після нашого малювання):
+        //
+        // 1. Core-профіль. Якщо гра створила контекст core-профілю, режим
+        //    негайного малювання (glBegin/glOrtho/фіксований конвеєр) там не
+        //    просто заборонений — деякі драйвери від нього падають, а не тихо
+        //    повертають помилку. Тоді чесно не малюємо взагалі (краще без чату,
+        //    ніж покласти гру). Малюнок лишається для сумісних контекстів —
+        //    Minecraft, емулятори, багато інді.
+        if (is_core_profile()) {
+            if (!core_logged_) { core_logged_ = true;
+                log("overlay(gl): контекст core-профілю — не малюємо, щоб не "
+                    "покласти гру (потрібен сумісний контекст)"); }
+            while (glGetError() != GL_NO_ERROR) {}   // прибрати нашу ж помилку від запиту
+            return;
+        }
+
         GLint vp[4] = {0, 0, 0, 0};
         glGetIntegerv(GL_VIEWPORT, vp);
         float sw = (float)vp[2], sh = (float)vp[3];
@@ -107,6 +139,22 @@ private:
         GLint prog = 0;
         static PFN_useprog useProgram = load_use_program();
         if (useProgram) { glGetIntegerv(GL_CURRENT_PROGRAM, &prog); if (prog) useProgram(0); }
+
+        // Друга причина того самого краху: гра лишила прив'язаним неткочовий
+        // VAO. Режим негайного малювання на багатьох драйверах (AMD/Intel)
+        // вимагає VAO 0 — інакше падіння. Тимчасово ставимо 0, потім повертаємо.
+        // Робимо це лише коли glBindVertexArray справді є (сумісний 3.0+); на
+        // legacy-контексті функції немає — і VAO там не існує, тож не чіпаємо.
+        static PFN_bindvao bindVao = load_bind_vao();
+        GLint oldVao = 0;
+        if (bindVao) { glGetIntegerv(GL_VERTEX_ARRAY_BINDING, &oldVao); if (oldVao) bindVao(0); }
+
+        // І третє: гра могла лишити активним не нульовий текстурний блок. Наше
+        // фіксоване малювання семплить із блоку 0 — повертаємо його на час
+        // малюнка, інакше текстура «зникає» або береться чужа.
+        static PFN_activetex activeTex = load_active_tex();
+        GLint oldActive = GL_TEXTURE0;
+        if (activeTex) { glGetIntegerv(GL_ACTIVE_TEXTURE, &oldActive); if (oldActive != GL_TEXTURE0) activeTex(GL_TEXTURE0); }
 
         GLboolean wasDepth = glIsEnabled(GL_DEPTH_TEST);
         GLboolean wasLight = glIsEnabled(GL_LIGHTING);
@@ -152,7 +200,13 @@ private:
         set_enabled_gl(GL_SCISSOR_TEST, wasScissor);
         set_enabled_gl(GL_BLEND, wasBlend);
         set_enabled_gl(GL_TEXTURE_2D, wasTex);
+        if (activeTex && oldActive != GL_TEXTURE0) activeTex((GLenum)oldActive);
+        if (bindVao && oldVao) bindVao((GLuint)oldVao);
         if (useProgram && prog) useProgram((GLuint)prog);
+
+        // Прибираємо будь-яку помилку, яку могли згенерувати самі, щоб перевірки
+        // glGetError у грі не спіткнулися об чужу помилку. Обмежуємо цикл.
+        for (int i = 0; i < 8 && glGetError() != GL_NO_ERROR; ++i) {}
     }
 
     static void set_enabled_gl(GLenum cap, GLboolean on) {
@@ -166,21 +220,45 @@ private:
         return (PFN_curctx)GetProcAddress(gl, "wglGetCurrentContext");
     }
 
-    typedef void (APIENTRY *PFN_useprog)(GLuint);
-    static PFN_useprog load_use_program() {
-        // glUseProgram — це GL 2.0, у opengl32.dll його експортом немає; беремо
-        // через wglGetProcAddress. ВАЖЛИВО перевірити результат: на legacy-
-        // контексті wglGetProcAddress для непідтримуваної функції повертає не
-        // NULL, а сміття (0,1,2,3,-1), і виклик такого «вказівника» — краш.
+    // Будь-яка функція GL новіша за 1.1 живе не в opengl32.dll, а в драйвері й
+    // береться через wglGetProcAddress. ВАЖЛИВО перевіряти результат: на
+    // контексті, де функції немає, wglGetProcAddress повертає не NULL, а сміття
+    // (0,1,2,3,-1), і виклик такого «вказівника» — краш. Тому — один спільний
+    // завантажувач із перевіркою.
+    static void* load_gl_proc(const char* name) {
         typedef PROC (WINAPI *WGLGetProc)(LPCSTR);
         HMODULE gl = GetModuleHandleW(L"opengl32.dll");
         if (!gl) return nullptr;
-        WGLGetProc wglGet = (WGLGetProc)GetProcAddress(gl, "wglGetProcAddress");
+        static WGLGetProc wglGet = (WGLGetProc)GetProcAddress(gl, "wglGetProcAddress");
         if (!wglGet) return nullptr;
-        PROC p = wglGet("glUseProgram");
+        PROC p = wglGet(name);
         intptr_t v = (intptr_t)p;
         if (v == 0 || v == 1 || v == 2 || v == 3 || v == -1) return nullptr;
-        return (PFN_useprog)p;
+        return (void*)p;
+    }
+
+    typedef void (APIENTRY *PFN_useprog)(GLuint);
+    static PFN_useprog load_use_program() {   // glUseProgram — GL 2.0
+        return (PFN_useprog)load_gl_proc("glUseProgram");
+    }
+
+    typedef void (APIENTRY *PFN_bindvao)(GLuint);
+    static PFN_bindvao load_bind_vao() {      // glBindVertexArray — GL 3.0
+        return (PFN_bindvao)load_gl_proc("glBindVertexArray");
+    }
+
+    typedef void (APIENTRY *PFN_activetex)(GLenum);
+    static PFN_activetex load_active_tex() {  // glActiveTexture — GL 1.3
+        return (PFN_activetex)load_gl_proc("glActiveTexture");
+    }
+
+    // Чи це контекст core-профілю (без фіксованого конвеєра). На старих
+    // контекстах (1.x/2.x) сам запит непідтримуваний — тоді mask лишається 0,
+    // помилку прибираємо, і вважаємо контекст сумісним (малюємо).
+    static bool is_core_profile() {
+        GLint mask = 0;
+        glGetIntegerv(GL_CONTEXT_PROFILE_MASK, &mask);
+        return (mask & GL_CONTEXT_CORE_PROFILE_BIT) != 0;
     }
 
     SharedFrameReader reader_;
@@ -188,6 +266,7 @@ private:
     uint32_t tex_w_ = 0, tex_h_ = 0, tex_seq_ = 0;
     bool enabled_ = false;
     bool logged_ = false;
+    bool core_logged_ = false;
     FrameView last_;
 };
 

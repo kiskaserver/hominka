@@ -19,11 +19,80 @@
 #pragma once
 
 #include <windows.h>
+#include <tlhelp32.h>
 #include <stdint.h>
 
 #include "log.h"
 
 namespace hominka {
+
+// Заморожує всі ІНШІ потоки процесу на час підміни байтів функції й повертає
+// «застряглий» усередині латки IP на еквівалентну адресу в трампліні. Без цього
+// підміна гарячої функції (той самий wglSwapBuffers — його щокадру кличе окремий
+// потік рендера) інколи трапляється саме тоді, коли інший потік виконує ці ж
+// байти, і він доходить до напівзаписаної інструкції — краш рівно на «функція+3».
+// Саме так робить MinHook; це стандартне, а не самодіяльне рішення.
+class ThreadFreezer {
+public:
+    ~ThreadFreezer() { thaw(); }
+
+    void freeze_others() {
+        DWORD me_pid = GetCurrentProcessId();
+        DWORD me_tid = GetCurrentThreadId();
+        HANDLE snap = CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0);
+        if (snap == INVALID_HANDLE_VALUE) return;
+        THREADENTRY32 te; te.dwSize = sizeof(te);
+        if (Thread32First(snap, &te)) {
+            do {
+                if (te.th32OwnerProcessID != me_pid) continue;
+                if (te.th32ThreadID == me_tid) continue;
+                HANDLE h = OpenThread(
+                    THREAD_SUSPEND_RESUME | THREAD_GET_CONTEXT | THREAD_SET_CONTEXT,
+                    FALSE, te.th32ThreadID);
+                if (!h) continue;
+                if (SuspendThread(h) == (DWORD)-1) { CloseHandle(h); continue; }
+                if (n_ < kMax) handles_[n_++] = h; else { ResumeThread(h); CloseHandle(h); }
+            } while (Thread32Next(snap, &te));
+        }
+        CloseHandle(snap);
+    }
+
+    // Якщо IP замороженого потоку в діапазоні [from, from+len) — переносимо його
+    // на other+(IP-from). Прологи в цілі й трампліні однакової довжини, тож зсув
+    // інструкції збігається.
+    void relocate_ip(uint8_t* from, int len, uint8_t* other) {
+        for (int i = 0; i < n_; ++i) {
+            alignas(16) CONTEXT ctx; ctx.ContextFlags = CONTEXT_CONTROL;
+            if (!GetThreadContext(handles_[i], &ctx)) continue;
+#ifdef _WIN64
+            uint64_t ip = ctx.Rip;
+#else
+            uint64_t ip = ctx.Eip;
+#endif
+            uint64_t lo = (uint64_t)from, hi = lo + (uint64_t)len;
+            if (ip >= lo && ip < hi) {
+                uint64_t nip = (uint64_t)other + (ip - lo);
+#ifdef _WIN64
+                ctx.Rip = nip;
+#else
+                ctx.Eip = (DWORD)nip;
+#endif
+                SetThreadContext(handles_[i], &ctx);
+                log("overlay: інлайн-хук — потік стояв у латці, IP перенесено");
+            }
+        }
+    }
+
+    void thaw() {
+        for (int i = 0; i < n_; ++i) { ResumeThread(handles_[i]); CloseHandle(handles_[i]); }
+        n_ = 0;
+    }
+
+private:
+    static const int kMax = 256;
+    HANDLE handles_[kMax];
+    int n_ = 0;
+};
 
 #ifdef _WIN64
 static const int kPatchLen = 14;   // FF 25 00000000 + 8 байтів абсолютної адреси
@@ -136,8 +205,16 @@ public:
 #endif
         write_jmp(tramp_ + copied, t + copied);   // трамплін → назад у функцію
 
+        // Заморожуємо решту потоків, щоб ніхто не виконував ці байти під час
+        // підміни, і зсуваємо IP тих, хто саме зараз стоїть у пролозі, на копію
+        // в трампліні. Це прибирає краш «функція+3» на гарячих функціях.
+        ThreadFreezer freezer;
+        freezer.freeze_others();
+        freezer.relocate_ip(t, copied, tramp_);
+
         DWORD old;
         if (!VirtualProtect(t, copied, PAGE_EXECUTE_READWRITE, &old)) {
+            freezer.thaw();
             VirtualFree(tramp_, 0, MEM_RELEASE); tramp_ = nullptr;
             return false;
         }
@@ -145,6 +222,7 @@ public:
         for (int j = kPatchLen; j < copied; ++j) t[j] = 0x90;   // NOP-и «хвоста»
         VirtualProtect(t, copied, old, &old);
         FlushInstructionCache(GetCurrentProcess(), t, copied);
+        freezer.thaw();
 
         target_ = t; copied_ = copied;
         return true;
@@ -152,12 +230,18 @@ public:
 
     void remove() {
         if (!target_) return;
+        // Дзеркально до install: морозимо потоки і повертаємо IP тих, хто зараз у
+        // трампліні, назад у відновлену функцію.
+        ThreadFreezer freezer;
+        freezer.freeze_others();
+        freezer.relocate_ip(tramp_, copied_, target_);
         DWORD old;
         if (VirtualProtect(target_, copied_, PAGE_EXECUTE_READWRITE, &old)) {
             memcpy(target_, tramp_, copied_);
             VirtualProtect(target_, copied_, old, &old);
             FlushInstructionCache(GetCurrentProcess(), target_, copied_);
         }
+        freezer.thaw();
         if (tramp_) { VirtualFree(tramp_, 0, MEM_RELEASE); tramp_ = nullptr; }
         target_ = nullptr;
     }
