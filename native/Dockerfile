@@ -16,6 +16,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         g++-mingw-w64-x86-64 \
         g++-mingw-w64-i686 \
         make \
+        libvulkan-dev \
+        glslang-tools \
     && rm -rf /var/lib/apt/lists/*
 
 ENV SRC=/src

@@ -21,10 +21,27 @@ COMMON="-O2 -s -static -static-libgcc -static-libstdc++ -Wall -Wextra -Wno-unuse
 DLL_LIBS="-ld3d11 -ld3d12 -ldxgi -ld3d9 -lopengl32 -lgdi32 -lole32 -luuid"
 EXE_LIBS="-lshlwapi"
 
+# --- Vulkan: заголовки (лише для типів; функції вантажимо в рантаймі) ---
+# Складаємо ізольовану теку include, щоб -I не тягнув решту системних заголовків
+# Linux у крос-компіляцію під mingw. VK_NO_PROTOTYPES у коді → жодного лінкування.
+VKINC=/tmp/vkinc
+mkdir -p "$VKINC"
+cp -r /usr/include/vulkan "$VKINC/" 2>/dev/null || true
+cp -r /usr/include/vk_video "$VKINC/" 2>/dev/null || true
+DLL_INC="-I$VKINC"
+
+# --- Шейдери оверлея → SPIR-V, вкладений C-масивом (glslang --vn) ---
+# Компілюємо раз на етапі збірки; у грі байткод уже готовий.
+echo ">> шейдери Vulkan → SPIR-V"
+glslangValidator -V "$SRC/overlay/shaders_vk/overlay.vert" \
+    -o "$SRC/overlay/vk_vert_spv.h" --vn g_vk_vert_spv
+glslangValidator -V "$SRC/overlay/shaders_vk/overlay.frag" \
+    -o "$SRC/overlay/vk_frag_spv.h" --vn g_vk_frag_spv
+
 build() {
     CXX="$1"; ARCH="$2"
     echo ">> $ARCH: overlay.dll"
-    $CXX $COMMON -shared \
+    $CXX $COMMON $DLL_INC -shared \
         "$SRC/overlay/dllmain.cpp" "$SRC/overlay/shaders.cpp" \
         -o "$OUT/overlay-$ARCH.dll" $DLL_LIBS -Wl,--kill-at
 
@@ -50,6 +67,10 @@ x86_64-w64-mingw32-g++ -O2 -s -static -municode -mwindows \
 echo ">> x64: testhost-gl.exe (для перевірки OpenGL)"
 x86_64-w64-mingw32-g++ -O2 -s -static -municode -mwindows \
     "$SRC/testhost/testhost_gl.cpp" -o "$OUT/testhost-gl-x64.exe" -lopengl32 -lgdi32
+
+echo ">> x64: testhost-vk.exe (для перевірки Vulkan)"
+x86_64-w64-mingw32-g++ -O2 -s -static -municode -mwindows $DLL_INC \
+    "$SRC/testhost/testhost_vk.cpp" -o "$OUT/testhost-vk-x64.exe"
 
 echo ""
 echo "Готово. У $OUT:"

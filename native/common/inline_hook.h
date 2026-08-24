@@ -171,6 +171,28 @@ public:
         if (!target || !detour) return false;
         uint8_t* t = reinterpret_cast<uint8_t*>(target);
 
+        // Плоский експорт-перехідник: `E9 rel32` + добивка `CC` до наступної
+        // функції (саме так виглядають експорти vulkan-1.dll і чимало інших).
+        // Копіювати його пролог не можна — у справжніх функціях за ним бувають
+        // короткі умовні переходи (`je rel8`), які на нове місце не перенести.
+        // Тому просто ПЕРЕНАПРАВЛЯЄМО сам перехідник на наш детур, а оригіналом
+        // лишаємо справжню функцію (куди E9 і вказував). Місця треба лише
+        // kPatchLen байтів — після E9 якраз добивка.
+        if (t[0] == 0xE9 && is_padding(t + 5, kPatchLen - 5)) {
+            int32_t rel = *reinterpret_cast<int32_t*>(t + 1);
+            uint8_t* real = t + 5 + rel;
+            memcpy(saved_, t, kPatchLen);
+            ThreadFreezer freezer; freezer.freeze_others();
+            DWORD old;
+            if (!VirtualProtect(t, kPatchLen, PAGE_EXECUTE_READWRITE, &old)) { freezer.thaw(); return false; }
+            write_jmp(t, reinterpret_cast<uint8_t*>(detour));
+            VirtualProtect(t, kPatchLen, old, &old);
+            FlushInstructionCache(GetCurrentProcess(), t, kPatchLen);
+            freezer.thaw();
+            target_ = t; copied_ = kPatchLen; is_thunk_ = true; call_orig_ = real;
+            return true;
+        }
+
         // Розбираємо пролог: скільки цілих інструкцій перекриє наш стрибок і де
         // в них RIP-відносні операнди.
         int copied = 0;
@@ -224,16 +246,28 @@ public:
         FlushInstructionCache(GetCurrentProcess(), t, copied);
         freezer.thaw();
 
-        target_ = t; copied_ = copied;
+        target_ = t; copied_ = copied; call_orig_ = tramp_;
         return true;
     }
 
     void remove() {
         if (!target_) return;
-        // Дзеркально до install: морозимо потоки і повертаємо IP тих, хто зараз у
-        // трампліні, назад у відновлену функцію.
         ThreadFreezer freezer;
         freezer.freeze_others();
+        if (is_thunk_) {
+            // Перехідник — просто повертаємо збережені байти на місце.
+            DWORD old;
+            if (VirtualProtect(target_, copied_, PAGE_EXECUTE_READWRITE, &old)) {
+                memcpy(target_, saved_, copied_);
+                VirtualProtect(target_, copied_, old, &old);
+                FlushInstructionCache(GetCurrentProcess(), target_, copied_);
+            }
+            freezer.thaw();
+            target_ = nullptr; is_thunk_ = false; call_orig_ = nullptr;
+            return;
+        }
+        // Дзеркально до install: повертаємо IP тих, хто зараз у трампліні, назад
+        // у відновлену функцію.
         freezer.relocate_ip(tramp_, copied_, target_);
         DWORD old;
         if (VirtualProtect(target_, copied_, PAGE_EXECUTE_READWRITE, &old)) {
@@ -243,13 +277,21 @@ public:
         }
         freezer.thaw();
         if (tramp_) { VirtualFree(tramp_, 0, MEM_RELEASE); tramp_ = nullptr; }
-        target_ = nullptr;
+        target_ = nullptr; call_orig_ = nullptr;
     }
 
-    template <typename T> T original() const { return reinterpret_cast<T>(tramp_); }
+    template <typename T> T original() const { return reinterpret_cast<T>(call_orig_); }
     bool installed() const { return target_ != nullptr; }
 
 private:
+    // Байти після експорт-перехідника — це добивка між функціями (int3 0xCC
+    // або нулі). Тільки тоді перезапис перехідника безпечний (не чіпаємо чужий
+    // код). Перевіряємо рівно ті n байтів, які накриє наш стрибок понад E9.
+    static bool is_padding(const uint8_t* p, int n) {
+        for (int i = 0; i < n; ++i) if (p[i] != 0xCC && p[i] != 0x00) return false;
+        return true;
+    }
+
     static void write_jmp(uint8_t* from, uint8_t* to) {
 #ifdef _WIN64
         from[0] = 0xFF; from[1] = 0x25;
@@ -285,7 +327,10 @@ private:
 
     uint8_t* target_ = nullptr;
     uint8_t* tramp_ = nullptr;
+    void* call_orig_ = nullptr;   // що повертає original(): трамплін або справжня функція
     int copied_ = 0;
+    bool is_thunk_ = false;
+    uint8_t saved_[16] = {0};     // байти перехідника для відновлення
 };
 
 }  // namespace hominka

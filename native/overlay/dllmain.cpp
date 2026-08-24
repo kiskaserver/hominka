@@ -18,6 +18,8 @@
 // можна одразу відпустити: підміна лишається в памʼяті таблиці, а не в обʼєкті.
 
 #include <windows.h>
+#include <vector>
+#include <cstring>
 #include <d3d11.h>
 #include <dxgi.h>
 
@@ -31,6 +33,7 @@
 #include "overlay_dx12.h"
 #include "overlay_dx9.h"
 #include "overlay_gl.h"
+#include "overlay_vk.h"
 
 using hominka::log;
 
@@ -67,6 +70,98 @@ SwapBuffersFn g_wglswap_original = nullptr;
 hominka::OverlayGL g_overlaygl;
 volatile LONG g_gl_frames = 0;
 volatile LONG g_dx9_frames = 0;
+
+// --- Vulkan ---
+// Чіпляємось до плоских експортів vulkan-1.dll (завантажувач Vulkan проксіює
+// їх для всього процесу). Інлайн-хук уже безпечний (заморозка потоків).
+typedef VkResult (VKAPI_PTR *CreateDeviceFn)(VkPhysicalDevice, const VkDeviceCreateInfo*, const VkAllocationCallbacks*, VkDevice*);
+typedef void (VKAPI_PTR *GetDeviceQueueFn)(VkDevice, uint32_t, uint32_t, VkQueue*);
+typedef VkResult (VKAPI_PTR *CreateSwapchainFn)(VkDevice, const VkSwapchainCreateInfoKHR*, const VkAllocationCallbacks*, VkSwapchainKHR*);
+typedef void (VKAPI_PTR *DestroySwapchainFn)(VkDevice, VkSwapchainKHR, const VkAllocationCallbacks*);
+typedef VkResult (VKAPI_PTR *QueuePresentFn)(VkQueue, const VkPresentInfoKHR*);
+hominka::InlineHook g_vk_create_device_hook, g_vk_get_queue_hook,
+    g_vk_create_swap_hook, g_vk_destroy_swap_hook, g_vk_present_hook;
+CreateDeviceFn g_vk_create_device_orig = nullptr;
+GetDeviceQueueFn g_vk_get_queue_orig = nullptr;
+CreateSwapchainFn g_vk_create_swap_orig = nullptr;
+DestroySwapchainFn g_vk_destroy_swap_orig = nullptr;
+QueuePresentFn g_vk_present_orig = nullptr;
+hominka::OverlayVK g_overlayvk;
+volatile LONG g_vk_frames = 0;
+
+VkResult VKAPI_PTR hooked_vkCreateDevice(VkPhysicalDevice phys, const VkDeviceCreateInfo* ci,
+                                         const VkAllocationCallbacks* al, VkDevice* dev) {
+    VkResult r = g_vk_create_device_orig(phys, ci, al, dev);
+    if (r == VK_SUCCESS && dev && *dev) g_overlayvk.on_device(phys, *dev);
+    return r;
+}
+void VKAPI_PTR hooked_vkGetDeviceQueue(VkDevice dev, uint32_t fam, uint32_t idx, VkQueue* q) {
+    g_vk_get_queue_orig(dev, fam, idx, q);
+    if (q && *q) g_overlayvk.on_queue(*q, fam);
+}
+VkResult VKAPI_PTR hooked_vkCreateSwapchainKHR(VkDevice dev, const VkSwapchainCreateInfoKHR* ci,
+                                               const VkAllocationCallbacks* al, VkSwapchainKHR* sc) {
+    VkResult r = g_vk_create_swap_orig(dev, ci, al, sc);
+    if (r == VK_SUCCESS && sc && *sc) g_overlayvk.on_swapchain(*sc, ci);
+    return r;
+}
+void VKAPI_PTR hooked_vkDestroySwapchainKHR(VkDevice dev, VkSwapchainKHR sc, const VkAllocationCallbacks* al) {
+    if (sc) g_overlayvk.on_swapchain_destroy(sc);
+    g_vk_destroy_swap_orig(dev, sc, al);
+}
+VkResult VKAPI_PTR hooked_vkQueuePresentKHR(VkQueue q, const VkPresentInfoKHR* pi) {
+    LONG n = InterlockedIncrement(&g_vk_frames);
+    if (n == 1) log("overlay(vk): перший перехоплений vkQueuePresentKHR — кадр наш");
+    VkPresentInfoKHR local;
+    std::vector<VkSemaphore> wait_store;
+    g_overlayvk.on_present(q, pi, &local, &wait_store);
+    return g_vk_present_orig ? g_vk_present_orig(q, &local) : VK_SUCCESS;
+}
+
+// Гра часто дістає функції Vulkan не з експортів, а через
+// vkGetInstanceProcAddr/vkGetDeviceProcAddr, і завантажувач повертає для WSI
+// (свопчейн/показ) ОКРЕМІ, залежні від пристрою адреси — не ті, що в експорті.
+// Тому перехоплюємо саме РОЗДАЧУ адрес: на відомі імена віддаємо свій детур,
+// запам'ятавши справжній вказівник. Це працює, лише якщо ми на місці ДО того,
+// як гра розв'язала ці функції (тобто інжект до старту Vulkan у грі).
+typedef PFN_vkVoidFunction (VKAPI_PTR *GIPAFn)(VkInstance, const char*);
+typedef PFN_vkVoidFunction (VKAPI_PTR *GDPAFn)(VkDevice, const char*);
+hominka::InlineHook g_vk_gipa_hook, g_vk_gdpa_hook;
+GIPAFn g_vk_gipa_orig = nullptr;
+GDPAFn g_vk_gdpa_orig = nullptr;
+PFN_vkVoidFunction VKAPI_PTR hooked_vkGetDeviceProcAddr(VkDevice, const char*);
+
+static PFN_vkVoidFunction vk_reroute(const char* name, PFN_vkVoidFunction real) {
+    if (!real || !name) return real;
+    // ВАЖЛИВО: справжні вказівники (g_vk_*_orig) беремо ЛИШЕ з експорт-хуків
+    // (там за перехідником E9 — тіло функції). Тут їх НЕ чіпаємо: завантажувач
+    // на ці імена повертає адресу самого експорт-перехідника, який ми вже
+    // перенаправили на свій детур, — присвоїти його як «оригінал» означало б
+    // нескінченну рекурсію (детур кличе сам себе). Просто віддаємо свій детур.
+    #define R(n, det) if (!strcmp(name, n)) return reinterpret_cast<PFN_vkVoidFunction>(&det);
+    R("vkQueuePresentKHR",     hooked_vkQueuePresentKHR);
+    R("vkCreateSwapchainKHR",  hooked_vkCreateSwapchainKHR);
+    R("vkDestroySwapchainKHR", hooked_vkDestroySwapchainKHR);
+    R("vkGetDeviceQueue",      hooked_vkGetDeviceQueue);
+    R("vkCreateDevice",        hooked_vkCreateDevice);
+    #undef R
+    return real;
+}
+PFN_vkVoidFunction VKAPI_PTR hooked_vkGetDeviceProcAddr(VkDevice dev, const char* name) {
+    PFN_vkVoidFunction real = g_vk_gdpa_orig ? g_vk_gdpa_orig(dev, name) : nullptr;
+    return vk_reroute(name, real);
+}
+PFN_vkVoidFunction VKAPI_PTR hooked_vkGetInstanceProcAddr(VkInstance inst, const char* name) {
+    PFN_vkVoidFunction real = g_vk_gipa_orig ? g_vk_gipa_orig(inst, name) : nullptr;
+    if (name && !strcmp(name, "vkGetDeviceProcAddr")) {
+        // g_vk_gdpa_orig уже стоїть з експорт-хука (справжнє тіло); real тут —
+        // це знову ж таки перенаправлений експорт, тож не переприсвоюємо.
+        return reinterpret_cast<PFN_vkVoidFunction>(&hooked_vkGetDeviceProcAddr);
+    }
+    if (name && !strcmp(name, "vkGetInstanceProcAddr"))
+        return reinterpret_cast<PFN_vkVoidFunction>(&hooked_vkGetInstanceProcAddr);
+    return vk_reroute(name, real);
+}
 
 // Наш Present: спершу малюємо, потім віддаємо кадр грі. Порядок саме такий —
 // інакше наш прямокутник ліг би під те, що гра намалює далі.
@@ -248,8 +343,43 @@ bool install_gl_hook() {
     return true;
 }
 
-// Vulkan поки не реалізовано — заглушка, щоб решта збиралася й працювала.
-bool install_vk_hook() { return false; }
+// Vulkan: вантажимо функції й ставимо інлайн-хуки на плоскі експорти
+// vulkan-1.dll. Пристрій/чергу/свопчейн ловимо на льоту, малюємо в present.
+bool install_vk_hook() {
+    HMODULE vk = GetModuleHandleW(L"vulkan-1.dll");
+    if (!vk) return false;
+    if (!g_overlayvk.load(vk)) { log("overlay(vk): не всі функції Vulkan знайдено"); return false; }
+
+    struct { const char* name; hominka::InlineHook* hook; void* detour; void** orig; } hooks[] = {
+        // Головні — перехоплення роздачі адрес (ловить і статичну лінковку через
+        // експорт, і динамічну через *ProcAddr).
+        {"vkGetInstanceProcAddr",&g_vk_gipa_hook,          (void*)&hooked_vkGetInstanceProcAddr,(void**)&g_vk_gipa_orig},
+        {"vkGetDeviceProcAddr",  &g_vk_gdpa_hook,          (void*)&hooked_vkGetDeviceProcAddr,  (void**)&g_vk_gdpa_orig},
+        // Прямі експорти — на випадок, коли гра кличе їх без *ProcAddr.
+        {"vkCreateDevice",       &g_vk_create_device_hook, (void*)&hooked_vkCreateDevice,       (void**)&g_vk_create_device_orig},
+        {"vkGetDeviceQueue",     &g_vk_get_queue_hook,     (void*)&hooked_vkGetDeviceQueue,     (void**)&g_vk_get_queue_orig},
+        {"vkCreateSwapchainKHR", &g_vk_create_swap_hook,   (void*)&hooked_vkCreateSwapchainKHR, (void**)&g_vk_create_swap_orig},
+        {"vkDestroySwapchainKHR",&g_vk_destroy_swap_hook,  (void*)&hooked_vkDestroySwapchainKHR,(void**)&g_vk_destroy_swap_orig},
+        {"vkQueuePresentKHR",    &g_vk_present_hook,        (void*)&hooked_vkQueuePresentKHR,    (void**)&g_vk_present_orig},
+    };
+    bool gipa_ok = false, present_ok = false;
+    for (auto& h : hooks) {
+        void* addr = (void*)GetProcAddress(vk, h.name);
+        if (!addr) continue;
+        if (h.hook->install(addr, h.detour)) {
+            *h.orig = h.hook->original<void*>();
+            if (h.hook == &g_vk_gipa_hook) gipa_ok = true;
+            if (h.hook == &g_vk_present_hook) present_ok = true;
+        }
+    }
+    // Досить перехопити роздачу адрес АБО прямий present — тоді Vulkan наш.
+    // (Малює лише за інжекту до старту Vulkan у грі — інакше пристрій уже
+    //  створено без нас; тоді просто нічого не малюємо, гру не чіпаємо.)
+    bool ok = gipa_ok || present_ok;
+    if (ok) log("overlay(vk): хуки Vulkan поставлено (роздача=%s, present=%s)",
+               gipa_ok ? "так" : "ні", present_ok ? "так" : "ні");
+    return ok;
+}
 
 // Створює тимчасовий пристрій DX9 і крізь нього — доступ до спільної vtable
 // IDirect3DDevice9. Підміна в ній діє для пристрою гри так само, як з DXGI.
@@ -339,9 +469,13 @@ DWORD WINAPI init_thread(LPVOID) {
         // драйвері, а в самій підміні гарячого wglSwapBuffers (гонка з потоком
         // рендера) — тепер вона робиться під заморозкою потоків, тож безпечно.
         // На контексті core-профілю чесно не малюємо (фіксований конвеєр там
-        // заборонено), але й не валимо гру. Vulkan поки за прапорцем.
+        // заборонено), але й не валимо гру.
         if (!gl && gl_mod) gl = install_gl_hook();
-        if (!vk && vk_mod && getenv("HOMINKA_VK")) vk = install_vk_hook();
+        // Vulkan теж за замовчуванням. Малює лише коли оверлей опинився в грі ДО
+        // того, як вона ініціалізувала Vulkan (пристрій/свопчейн створюються раз
+        // на старті — без нас їх уже не перехопити). Якщо інжект пізніший — хуки
+        // просто стоять без діла: гра нічого не помітить, чат не з'явиться.
+        if (!vk && vk_mod) vk = install_vk_hook();
         // Досить, коли все застосовне поставлено і хоч один хук стоїть.
         bool done = (dxgi || !dxgi_mod) && (d9 || !d9_mod) &&
                     (gl || !gl_mod) && (vk || !vk_mod);
@@ -382,10 +516,18 @@ BOOL WINAPI DllMain(HINSTANCE inst, DWORD reason, LPVOID) {
         g_reset_hook.remove();
         g_endscene_hook.remove();
         g_wglswap_hook.remove();
+        g_vk_gipa_hook.remove();
+        g_vk_gdpa_hook.remove();
+        g_vk_present_hook.remove();
+        g_vk_create_device_hook.remove();
+        g_vk_get_queue_hook.remove();
+        g_vk_create_swap_hook.remove();
+        g_vk_destroy_swap_hook.remove();
         g_overlay.release();
         g_overlay12.release();
         g_overlay9.release();
         g_overlaygl.release();
+        g_overlayvk.release();
         log("overlay: вивантаження, хуки знято");
     }
     return TRUE;
