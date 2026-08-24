@@ -24,7 +24,13 @@ namespace hominka {
 class OverlayDX11 {
 public:
     // Викликається з перехопленого Present. swap — свопчейн гри.
-    void draw(IDXGISwapChain* swap) {
+    // inner  — виклик з ІНЛАЙН-хука самого Present (найглибше, перед показом);
+    //          false = зі свопчейн-хука (зовні).
+    // obs_split — режим приховування від OBS активний (стоять обидва хуки). Тоді
+    //          малює лише той шар, що відповідає прапорцю кадру hide_from_obs:
+    //          сховати → лише inner; показувати → лише зовнішній. Так захоплення
+    //          OBS (на рівні свопчейна) знімає кадр ДО нашого глибокого малювання.
+    void draw(IDXGISwapChain* swap, bool inner = false, bool obs_split = false) {
         if (!reader_.ensure_open()) return;   // Python ще не запустив чат
         if (!ensure_device(swap)) return;
 
@@ -54,6 +60,10 @@ public:
             last_ = f;   // кут, відступи, прозорість беремо з останнього кадру
         }
         if (!srv_ || tex_w_ == 0) return;
+
+        // Розподіл шарів для приховування від OBS: малює рівно один із двох
+        // хуків. Без поділу (obs_split=false) малює завжди зовнішній.
+        if (obs_split && (last_.hide_from_obs ? !inner : inner)) return;
 
         blit();
     }

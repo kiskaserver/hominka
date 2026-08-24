@@ -1,14 +1,15 @@
-// Крихітна гра-макет на DX11: вікно, свопчейн, у циклі чистить кадр і показує
-// його через Present. Потрібна лише для перевірки кроку 1 — щоб було в що
-// інжектити overlay.dll і на власні очі побачити наш прямокутник поверх її
-// кадру. У випуск не входить.
+// Гра-макет на DX11: вікно, свопчейн, у циклі чистить кадр і показує його через
+// Present. Слугує двом цілям: (1) автотести інжектора; (2) ЗРАЗОК ДЛЯ OBS —
+// наведіть на це вікно Game Capture, заінжектьте overlay і перевіряйте
+// «Ховати чат від OBS»: з галочкою чат видно на моніторі, але не в ефірі.
 //
-// Фон навмисно темно-зелений: на ньому фіолетовий прямокутник оверлея видно
-// одразу, і сплутати «намалювали ми» з «намалювала гра» неможливо.
+// Фон плавно міняє колір (щоб було видно, що захоплення живе), лишаючись темним
+// — на ньому чат-оверлей видно одразу. У випуск не входить.
 
 #include <windows.h>
 #include <d3d11.h>
 #include <dxgi.h>
+#include <math.h>
 
 static IDXGISwapChain* g_swap = nullptr;
 static ID3D11Device* g_dev = nullptr;
@@ -27,9 +28,9 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, LPWSTR, int show) {
     wc.hInstance = inst;
     wc.lpszClassName = L"HominkaTestHost";
     RegisterClassExW(&wc);
-    HWND hwnd = CreateWindowExW(0, wc.lpszClassName, L"Hominka test host (DX11)",
+    HWND hwnd = CreateWindowExW(0, wc.lpszClassName, L"Hominka DX11 sample (OBS test)",
                                WS_OVERLAPPEDWINDOW, CW_USEDEFAULT, CW_USEDEFAULT,
-                               800, 500, NULL, NULL, inst, NULL);
+                               1280, 720, NULL, NULL, inst, NULL);
     ShowWindow(hwnd, show);
 
     DXGI_SWAP_CHAIN_DESC sd = {};
@@ -58,15 +59,21 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, LPWSTR, int show) {
     back->Release();
 
     MSG msg = {};
-    const float green[4] = {0.05f, 0.20f, 0.10f, 1.0f};
     while (msg.message != WM_QUIT) {
         if (PeekMessageW(&msg, NULL, 0, 0, PM_REMOVE)) {
             TranslateMessage(&msg);
             DispatchMessageW(&msg);
             continue;
         }
+        // Плавний темний перелив — щоб у OBS було видно, що захоплення живе.
+        float ph = (float)(GetTickCount() % 6000) / 6000.0f * 6.2831853f;
+        float col[4] = {
+            0.06f + 0.05f * (0.5f + 0.5f * (float)cos(ph)),
+            0.10f + 0.08f * (0.5f + 0.5f * (float)cos(ph + 2.094f)),
+            0.14f + 0.08f * (0.5f + 0.5f * (float)cos(ph + 4.188f)),
+            1.0f};
         g_ctx->OMSetRenderTargets(1, &g_rtv, NULL);
-        g_ctx->ClearRenderTargetView(g_rtv, green);
+        g_ctx->ClearRenderTargetView(g_rtv, col);
         g_swap->Present(1, 0);   // саме сюди вклиниться overlay.dll
     }
 

@@ -69,6 +69,7 @@ class SharedFrameWriter:
         self._mutex = None
         self._seq = 0
         self.target_pid = 0     # 0 = будь-який процес; ставить set_target()
+        self.hide_from_obs = 0  # 1 = малювати якнайглибше, ховаючись від OBS
         self.conflict = False
         if not _IS_WINDOWS:
             return
@@ -137,6 +138,15 @@ class SharedFrameWriter:
         struct.pack_into("<I", self._buf, 40, 1 if on else 0)
         self._commit_header()
 
+    def set_hide_from_obs(self, on: bool):
+        """Ховати чат від OBS: DLL малюватиме якнайглибше (перед показом), щоб
+        захоплення OBS зняло чистий кадр. hide_from_obs — зсув 52 у заголовку."""
+        self.hide_from_obs = 1 if on else 0
+        if self._view:
+            self._begin()
+            struct.pack_into("<I", self._buf, 52, self.hide_from_obs)
+            self._commit_header()
+
     # --- внутрішнє ---
     def _begin(self):
         # Тримаємо локальну копію заголовка, щоб не читати з мапінгу побайтово.
@@ -167,11 +177,12 @@ class SharedFrameWriter:
             return
 
         buf = bytearray(HEADER_SIZE)
-        struct.pack_into("<IIIIIIIiiIIII", buf, 0,
+        struct.pack_into("<IIIIIIIiiIIIII", buf, 0,
                          MAGIC, VERSION, 0,           # seq заповнимо навколо запису
                          w, h, stride, anchor,
                          margin_x, margin_y, opacity & 0xFF, 1, heartbeat & 0xFFFFFFFF,
-                         self.target_pid & 0xFFFFFFFF)
+                         self.target_pid & 0xFFFFFFFF,
+                         self.hide_from_obs & 0xFFFFFFFF)
         self._buf = buf
 
         # seqlock: непарне → дані → заголовок з парним seq.
@@ -335,6 +346,12 @@ class GameOverlay(QObject):
         """Малювати чат лише у цій грі (0 = будь-де). Ставиться після інʼєкції."""
         self.writer.set_target(pid)
         _diag("ціль pid=%d" % pid)
+
+    def set_hide_from_obs(self, on: bool):
+        """Ховати чат від OBS (малювати перед самим показом). Стрімер бачить чат
+        на моніторі, а захоплення OBS знімає чистий кадр."""
+        self.writer.set_hide_from_obs(on)
+        _diag("сховати від OBS=%d" % (1 if on else 0))
 
     def set_custom_css(self, css: str):
         """Свій CSS користувача — і у стрічку, і на веб-сторінку, наживо.

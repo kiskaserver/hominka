@@ -37,7 +37,9 @@ public:
         log("overlay(dx12): чергу команд (DIRECT) захоплено");
     }
 
-    void draw(IDXGISwapChain* swap) {
+    // inner/obs_split — див. overlay_dx11.h: приховування від OBS малює лише
+    // потрібний із двох шарів (зовнішній свопчейн-хук / внутрішній інлайн Present).
+    void draw(IDXGISwapChain* swap, bool inner = false, bool obs_split = false) {
         if (!queue_) return;                 // ще не знаємо, куди слати команди
         if (!reader_.ensure_open()) return;
         if (!ensure_init(swap)) return;
@@ -64,6 +66,8 @@ public:
             return;
         }
         if (!srv_ok_ || tex_w_ == 0) return;
+
+        if (obs_split && (last_.hide_from_obs ? !inner : inner)) return;
 
         blit(have_new);
     }

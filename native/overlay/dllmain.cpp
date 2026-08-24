@@ -47,6 +47,14 @@ hominka::OverlayDX11 g_overlay;
 volatile LONG g_frames = 0;
 volatile LONG g_api = 0;   // 0 невідомо, 1 DX12, 2 DX11
 
+// Для приховування від OBS малюємо якнайглибше — ІНЛАЙН-хуком самого тіла
+// Present (5-байтна E9-латка, тож внутрішній «швидкий вхід» Present+5 цілий).
+// OBS-захоплення сидить на рівні свопчейна, тож встигає зняти чистий кадр, а наш
+// чат лягає вже перед показом.
+hominka::InlineHook g_present_inline_hook;
+PresentFn g_present_inline_orig = nullptr;
+bool g_present_inline_ok = false;
+
 // --- DX12 ---
 typedef void (STDMETHODCALLTYPE *ExecFn)(ID3D12CommandQueue*, UINT, ID3D12CommandList* const*);
 hominka::VtableHook g_exec_hook;
@@ -165,6 +173,30 @@ PFN_vkVoidFunction VKAPI_PTR hooked_vkGetInstanceProcAddr(VkInstance inst, const
 
 // Наш Present: спершу малюємо, потім віддаємо кадр грі. Порядок саме такий —
 // інакше наш прямокутник ліг би під те, що гра намалює далі.
+// Спільне малювання для обох хуків Present (зовнішнього свопчейн-vtable та
+// внутрішнього інлайн). API визначаємо раз, далі — відповідний бекенд. obs_split
+// вмикається, коли стоїть внутрішній хук: тоді малює рівно один шар залежно від
+// прапорця hide_from_obs у кадрі (див. overlay_dx11.h).
+static void draw_dxgi(IDXGISwapChain* swap, bool inner) {
+    if (g_api == 0) {
+        ID3D12Device* d12 = nullptr;
+        if (SUCCEEDED(swap->GetDevice(__uuidof(ID3D12Device), (void**)&d12)) && d12) {
+            g_api = 1; d12->Release();
+            log("overlay: гра на DX12");
+        } else {
+            g_api = 2;
+            log("overlay: гра на DX11");
+        }
+    }
+    if (g_api == 1) {
+        g_overlay12.set_swap(swap);
+        g_overlay12.draw(swap, inner, g_present_inline_ok);
+    } else {
+        g_overlay.set_swap(swap);
+        g_overlay.draw(swap, inner, g_present_inline_ok);
+    }
+}
+
 HRESULT STDMETHODCALLTYPE hooked_present(IDXGISwapChain* swap, UINT interval, UINT flags) {
     LONG n = InterlockedIncrement(&g_frames);
     if (n == 1) log("overlay: перший перехоплений Present — кадр наш");
@@ -172,28 +204,15 @@ HRESULT STDMETHODCALLTYPE hooked_present(IDXGISwapChain* swap, UINT interval, UI
 
     // DXGI_PRESENT_TEST — гра лише перевіряє можливість показу; малювати не
     // треба, інакше ми псуємо саме цю перевірку.
-    if (!(flags & DXGI_PRESENT_TEST)) {
-        // Той самий Present у DX11 і DX12 — розрізняємо за пристроєм свопчейна
-        // (раз) і далі малюємо відповідним бекендом.
-        if (g_api == 0) {
-            ID3D12Device* d12 = nullptr;
-            if (SUCCEEDED(swap->GetDevice(__uuidof(ID3D12Device), (void**)&d12)) && d12) {
-                g_api = 1; d12->Release();
-                log("overlay: гра на DX12");
-            } else {
-                g_api = 2;
-                log("overlay: гра на DX11");
-            }
-        }
-        if (g_api == 1) {
-            g_overlay12.set_swap(swap);
-            g_overlay12.draw(swap);
-        } else {
-            g_overlay.set_swap(swap);
-            g_overlay.draw(swap);
-        }
-    }
+    if (!(flags & DXGI_PRESENT_TEST)) draw_dxgi(swap, /*inner=*/false);
     return g_present_original(swap, interval, flags);
+}
+
+// Внутрішній (найглибший) хук самого тіла Present — крізь нього проходить і
+// виклик «оригіналу» від OBS. Малює лише в режимі приховування (inner=true).
+HRESULT STDMETHODCALLTYPE hooked_present_inline(IDXGISwapChain* swap, UINT interval, UINT flags) {
+    if (!(flags & DXGI_PRESENT_TEST)) draw_dxgi(swap, /*inner=*/true);
+    return g_present_inline_orig(swap, interval, flags);
 }
 
 // --- DX12: перехоплення черги команд ---
@@ -298,6 +317,20 @@ bool install_present_hook() {
     if (ok) {
         g_present_original = g_present_hook.original<PresentFn>();
         log("overlay: адресу Present підмінено у спільній vtable");
+
+        // Додатково — інлайн-хук самого тіла Present (адреса з vtable). Це
+        // найглибший шар: крізь нього проходить і виклик «оригіналу» з OBS-хука,
+        // тож у режимі приховування чат лягає ПІСЛЯ зняття кадру OBS. Латка — 5
+        // байтів, тож внутрішній вхід Present+5 лишається цілим. Пролог не
+        // піддався — не біда: тоді просто без приховування (чат видно і в OBS).
+        if (g_present_inline_hook.install(reinterpret_cast<void*>(g_present_original),
+                                          reinterpret_cast<void*>(&hooked_present_inline))) {
+            g_present_inline_orig = g_present_inline_hook.original<PresentFn>();
+            g_present_inline_ok = true;
+            log("overlay: інлайн-хук Present стоїть — приховування від OBS доступне");
+        } else {
+            log("overlay: інлайн-хук Present не став — без приховування від OBS");
+        }
     }
 
     // Обʼєкт більше не потрібен: підміна лишилася в памʼяті vtable, спільної для
@@ -444,8 +477,16 @@ bool install_d3d9_hook() {
     return ok;
 }
 
+// OBS Game Capture впорскує в гру graphics-hook64/32.dll. Наявність цього
+// модуля — надійна ознака, що OBS зараз захоплює саме через хук Present.
+static bool obs_capture_present() {
+    return GetModuleHandleW(L"graphics-hook64.dll") || GetModuleHandleW(L"graphics-hook32.dll");
+}
+
 DWORD WINAPI init_thread(LPVOID) {
     log("overlay: старт, шукаю, як гра показує кадр (DX9/DX11/DX12)");
+    if (obs_capture_present())
+        log("overlay: помічено graphics-hook OBS — захоплення через Present активне");
 
     // Ставимо ОБИДВА застосовні хуки, а не перший-ліпший. Модуль не каже, який
     // саме API в ділі: сучасний d3d9.dll сам тягне dxgi.dll, тож «dxgi
@@ -511,6 +552,7 @@ BOOL WINAPI DllMain(HINSTANCE inst, DWORD reason, LPVOID) {
         HANDLE t = CreateThread(NULL, 0, init_thread, NULL, 0, NULL);
         if (t) CloseHandle(t);
     } else if (reason == DLL_PROCESS_DETACH) {
+        g_present_inline_hook.remove();
         g_present_hook.remove();
         g_exec_hook.remove();
         g_reset_hook.remove();

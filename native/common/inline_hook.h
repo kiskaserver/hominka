@@ -1,21 +1,26 @@
-// Мінімальний інлайн-хук для випадків, коли підміна vtable не працює.
+// Мінімальний інлайн-хук у стилі MinHook для випадків, коли підміна vtable не
+// працює: DX9 EndScene (у кожного пристрою власна vtable), wglSwapBuffers і
+// vkQueuePresentKHR (плоскі експорти), а також саме тіло IDXGISwapChain::Present
+// (щоб малювати ГЛИБШЕ за захоплення OBS).
 //
-// Потрібен там, де перехоплюємо ПЛОСКУ функцію (не COM-метод у vtable): DX9
-// EndScene має власну vtable на кожен пристрій; wglSwapBuffers і
-// vkQueuePresentKHR — звичайні експорти. На початок функції кладемо стрибок на
-// наш обробник, а збережений пролог + стрибок назад стають «трампліном», через
-// який кличемо оригінал.
+// Головні принципи:
 //
-// Головний принцип — БЕЗПЕКА: розбираємо лише ті форми інструкцій, у довжині
-// яких упевнені, і на будь-чому незнайомому чесно відмовляємось (install →
-// false), не чіпаючи чужий код. Гірший наслідок відмови — оверлея не видно.
+//  1. БЕЗПЕКА розбору. Розбираємо лише ті форми інструкцій, у довжині яких
+//     упевнені; на будь-чому незнайомому чесно відмовляємось (install → false),
+//     не чіпаючи чужий код. Гірший наслідок відмови — оверлея не видно.
 //
-// Дві тонкощі x64, без яких реальні прологи (той самий wglSwapBuffers) не
-// перенести:
-//   * RIP-відносні операнди (`mov rax,[rip+disp]`) при копіюванні в трамплін
-//     треба перерахувати — інакше вони вкажуть не туди;
-//   * щоб перерахований disp32 «дотягнувся», трамплін виділяємо ПОРУЧ із
-//     функцією (в межах ±2 ГБ).
+//  2. ЛАТКА РІВНО 5 БАЙТІВ (E9 rel32) — не 14. Раніше ми клали 14-байтний
+//     абсолютний стрибок (FF25 + адреса), бо наш детур далі ±2 ГБ. Але це
+//     затирало байти ПІСЛЯ входу — а в dxgi у Present є внутрішній «швидкий
+//     вхід» на Present+5, і його ламало (краш саме там). Тепер кладемо 5-байтний
+//     відносний E9 на «острівець» ПОРУЧ (у межах ±2 ГБ), а вже острівець робить
+//     далекий абсолютний стрибок на детур. Перша інструкція Present — рівно 5
+//     байтів, тож Present+5 лишається цілим.
+//
+//  3. ЗАМОРОЗКА ПОТОКІВ під час підміни (як MinHook): жоден інший потік не
+//     виконує ці байти, а якщо чийсь IP стоїть усередині латки — переносимо його
+//     на копію в трампліні. Без цього підміна гарячої функції інколи трапляється
+//     саме тоді, коли інший потік її виконує, і краш — на півзаписаній інструкції.
 #pragma once
 
 #include <windows.h>
@@ -26,12 +31,16 @@
 
 namespace hominka {
 
-// Заморожує всі ІНШІ потоки процесу на час підміни байтів функції й повертає
-// «застряглий» усередині латки IP на еквівалентну адресу в трампліні. Без цього
-// підміна гарячої функції (той самий wglSwapBuffers — його щокадру кличе окремий
-// потік рендера) інколи трапляється саме тоді, коли інший потік виконує ці ж
-// байти, і він доходить до напівзаписаної інструкції — краш рівно на «функція+3».
-// Саме так робить MinHook; це стандартне, а не самодіяльне рішення.
+#ifdef _WIN64
+static const int kFarLen = 14;   // FF 25 00000000 + 8 байтів абсолютної адреси
+#else
+static const int kFarLen = 5;    // E9 + rel32 (на x86 дотягується будь-куди)
+#endif
+static const int kJmpLen = 5;    // E9 rel32 — рівно стільки затираємо на вході
+
+// Заморожує всі ІНШІ потоки процесу на час підміни й повертає «застряглий»
+// усередині латки IP на еквівалентну адресу в трампліні. Саме так робить
+// MinHook; це стандартне, а не самодіяльне рішення.
 class ThreadFreezer {
 public:
     ~ThreadFreezer() { thaw(); }
@@ -57,8 +66,8 @@ public:
         CloseHandle(snap);
     }
 
-    // Якщо IP замороженого потоку в діапазоні [from, from+len) — переносимо його
-    // на other+(IP-from). Прологи в цілі й трампліні однакової довжини, тож зсув
+    // Якщо IP замороженого потоку в [from, from+len) — переносимо його на
+    // other+(IP-from). Прологи в цілі й трампліні однакової довжини, тож зсув
     // інструкції збігається.
     void relocate_ip(uint8_t* from, int len, uint8_t* other) {
         for (int i = 0; i < n_; ++i) {
@@ -93,12 +102,6 @@ private:
     HANDLE handles_[kMax];
     int n_ = 0;
 };
-
-#ifdef _WIN64
-static const int kPatchLen = 14;   // FF 25 00000000 + 8 байтів абсолютної адреси
-#else
-static const int kPatchLen = 5;    // E9 + rel32
-#endif
 
 // Довжина інструкції або 0 (форму не розпізнано → відмова). Якщо в інструкції є
 // RIP-відносний disp32 (лише x64), *rip_off отримує його зсув усередині
@@ -167,144 +170,140 @@ inline int insn_len(const uint8_t* p, int* rip_off) {
 
 class InlineHook {
 public:
+    // target — куди чіпляємось; detour — наш обробник. Повертає false, якщо
+    // пролог не піддається безпечному розбору (тоді нічого не чіпаємо).
     bool install(void* target, void* detour) {
         if (!target || !detour) return false;
         uint8_t* t = reinterpret_cast<uint8_t*>(target);
 
-        // Плоский експорт-перехідник: `E9 rel32` + добивка `CC` до наступної
-        // функції (саме так виглядають експорти vulkan-1.dll і чимало інших).
-        // Копіювати його пролог не можна — у справжніх функціях за ним бувають
-        // короткі умовні переходи (`je rel8`), які на нове місце не перенести.
-        // Тому просто ПЕРЕНАПРАВЛЯЄМО сам перехідник на наш детур, а оригіналом
-        // лишаємо справжню функцію (куди E9 і вказував). Місця треба лише
-        // kPatchLen байтів — після E9 якраз добивка.
-        if (t[0] == 0xE9 && is_padding(t + 5, kPatchLen - 5)) {
-            int32_t rel = *reinterpret_cast<int32_t*>(t + 1);
-            uint8_t* real = t + 5 + rel;
-            memcpy(saved_, t, kPatchLen);
-            ThreadFreezer freezer; freezer.freeze_others();
+        // Виділяємо блок ПОРУЧ (у межах ±2 ГБ) — щоб 5-байтний E9 зі входу до
+        // нього дотягнувся. У ньому живе і трамплін (оригінальний пролог + шлях
+        // назад), і «острівець» далекого стрибка на детур.
+        block_ = alloc_near(t);
+        if (!block_) return false;
+
+        // Різновид А — плоский перехідник (E9 rel32 / EB rel8): напр. експорти
+        // vulkan-1.dll. Оригіналом лишаємо ЦІЛЬ цього стрибка (справжню функцію),
+        // а сам 5-байтний стрибок перенаправляємо на острівець → детур. Розмір
+        // той самий (5 байтів), тож сусідів не чіпаємо; добивка не потрібна.
+        if (t[0] == 0xE9 || t[0] == 0xEB) {
+            uint8_t* jt = (t[0] == 0xE9)
+                ? t + 5 + *reinterpret_cast<int32_t*>(t + 1)
+                : t + 2 + *reinterpret_cast<int8_t*>(t + 1);
+            uint8_t* island = block_;
+            write_far(island, reinterpret_cast<uint8_t*>(detour));
+
+            // Оригінал E9 — одна 5-байтна інструкція: заморозки досить, бо
+            // єдиний можливий IP усередині — сам вхід t, а звідти потік просто
+            // піде вже нашим стрибком (той теж веде на детур).
+            memcpy(saved_, t, kJmpLen);
+            ThreadFreezer fz; fz.freeze_others();
             DWORD old;
-            if (!VirtualProtect(t, kPatchLen, PAGE_EXECUTE_READWRITE, &old)) { freezer.thaw(); return false; }
-            write_jmp(t, reinterpret_cast<uint8_t*>(detour));
-            VirtualProtect(t, kPatchLen, old, &old);
-            FlushInstructionCache(GetCurrentProcess(), t, kPatchLen);
-            freezer.thaw();
-            target_ = t; copied_ = kPatchLen; is_thunk_ = true; call_orig_ = real;
+            if (!VirtualProtect(t, kJmpLen, PAGE_EXECUTE_READWRITE, &old)) { fz.thaw(); return fail(); }
+            write_e9(t, island);
+            VirtualProtect(t, kJmpLen, old, &old);
+            FlushInstructionCache(GetCurrentProcess(), t, kJmpLen);
+            fz.thaw();
+
+            target_ = t; copied_ = kJmpLen; is_thunk_ = true; call_orig_ = jt;
             return true;
         }
 
-        // Розбираємо пролог: скільки цілих інструкцій перекриє наш стрибок і де
-        // в них RIP-відносні операнди.
+        // Різновид Б — звичайна функція. Копіюємо цілі інструкції прологу, поки
+        // не накриємо 5 байтів, будуємо трамплін і кладемо на вхід 5-байтний E9.
         int copied = 0;
         int rip_at[8]; int rip_n = 0;
-        while (copied < kPatchLen) {
+        while (copied < kJmpLen) {
             int off = -1;
             int n = insn_len(t + copied, &off);
-            if (n <= 0) { log("overlay: інлайн-хук відмовився — незнайомий пролог"); return false; }
+            if (n <= 0) { log("overlay: інлайн-хук відмовився — незнайомий пролог"); return fail(); }
             if (off >= 0 && rip_n < 8) rip_at[rip_n++] = copied + off;
             copied += n;
         }
-        if (copied > 32) return false;
+        if (copied > 32) return fail();
 
-        tramp_ = alloc_near(t);
-        if (!tramp_) { log("overlay: інлайн-хук — не виділив трамплін поруч"); return false; }
-        memcpy(tramp_, t, copied);
+        // Розкладка блоку: [трамплін: copied байтів + стрибок назад][острівець].
+        uint8_t* tramp = block_;
+        memcpy(tramp, t, copied);
+        memcpy(saved_, t, copied);            // оригінал для відновлення
 
 #ifdef _WIN64
-        // Перерахунок RIP-відносних disp32: різниця адрес та сама для всіх
-        // скопійованих інструкцій, тож дельта одна.
-        int64_t delta = (int64_t)t - (int64_t)tramp_;
+        // Перерахунок RIP-відносних disp32 у скопійованому пролозі.
+        int64_t delta = (int64_t)t - (int64_t)tramp;
         for (int j = 0; j < rip_n; ++j) {
-            int32_t* d = reinterpret_cast<int32_t*>(tramp_ + rip_at[j]);
+            int32_t* d = reinterpret_cast<int32_t*>(tramp + rip_at[j]);
             int64_t nd = (int64_t)*d + delta;
             if (nd < INT32_MIN || nd > INT32_MAX) {
                 log("overlay: інлайн-хук — RIP-операнд не дотягується");
-                VirtualFree(tramp_, 0, MEM_RELEASE); tramp_ = nullptr;
-                return false;
+                return fail();
             }
             *d = (int32_t)nd;
         }
 #endif
-        write_jmp(tramp_ + copied, t + copied);   // трамплін → назад у функцію
+        write_far(tramp + copied, t + copied);            // трамплін → назад у функцію
+        uint8_t* island = tramp + copied + kFarLen;
+        write_far(island, reinterpret_cast<uint8_t*>(detour));   // острівець → детур
 
-        // Заморожуємо решту потоків, щоб ніхто не виконував ці байти під час
-        // підміни, і зсуваємо IP тих, хто саме зараз стоїть у пролозі, на копію
-        // в трампліні. Це прибирає краш «функція+3» на гарячих функціях.
-        ThreadFreezer freezer;
-        freezer.freeze_others();
-        freezer.relocate_ip(t, copied, tramp_);
-
+        // Латка входу — 5 байтів E9 на острівець. Морозимо потоки й переносимо
+        // IP тих, хто стоїть у [t, t+copied) (ми чіпаємо і NOP-хвіст).
+        ThreadFreezer fz; fz.freeze_others();
+        fz.relocate_ip(t, copied, tramp);
         DWORD old;
-        if (!VirtualProtect(t, copied, PAGE_EXECUTE_READWRITE, &old)) {
-            freezer.thaw();
-            VirtualFree(tramp_, 0, MEM_RELEASE); tramp_ = nullptr;
-            return false;
-        }
-        write_jmp(t, reinterpret_cast<uint8_t*>(detour));
-        for (int j = kPatchLen; j < copied; ++j) t[j] = 0x90;   // NOP-и «хвоста»
+        if (!VirtualProtect(t, copied, PAGE_EXECUTE_READWRITE, &old)) { fz.thaw(); return fail(); }
+        write_e9(t, island);
+        for (int j = kJmpLen; j < copied; ++j) t[j] = 0x90;   // NOP-хвіст (недосяжний)
         VirtualProtect(t, copied, old, &old);
         FlushInstructionCache(GetCurrentProcess(), t, copied);
-        freezer.thaw();
+        fz.thaw();
 
-        target_ = t; copied_ = copied; call_orig_ = tramp_;
+        target_ = t; copied_ = copied; call_orig_ = tramp;
         return true;
     }
 
     void remove() {
         if (!target_) return;
-        ThreadFreezer freezer;
-        freezer.freeze_others();
-        if (is_thunk_) {
-            // Перехідник — просто повертаємо збережені байти на місце.
-            DWORD old;
-            if (VirtualProtect(target_, copied_, PAGE_EXECUTE_READWRITE, &old)) {
-                memcpy(target_, saved_, copied_);
-                VirtualProtect(target_, copied_, old, &old);
-                FlushInstructionCache(GetCurrentProcess(), target_, copied_);
-            }
-            freezer.thaw();
-            target_ = nullptr; is_thunk_ = false; call_orig_ = nullptr;
-            return;
-        }
-        // Дзеркально до install: повертаємо IP тих, хто зараз у трампліні, назад
-        // у відновлену функцію.
-        freezer.relocate_ip(tramp_, copied_, target_);
+        ThreadFreezer fz; fz.freeze_others();
+        if (!is_thunk_ && call_orig_)
+            fz.relocate_ip(reinterpret_cast<uint8_t*>(call_orig_), copied_, target_);
         DWORD old;
         if (VirtualProtect(target_, copied_, PAGE_EXECUTE_READWRITE, &old)) {
-            memcpy(target_, tramp_, copied_);
+            memcpy(target_, saved_, copied_);
             VirtualProtect(target_, copied_, old, &old);
             FlushInstructionCache(GetCurrentProcess(), target_, copied_);
         }
-        freezer.thaw();
-        if (tramp_) { VirtualFree(tramp_, 0, MEM_RELEASE); tramp_ = nullptr; }
-        target_ = nullptr; call_orig_ = nullptr;
+        fz.thaw();
+        if (block_) { VirtualFree(block_, 0, MEM_RELEASE); block_ = nullptr; }
+        target_ = nullptr; call_orig_ = nullptr; is_thunk_ = false;
     }
 
     template <typename T> T original() const { return reinterpret_cast<T>(call_orig_); }
     bool installed() const { return target_ != nullptr; }
 
 private:
-    // Байти після експорт-перехідника — це добивка між функціями (int3 0xCC
-    // або нулі). Тільки тоді перезапис перехідника безпечний (не чіпаємо чужий
-    // код). Перевіряємо рівно ті n байтів, які накриє наш стрибок понад E9.
-    static bool is_padding(const uint8_t* p, int n) {
-        for (int i = 0; i < n; ++i) if (p[i] != 0xCC && p[i] != 0x00) return false;
-        return true;
+    bool fail() {
+        if (block_) { VirtualFree(block_, 0, MEM_RELEASE); block_ = nullptr; }
+        return false;
     }
 
-    static void write_jmp(uint8_t* from, uint8_t* to) {
+    // 5-байтний відносний стрибок E9.
+    static void write_e9(uint8_t* from, uint8_t* to) {
+        from[0] = 0xE9;
+        *reinterpret_cast<int32_t*>(from + 1) = (int32_t)(to - (from + 5));
+    }
+
+    // Далекий стрибок: x64 — абсолютний FF25+адреса (14 б); x86 — E9 (дотягнеться).
+    static void write_far(uint8_t* from, uint8_t* to) {
 #ifdef _WIN64
         from[0] = 0xFF; from[1] = 0x25;
         *reinterpret_cast<uint32_t*>(from + 2) = 0;
         *reinterpret_cast<uint64_t*>(from + 6) = reinterpret_cast<uint64_t>(to);
 #else
-        from[0] = 0xE9;
-        *reinterpret_cast<int32_t*>(from + 1) = (int32_t)(to - (from + 5));
+        write_e9(from, to);
 #endif
     }
 
-    // Виділяє 64 байти під трамплін ПОРУЧ із target (у межах ±2 ГБ), щоб
-    // перерахований RIP-відносний disp32 дотягувався. На x86 адреса будь-яка.
+    // Виділяє блок ПОРУЧ із target (у межах ±2 ГБ), щоб 5-байтний E9 дотягнувся
+    // до острівця, а перерахований RIP-операнд трампліна — до своєї цілі.
     static uint8_t* alloc_near(uint8_t* target) {
 #ifdef _WIN64
         const uint64_t GB2 = 0x60000000ULL;   // трохи менше за 2 ГБ, із запасом
@@ -313,24 +312,24 @@ private:
         for (uint64_t off = step; off < GB2; off += step) {
             for (int dir = 0; dir < 2; ++dir) {
                 uint64_t addr = dir ? base + off : base - off;
-                void* p = VirtualAlloc((void*)(addr & ~(step - 1)), 64,
+                void* p = VirtualAlloc((void*)(addr & ~(step - 1)), 128,
                                        MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE);
                 if (p) return (uint8_t*)p;
             }
         }
         return nullptr;
 #else
-        return (uint8_t*)VirtualAlloc(nullptr, 64, MEM_COMMIT | MEM_RESERVE,
+        return (uint8_t*)VirtualAlloc(nullptr, 128, MEM_COMMIT | MEM_RESERVE,
                                       PAGE_EXECUTE_READWRITE);
 #endif
     }
 
     uint8_t* target_ = nullptr;
-    uint8_t* tramp_ = nullptr;
+    uint8_t* block_ = nullptr;    // трамплін + острівець
     void* call_orig_ = nullptr;   // що повертає original(): трамплін або справжня функція
     int copied_ = 0;
     bool is_thunk_ = false;
-    uint8_t saved_[16] = {0};     // байти перехідника для відновлення
+    uint8_t saved_[32] = {0};      // оригінальні байти входу для відновлення
 };
 
 }  // namespace hominka

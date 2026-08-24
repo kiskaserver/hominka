@@ -134,6 +134,7 @@ class Overlay(SourcesMixin, UpdatingMixin, ConfigMixin, LookMixin, QMainWindow):
         self.game_margin_x = 24
         self.game_margin_y = 24
         self.game_opacity = 235
+        self.game_hide_obs = False   # чат у грі бачить лише стрімер, не OBS
 
     def _build_window(self):
         """Рамка без системного заголовка: смужка, смужка оновлення, куточок."""
@@ -408,7 +409,15 @@ class Overlay(SourcesMixin, UpdatingMixin, ConfigMixin, LookMixin, QMainWindow):
             self.game_overlay = GameOverlay(self)
             self.game_overlay.set_geometry(self.game_anchor, self.game_margin_x,
                                            self.game_margin_y, self.game_opacity)
+            self.game_overlay.set_hide_from_obs(self.game_hide_obs)
         return self.game_overlay
+
+    def set_game_hide_obs(self, on: bool):
+        """Ховати чат у грі від OBS (лишається видним стрімеру на моніторі)."""
+        self.game_hide_obs = bool(on)
+        if self.game_overlay is not None:
+            self.game_overlay.set_hide_from_obs(self.game_hide_obs)
+        self.save_config()
 
     def _sync_game_source(self):
         """Каже оверлею гри показувати те саме джерело, що й головне вікно.

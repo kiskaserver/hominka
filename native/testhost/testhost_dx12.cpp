@@ -5,6 +5,7 @@
 #include <windows.h>
 #include <d3d12.h>
 #include <dxgi1_4.h>
+#include <math.h>
 
 static const UINT N = 2;
 static ID3D12Device* g_dev;
@@ -31,9 +32,9 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, LPWSTR, int show) {
     wc.cbSize = sizeof(wc); wc.lpfnWndProc = WndProc; wc.hInstance = inst;
     wc.lpszClassName = L"HominkaTestHostDX12";
     RegisterClassExW(&wc);
-    HWND hwnd = CreateWindowExW(0, wc.lpszClassName, L"Hominka test host (DX12)",
+    HWND hwnd = CreateWindowExW(0, wc.lpszClassName, L"Hominka DX12 sample (OBS test)",
                                WS_OVERLAPPEDWINDOW, CW_USEDEFAULT, CW_USEDEFAULT,
-                               800, 500, NULL, NULL, inst, NULL);
+                               1280, 720, NULL, NULL, inst, NULL);
     ShowWindow(hwnd, show);
 
     if (FAILED(D3D12CreateDevice(nullptr, D3D_FEATURE_LEVEL_11_0, __uuidof(ID3D12Device), (void**)&g_dev))) {
@@ -88,8 +89,13 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, LPWSTR, int show) {
         b.Transition.StateAfter = D3D12_RESOURCE_STATE_RENDER_TARGET;
         b.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
         g_cl->ResourceBarrier(1, &b);
-        const float green[4] = { 0.05f, 0.20f, 0.10f, 1.0f };
-        g_cl->ClearRenderTargetView(g_rtv[i], green, 0, nullptr);
+        float ph = (float)(GetTickCount() % 6000) / 6000.0f * 6.2831853f;
+        const float col[4] = {
+            0.06f + 0.05f * (0.5f + 0.5f * (float)cos(ph)),
+            0.10f + 0.08f * (0.5f + 0.5f * (float)cos(ph + 2.094f)),
+            0.14f + 0.08f * (0.5f + 0.5f * (float)cos(ph + 4.188f)),
+            1.0f };
+        g_cl->ClearRenderTargetView(g_rtv[i], col, 0, nullptr);
         b.Transition.StateBefore = D3D12_RESOURCE_STATE_RENDER_TARGET;
         b.Transition.StateAfter = D3D12_RESOURCE_STATE_PRESENT;
         g_cl->ResourceBarrier(1, &b);

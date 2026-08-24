@@ -27,6 +27,7 @@ struct FrameView {
     int32_t margin_y = 0;
     uint32_t opacity = 255;
     uint32_t target_pid = 0;          // 0 = будь-який процес
+    uint32_t hide_from_obs = 0;       // 1 = малювати якнайглибше, ховаючись від OBS
     const uint8_t* pixels = nullptr;  // BGRA, дійсний доти, доки живий Reader
 };
 
@@ -66,6 +67,7 @@ public:
         uint32_t w = h->width, ht = h->height, stride = h->stride;
         uint32_t enabled = h->enabled, anchor = h->anchor, opacity = h->opacity;
         uint32_t target_pid = h->target_pid;
+        uint32_t hide_obs = h->hide_from_obs;
         int32_t mx = h->margin_x, my = h->margin_y;
         if (w == 0 || ht == 0 || w > SHARED_FRAME_MAX_W || ht > SHARED_FRAME_MAX_H ||
             stride != w * 4)
@@ -94,6 +96,7 @@ public:
         out->margin_y = my;
         out->opacity = opacity > 255 ? 255 : opacity;
         out->target_pid = target_pid;
+        out->hide_from_obs = hide_obs;
         out->pixels = buf_;
         return true;
     }

@@ -254,11 +254,25 @@ class CardsMixin:
         op_row.addWidget(self.game_opacity, 1)
         lay.addLayout(op_row)
 
+        # Ховати чат від OBS: стрімер бачить чат у грі на своєму моніторі, а
+        # захоплення OBS знімає чистий кадр (чат не потрапляє в ефір).
+        self.game_hide_obs = QCheckBox("Ховати чат від OBS (видно лише мені)", self)
+        self.game_hide_obs.setChecked(bool(self.win.game_hide_obs))
+        self.game_hide_obs.toggled.connect(self.win.set_game_hide_obs)
+        lay.addWidget(self.game_hide_obs)
+        self.game_hide_obs_hint = QLabel(
+            "Малюємо чат перед самим показом кадру, щоб OBS зняв його без чату. "
+            "Для DirectX 11/12; перевірте на своєму OBS.", self)
+        self.game_hide_obs_hint.setObjectName("dim")
+        self.game_hide_obs_hint.setWordWrap(True)
+        lay.addWidget(self.game_hide_obs_hint)
+
         # Показуємо/ховаємо всю секцію одним списком.
         self._game_widgets = (self.game_warn, self.game_pick, self.game_refresh,
                               self.game_inject, self.game_status,
                               self.game_corner_lbl, self.game_corner,
-                              self.game_op_lbl, self.game_opacity)
+                              self.game_op_lbl, self.game_opacity,
+                              self.game_hide_obs, self.game_hide_obs_hint)
         for w in self._game_widgets:
             w.hide()
         self._injected = set()   # hwnd, куди вже вкладено — щоб не інжектити двічі
