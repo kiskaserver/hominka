@@ -22,6 +22,22 @@ static UINT64 g_fenceCounter;
 static HANDLE g_fenceEvent;
 static UINT g_rtvStep;
 
+// «Фігурки»: розмір, швидкості/фази, колір. Позицію рахуємо з часу (пінг-понг).
+struct Shape { float w, h, sx, sy, px, py; float col[4]; };
+static Shape g_shapes[] = {
+    {190, 190, 150, 118,   0.0f, 300, {1.00f, 0.20f, 0.28f, 1}},  // червоний
+    {150, 230, 100, 175,  640,   90, {0.15f, 0.95f, 1.00f, 1}},  // блакитний
+    {220, 130, 195,  85,  260,  470, {1.00f, 0.85f, 0.15f, 1}},  // жовтий
+    {140, 140, 132, 150,  820,  260, {0.85f, 0.25f, 1.00f, 1}},  // фіолетовий
+    {170, 170, 168, 132,  420,  560, {0.25f, 1.00f, 0.45f, 1}},  // зелений
+};
+static float ping(float v, float mx) {
+    if (mx <= 0) return 0;
+    float p = fmodf(v, 2 * mx);
+    if (p < 0) p += 2 * mx;
+    return p > mx ? 2 * mx - p : p;
+}
+
 LRESULT CALLBACK WndProc(HWND h, UINT m, WPARAM w, LPARAM l) {
     if (m == WM_DESTROY) { PostQuitMessage(0); return 0; }
     return DefWindowProcW(h, m, w, l);
@@ -89,13 +105,21 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, LPWSTR, int show) {
         b.Transition.StateAfter = D3D12_RESOURCE_STATE_RENDER_TARGET;
         b.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
         g_cl->ResourceBarrier(1, &b);
-        float ph = (float)(GetTickCount() % 6000) / 6000.0f * 6.2831853f;
-        const float col[4] = {
-            0.06f + 0.05f * (0.5f + 0.5f * (float)cos(ph)),
-            0.10f + 0.08f * (0.5f + 0.5f * (float)cos(ph + 2.094f)),
-            0.14f + 0.08f * (0.5f + 0.5f * (float)cos(ph + 4.188f)),
+        float t = (float)GetTickCount() / 1000.0f;
+        float ph = t * 1.05f;
+        const float bg[4] = {
+            0.16f + 0.14f * (0.5f + 0.5f * (float)cos(ph)),
+            0.10f + 0.12f * (0.5f + 0.5f * (float)cos(ph + 2.094f)),
+            0.24f + 0.16f * (0.5f + 0.5f * (float)cos(ph + 4.188f)),
             1.0f };
-        g_cl->ClearRenderTargetView(g_rtv[i], col, 0, nullptr);
+        g_cl->ClearRenderTargetView(g_rtv[i], bg, 0, nullptr);
+        // Плавучі яскраві фігурки — очищення по областях (rects у DX12 очистці).
+        for (const Shape& s : g_shapes) {
+            float x = ping(t * s.sx + s.px, 1280 - s.w);
+            float y = ping(t * s.sy + s.py, 720 - s.h);
+            D3D12_RECT r = {(LONG)x, (LONG)y, (LONG)(x + s.w), (LONG)(y + s.h)};
+            g_cl->ClearRenderTargetView(g_rtv[i], s.col, 1, &r);
+        }
         b.Transition.StateBefore = D3D12_RESOURCE_STATE_RENDER_TARGET;
         b.Transition.StateAfter = D3D12_RESOURCE_STATE_PRESENT;
         g_cl->ResourceBarrier(1, &b);
