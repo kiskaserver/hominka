@@ -29,6 +29,7 @@
 #include "../common/inline_hook.h"
 #include "overlay_dx11.h"
 #include "overlay_dx9.h"
+#include "overlay_gl.h"
 
 using hominka::log;
 
@@ -51,6 +52,13 @@ hominka::InlineHook g_reset_hook;
 EndSceneFn g_endscene_original = nullptr;
 ResetFn g_reset_original = nullptr;
 hominka::OverlayDX9 g_overlay9;
+
+// --- OpenGL ---
+typedef BOOL (WINAPI *SwapBuffersFn)(HDC);
+hominka::InlineHook g_wglswap_hook;
+SwapBuffersFn g_wglswap_original = nullptr;
+hominka::OverlayGL g_overlaygl;
+volatile LONG g_gl_frames = 0;
 volatile LONG g_dx9_frames = 0;
 
 // Наш Present: спершу малюємо, потім віддаємо кадр грі. Порядок саме такий —
@@ -170,6 +178,30 @@ HRESULT STDMETHODCALLTYPE hooked_reset(IDirect3DDevice9* device, D3DPRESENT_PARA
     return g_reset_original(device, pp);
 }
 
+// --- OpenGL ---
+BOOL WINAPI hooked_wglswap(HDC hdc) {
+    LONG n = InterlockedIncrement(&g_gl_frames);
+    if (n == 1) log("overlay(gl): перший перехоплений wglSwapBuffers — кадр наш");
+    g_overlaygl.draw();
+    return g_wglswap_original(hdc);
+}
+
+// wglSwapBuffers — плоский експорт opengl32.dll (не COM), тож інлайн-хук.
+bool install_gl_hook() {
+    HMODULE gl = GetModuleHandleW(L"opengl32.dll");
+    if (!gl) return false;   // гра не на OpenGL
+    void* addr = (void*)GetProcAddress(gl, "wglSwapBuffers");
+    if (!addr) return false;
+    if (!g_wglswap_hook.install(addr, reinterpret_cast<void*>(&hooked_wglswap)))
+        return false;
+    g_wglswap_original = g_wglswap_hook.original<SwapBuffersFn>();
+    log("overlay(gl): wglSwapBuffers перехоплено інлайн-хуком");
+    return true;
+}
+
+// Vulkan поки не реалізовано — заглушка, щоб решта збиралася й працювала.
+bool install_vk_hook() { return false; }
+
 // Створює тимчасовий пристрій DX9 і крізь нього — доступ до спільної vtable
 // IDirect3DDevice9. Підміна в ній діє для пристрою гри так само, як з DXGI.
 bool install_d3d9_hook() {
@@ -242,30 +274,34 @@ DWORD WINAPI init_thread(LPVOID) {
     // DX9 EndScene, а малює той, чий виклик гра справді робить, — інший просто
     // ніколи не спрацює. Проба DXGI створює власний пристрій DX11 і «вдається»
     // всюди, тому покладатися на її успіх не можна — покладаємось на виклик.
-    bool dxgi = false, d9 = false;
+    bool dxgi = false, d9 = false, gl = false, vk = false;
     for (int attempt = 0; attempt < 80; ++attempt) {
         bool dxgi_mod = GetModuleHandleW(L"dxgi.dll") != nullptr;
         bool d9_mod = GetModuleHandleW(L"d3d9.dll") != nullptr;
-        if (!dxgi && dxgi_mod) dxgi = install_present_hook();
-        if (!d9 && d9_mod) d9 = install_d3d9_hook();
+        bool gl_mod = GetModuleHandleW(L"opengl32.dll") != nullptr;
+        bool vk_mod = GetModuleHandleW(L"vulkan-1.dll") != nullptr;
+        if (!dxgi && dxgi_mod) dxgi = install_present_hook();  // DX11 (+ DX12 draw)
+        if (!d9 && d9_mod) d9 = install_d3d9_hook();           // DX9
+        // OpenGL і Vulkan поки не малюємо за замовчуванням: рендер готовий, але
+        // в OpenGL лишається рідкісний нестабільний краш у драйвері, і виставляти
+        // його стрімерам не можна. Вмикається для випробувань змінною HOMINKA_GL.
+        if (!gl && gl_mod && getenv("HOMINKA_GL")) gl = install_gl_hook();
+        if (!vk && vk_mod && getenv("HOMINKA_VK")) vk = install_vk_hook();
         // Досить, коли все застосовне поставлено і хоч один хук стоїть.
-        bool dxgi_done = dxgi || !dxgi_mod;
-        bool d9_done = d9 || !d9_mod;
-        if ((dxgi || d9) && dxgi_done && d9_done) break;
+        bool done = (dxgi || !dxgi_mod) && (d9 || !d9_mod) &&
+                    (gl || !gl_mod) && (vk || !vk_mod);
+        if ((dxgi || d9 || gl || vk) && done) break;
         Sleep(250);
     }
 
-    if (!dxgi && !d9) {
-        // Ні DXGI, ні DX9. Скажемо, що бачимо, — щоб було зрозуміло чому тихо.
-        bool gl = GetModuleHandleW(L"opengl32.dll") != nullptr;
-        bool vk = GetModuleHandleW(L"vulkan-1.dll") != nullptr;
-        if (gl) log("overlay: гра на OpenGL — підтримка буде далі");
-        else if (vk) log("overlay: гра на Vulkan — підтримка буде далі");
+    if (!dxgi && !d9 && !gl && !vk) {
+        if (GetModuleHandleW(L"opengl32.dll")) log("overlay: гра на OpenGL — малювання буде далі");
+        else if (GetModuleHandleW(L"vulkan-1.dll")) log("overlay: гра на Vulkan — малювання буде далі");
         else log("overlay: не впізнав графічний API гри — нічого не намалюю");
         return 1;
     }
-    log("overlay: хуки стоять (DXGI/DX11:%s DX9:%s), чекаю кадри",
-        dxgi ? "так" : "ні", d9 ? "так" : "ні");
+    log("overlay: хуки стоять (DXGI/DX11:%s DX9:%s GL:%s Vulkan:%s), чекаю кадри",
+        dxgi ? "так" : "ні", d9 ? "так" : "ні", gl ? "так" : "ні", vk ? "так" : "ні");
     return 0;
 }
 
@@ -282,8 +318,10 @@ BOOL WINAPI DllMain(HINSTANCE inst, DWORD reason, LPVOID) {
         g_present_hook.remove();
         g_reset_hook.remove();
         g_endscene_hook.remove();
+        g_wglswap_hook.remove();
         g_overlay.release();
         g_overlay9.release();
+        g_overlaygl.release();
         log("overlay: вивантаження, хуки знято");
     }
     return TRUE;

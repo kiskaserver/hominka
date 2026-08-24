@@ -337,7 +337,17 @@ class GameOverlay(QObject):
         _diag("ціль pid=%d" % pid)
 
     def set_custom_css(self, css: str):
-        self.feed.set_custom_css(css or "")
+        """Свій CSS користувача — і у стрічку, і на веб-сторінку, наживо.
+
+        Тримаємо його у feed.custom_css завжди: у режимі стрічки його застосовує
+        сама feed, а у веб-режимі — ми, прямо на сторінці (feed там «не
+        завантажена», тож її метод мовчав би, і правки CSS не доходили б).
+        """
+        self.feed.custom_css = css or ""
+        if self.mode == "feed":
+            self.feed.set_custom_css(css or "")
+        elif self.view.page() is not None:
+            self.view.page().runJavaScript(chatfeed.apply_css_js(css or ""))
         self._wake()
 
     def set_layout(self, layout):
