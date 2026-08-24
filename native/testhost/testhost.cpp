@@ -13,7 +13,7 @@
 #include <dxgi.h>
 #include <math.h>
 
-static const int SW = 1280, SH = 720;
+static int SW = 1280, SH = 720;   // фактичний розмір кадру (весь екран)
 
 static IDXGISwapChain* g_swap = nullptr;
 static ID3D11Device* g_dev = nullptr;
@@ -41,6 +41,7 @@ static float ping(float v, float mx) {
 
 LRESULT CALLBACK WndProc(HWND h, UINT m, WPARAM w, LPARAM l) {
     if (m == WM_DESTROY) { PostQuitMessage(0); return 0; }
+    if (m == WM_KEYDOWN && w == VK_ESCAPE) { PostQuitMessage(0); return 0; }  // Esc — вихід
     return DefWindowProcW(h, m, w, l);
 }
 
@@ -51,10 +52,13 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, LPWSTR, int show) {
     wc.hInstance = inst;
     wc.lpszClassName = L"HominkaTestHost";
     RegisterClassExW(&wc);
-    HWND hwnd = CreateWindowExW(0, wc.lpszClassName, L"Hominka DX11 sample (OBS test)",
-                               WS_OVERLAPPEDWINDOW, CW_USEDEFAULT, CW_USEDEFAULT,
-                               1280, 720, NULL, NULL, inst, NULL);
-    ShowWindow(hwnd, show);
+    // Безрамкове на весь екран: саме такий кадр бачить OBS Game Capture (режим
+    // «захопити повноекранний застосунок»), а не Window Capture. Esc — вихід.
+    SW = GetSystemMetrics(SM_CXSCREEN);
+    SH = GetSystemMetrics(SM_CYSCREEN);
+    HWND hwnd = CreateWindowExW(WS_EX_TOPMOST, wc.lpszClassName, L"Hominka DX11 sample (OBS test)",
+                               WS_POPUP, 0, 0, SW, SH, NULL, NULL, inst, NULL);
+    ShowWindow(hwnd, SW_SHOW);
 
     DXGI_SWAP_CHAIN_DESC sd = {};
     sd.BufferCount = 2;

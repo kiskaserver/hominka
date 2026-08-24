@@ -22,6 +22,8 @@ static UINT64 g_fenceCounter;
 static HANDLE g_fenceEvent;
 static UINT g_rtvStep;
 
+static int SW = 1280, SH = 720;   // фактичний розмір кадру (весь екран)
+
 // «Фігурки»: розмір, швидкості/фази, колір. Позицію рахуємо з часу (пінг-понг).
 struct Shape { float w, h, sx, sy, px, py; float col[4]; };
 static Shape g_shapes[] = {
@@ -40,6 +42,7 @@ static float ping(float v, float mx) {
 
 LRESULT CALLBACK WndProc(HWND h, UINT m, WPARAM w, LPARAM l) {
     if (m == WM_DESTROY) { PostQuitMessage(0); return 0; }
+    if (m == WM_KEYDOWN && w == VK_ESCAPE) { PostQuitMessage(0); return 0; }  // Esc — вихід
     return DefWindowProcW(h, m, w, l);
 }
 
@@ -48,10 +51,13 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, LPWSTR, int show) {
     wc.cbSize = sizeof(wc); wc.lpfnWndProc = WndProc; wc.hInstance = inst;
     wc.lpszClassName = L"HominkaTestHostDX12";
     RegisterClassExW(&wc);
-    HWND hwnd = CreateWindowExW(0, wc.lpszClassName, L"Hominka DX12 sample (OBS test)",
-                               WS_OVERLAPPEDWINDOW, CW_USEDEFAULT, CW_USEDEFAULT,
-                               1280, 720, NULL, NULL, inst, NULL);
-    ShowWindow(hwnd, show);
+    // Безрамкове на весь екран: саме такий кадр бачить OBS Game Capture (режим
+    // «захопити повноекранний застосунок»), а не Window Capture. Esc — вихід.
+    SW = GetSystemMetrics(SM_CXSCREEN);
+    SH = GetSystemMetrics(SM_CYSCREEN);
+    HWND hwnd = CreateWindowExW(WS_EX_TOPMOST, wc.lpszClassName, L"Hominka DX12 sample (OBS test)",
+                               WS_POPUP, 0, 0, SW, SH, NULL, NULL, inst, NULL);
+    ShowWindow(hwnd, SW_SHOW);
 
     if (FAILED(D3D12CreateDevice(nullptr, D3D_FEATURE_LEVEL_11_0, __uuidof(ID3D12Device), (void**)&g_dev))) {
         MessageBoxW(hwnd, L"no d3d12", L"testhost", 0); return 1;
@@ -62,7 +68,7 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, LPWSTR, int show) {
     IDXGIFactory4* fac = nullptr;
     CreateDXGIFactory1(__uuidof(IDXGIFactory4), (void**)&fac);
     DXGI_SWAP_CHAIN_DESC1 sd = {};
-    sd.BufferCount = N; sd.Width = 800; sd.Height = 500;
+    sd.BufferCount = N; sd.Width = SW; sd.Height = SH;
     sd.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
     sd.BufferUsage = DXGI_USAGE_RENDER_TARGET_OUTPUT;
     sd.SwapEffect = DXGI_SWAP_EFFECT_FLIP_DISCARD;
@@ -115,8 +121,8 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, LPWSTR, int show) {
         g_cl->ClearRenderTargetView(g_rtv[i], bg, 0, nullptr);
         // Плавучі яскраві фігурки — очищення по областях (rects у DX12 очистці).
         for (const Shape& s : g_shapes) {
-            float x = ping(t * s.sx + s.px, 1280 - s.w);
-            float y = ping(t * s.sy + s.py, 720 - s.h);
+            float x = ping(t * s.sx + s.px, SW - s.w);
+            float y = ping(t * s.sy + s.py, SH - s.h);
             D3D12_RECT r = {(LONG)x, (LONG)y, (LONG)(x + s.w), (LONG)(y + s.h)};
             g_cl->ClearRenderTargetView(g_rtv[i], s.col, 1, &r);
         }
