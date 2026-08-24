@@ -2,8 +2,8 @@
 # через --version-file version_info.txt
 VSVersionInfo(
   ffi=FixedFileInfo(
-    filevers=(2, 4, 8, 0),
-    prodvers=(2, 4, 8, 0),
+    filevers=(2, 4, 9, 0),
+    prodvers=(2, 4, 9, 0),
     mask=0x3f,
     flags=0x0,
     OS=0x40004,
@@ -19,12 +19,12 @@ VSVersionInfo(
           [
             StringStruct('CompanyName', 'Mykyta Vinnyk'),
             StringStruct('FileDescription', 'Hominka — chat overlay (invisible to OBS)'),
-            StringStruct('FileVersion', '2.4.8'),
+            StringStruct('FileVersion', '2.4.9'),
             StringStruct('InternalName', 'Hominka'),
             StringStruct('LegalCopyright', '© Mykyta Vinnyk'),
             StringStruct('OriginalFilename', 'Hominka.exe'),
             StringStruct('ProductName', 'Hominka'),
-            StringStruct('ProductVersion', '2.4.8')
+            StringStruct('ProductVersion', '2.4.9')
           ]
         )
       ]
