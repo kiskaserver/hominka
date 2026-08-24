@@ -11,6 +11,7 @@ from PySide6.QtCore import Qt, QTimer, QUrl
 from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (
     QCheckBox, QComboBox, QFrame, QHBoxLayout, QLabel, QLineEdit, QPushButton,
+    QSlider,
 )
 
 from ... import fullscreen as fs_mod
@@ -240,10 +241,48 @@ class CardsMixin:
         self.game_inject.clicked.connect(self._inject_selected)
         lay.addWidget(self.game_inject)
 
+        # Окремий рядок стану саме для інжектора — щоб його не затирав напис про
+        # повноекранний режим (той живе у top_status і оновлюється таймером).
+        self.game_status = QLabel("", self)
+        self.game_status.setObjectName("dim")
+        self.game_status.setWordWrap(True)
+        lay.addWidget(self.game_status)
+
+        # Куди тулити чат у грі та наскільки він прозорий.
+        pos_row = QHBoxLayout()
+        pos_row.setSpacing(6)
+        self.game_corner_lbl = QLabel("Кут:", self)
+        pos_row.addWidget(self.game_corner_lbl)
+        self.game_corner = QComboBox(self)
+        for label, cid in (("Ліворуч угорі", "tl"), ("Праворуч угорі", "tr"),
+                           ("Ліворуч унизу", "bl"), ("Праворуч унизу", "br")):
+            self.game_corner.addItem(label, cid)
+        idx = self.game_corner.findData(self.win.game_anchor)
+        if idx >= 0:
+            self.game_corner.setCurrentIndex(idx)
+        self.game_corner.currentIndexChanged.connect(self._apply_game_geometry)
+        pos_row.addWidget(self.game_corner, 1)
+        lay.addLayout(pos_row)
+
+        op_row = QHBoxLayout()
+        op_row.setSpacing(6)
+        self.game_op_lbl = QLabel("Прозорість:", self)
+        op_row.addWidget(self.game_op_lbl)
+        self.game_opacity = QSlider(Qt.Horizontal, self)
+        self.game_opacity.setRange(30, 255)
+        self.game_opacity.setValue(int(self.win.game_opacity))
+        self.game_opacity.valueChanged.connect(self._apply_game_geometry)
+        op_row.addWidget(self.game_opacity, 1)
+        lay.addLayout(op_row)
+
+        # Показуємо/ховаємо всю секцію одним списком.
         self._game_widgets = (self.game_warn, self.game_pick, self.game_refresh,
-                              self.game_inject)
+                              self.game_inject, self.game_status,
+                              self.game_corner_lbl, self.game_corner,
+                              self.game_op_lbl, self.game_opacity)
         for w in self._game_widgets:
             w.hide()
+        self._injected = set()   # hwnd, куди вже вкладено — щоб не інжектити двічі
 
         if self.win.channel != "stable":
             self.set_game_experimental(True)
@@ -325,7 +364,9 @@ class CardsMixin:
                 QTimer.singleShot(0, lambda: self.scroll.ensureWidgetVisible(self.game_inject))
         else:
             self.win.set_game_overlay(False)
-            self.top_status.setText("Чат у грі вимкнено.")
+            self._injected.clear()
+            self.game_inject.setText("Показати чат у грі")
+            self.game_status.setText("")
 
     def _refresh_games(self):
         """Наповнює список видимими вікнами. Кожен рядок памʼятає свій hwnd."""
@@ -341,27 +382,43 @@ class CardsMixin:
         self.game_inject.setEnabled(True)
 
     def _inject_selected(self):
-        """Вкладає чат у вибрану зі списку гру."""
+        """Вкладає чат у вибрану зі списку гру (або каже, що вже вкладено)."""
         hwnd = self.game_pick.currentData()
         if not hwnd:
-            self.top_status.setText("Спершу оберіть гру зі списку (кнопка ⟳ оновлює).")
+            self.game_status.setText("Спершу оберіть гру зі списку (⟳ оновлює).")
             return
-        self.top_status.setText("Вкладаю чат…")
+        # Не інжектимо повторно в ту саму гру: DLL уже всередині, друга інʼєкція
+        # нічого не дає, лише плодить зайві виклики.
+        if hwnd in self._injected and inject_mod._pid_of(hwnd):
+            self.game_status.setText("У цю гру чат уже вкладено.")
+            return
+        self.game_status.setText("Вкладаю чат…")
         res = self.win.inject_game(hwnd)
-        # Інша копія Hominka вже пише кадр у ту саму память — двоє зіпсують чат.
         ov = getattr(self.win, "game_overlay", None)
         if res.ok and ov is not None and getattr(ov.writer, "conflict", False):
-            self.top_status.setText(
+            self.game_status.setText(
                 "Інша копія Hominka вже показує чат у грі. Лишіть одну — двоє "
                 "малюють одне поверх одного.")
             return
-        self.top_status.setText(res.message)
+        if res.ok:
+            exe = self.game_pick.currentText().split(" — ")[-1]
+            self._injected.add(hwnd)
+            self.game_status.setText("✓ Чат у грі працює: %s. Тут його й видно." % exe)
+            self.game_inject.setText("Показати ще раз")
+        else:
+            self.game_status.setText(res.message)
         # Якщо гру заблокував античит — знімаємо галочку: тут інжектор не варіант.
         if res.code == inject_mod.EX_BLOCKED:
             self.game_box.blockSignals(True)
             self.game_box.setChecked(False)
             self.game_box.blockSignals(False)
             self._toggle_game(False)
+
+    def _apply_game_geometry(self, *_a):
+        """Кут і прозорість чату в грі — одразу у продюсер."""
+        anchor = self.game_corner.currentData() or "tl"
+        self.win.set_game_geometry(anchor, self.win.game_margin_x,
+                                   self.win.game_margin_y, self.game_opacity.value())
 
     def set_fullscreen_state(self, info: dict):
         """Показує, що зараз попереду, простими словами."""

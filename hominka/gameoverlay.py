@@ -364,6 +364,9 @@ class GameOverlay(QObject):
     def _on_loaded(self, ok: bool):
         if not ok:
             return
+        # Той самий масштаб тексту, що й у головному вікні — щоб чат у грі
+        # виглядав так само, а не дрібнішим/крупнішим.
+        self.view.setZoomFactor(getattr(self.win, "zoom", 1.0) or 1.0)
         if self.mode == "feed":
             self.feed.on_loaded()
             _diag("стрічку завантажено (feed)")

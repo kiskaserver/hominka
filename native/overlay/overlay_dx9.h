@@ -83,10 +83,14 @@ private:
     bool upload(IDirect3DDevice9* device, const FrameView& f) {
         if (!tex_ || f.width != tex_w_ || f.height != tex_h_) {
             release_texture();
-            // D3DPOOL_DEFAULT + DYNAMIC: оновлюємо щокадру через Lock. A8R8G8B8
-            // у памʼяті лежить як BGRA — точно як кадр із Python.
+            // D3DPOOL_MANAGED, а не DEFAULT: КЛЮЧОВЕ для Alt-Tab. Коли гра
+            // втрачає пристрій (Alt-Tab у DX9), вона може відновитися лише якщо
+            // ВСІ ресурси D3DPOOL_DEFAULT звільнено — інакше її Reset() падає, і
+            // гра зависає (а потім і не закривається). MANAGED переживає Reset
+            // сам, рантайм відновлює його — тож наша текстура грі не заважає.
+            // Керовану текстуру теж можна лочити й оновлювати (без DYNAMIC).
             HRESULT hr = device->CreateTexture(f.width, f.height, 1,
-                D3DUSAGE_DYNAMIC, D3DFMT_A8R8G8B8, D3DPOOL_DEFAULT, &tex_, nullptr);
+                0, D3DFMT_A8R8G8B8, D3DPOOL_MANAGED, &tex_, nullptr);
             if (FAILED(hr)) {
                 log("overlay(dx9): CreateTexture не вдалося, hr=0x%lx", (unsigned long)hr);
                 return false;
@@ -95,9 +99,8 @@ private:
             tex_h_ = f.height;
         }
         D3DLOCKED_RECT lr;
-        if (FAILED(tex_->LockRect(0, &lr, nullptr, D3DLOCK_DISCARD))) {
-            // Найімовірніше пристрій щойно скинули (device lost) — викидаємо
-            // недійсну текстуру, щоб наступний кадр створив нову.
+        if (FAILED(tex_->LockRect(0, &lr, nullptr, 0))) {
+            // Не вдалося залочити — викидаємо текстуру, наступний кадр створить нову.
             release_texture();
             return false;
         }
