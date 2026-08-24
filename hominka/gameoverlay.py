@@ -14,6 +14,7 @@ Python; якщо міняється там, міняється й тут (оби
 """
 
 import ctypes
+import os
 import struct
 import zlib
 from ctypes import wintypes
@@ -23,6 +24,21 @@ from PySide6.QtGui import QImage
 from PySide6.QtWebEngineWidgets import QWebEngineView
 
 from . import feed as chatfeed
+
+
+def _diag(msg: str):
+    """Дописує рядок у той самий журнал, що й DLL (%TEMP%\\hominka-overlay.log).
+
+    Продюсер (ми) і DLL пишуть в одне місце — тоді видно обидва боки: чи ми
+    взагалі щось поклали в память і що саме DLL звідти прочитала.
+    """
+    try:
+        path = os.path.join(os.environ.get("TEMP", "."), "hominka-overlay.log")
+        from datetime import datetime
+        with open(path, "a", encoding="utf-8") as f:
+            f.write("[%s] продюсер: %s\n" % (datetime.now().strftime("%H:%M:%S.%f")[:-3], msg))
+    except Exception:
+        pass
 
 # --- дзеркало shared_frame.h ------------------------------------------------
 SHM_NAME = "Local\\HominkaOverlayFrame"
@@ -215,6 +231,8 @@ class GameOverlay(QObject):
         self._last_crc = 0
         self._busy_until = 0.0
         self._in_tick = False
+        self._pushed = 0
+        self._content_logged = False
 
         self.writer = SharedFrameWriter()
 
@@ -241,6 +259,8 @@ class GameOverlay(QObject):
     def set_enabled(self, on: bool):
         self.enabled = bool(on)
         if not self.writer.ok():
+            _diag("увімкнення не вдалося — спільна память недоступна (conflict=%s)"
+                  % getattr(self.writer, "conflict", "?"))
             return
         if self.enabled:
             self.view.move(-4000, -4000)
@@ -248,6 +268,7 @@ class GameOverlay(QObject):
             self.feed.load()
             self._busy_until = _now() + self.BUSY_WINDOW
             self._timer.start(self.BUSY_MS)
+            _diag("увімкнено, розмір вікна %dx%d" % (self.view.width(), self.view.height()))
         else:
             # Спершу глушимо таймер — щоб жоден відкладений _tick не записав
             # кадр із enabled=1 уже ПІСЛЯ того, як ми вимкнули чат.
@@ -269,6 +290,7 @@ class GameOverlay(QObject):
     def set_target(self, pid: int):
         """Малювати чат лише у цій грі (0 = будь-де). Ставиться після інʼєкції."""
         self.writer.set_target(pid)
+        _diag("ціль pid=%d" % pid)
 
     def set_custom_css(self, css: str):
         self.feed.set_custom_css(css or "")
@@ -282,6 +304,9 @@ class GameOverlay(QObject):
         """Та сама подія, що пішла в головне вікно."""
         if not self.enabled:
             return
+        self._pushed += 1
+        if self._pushed == 1:
+            _diag("перша подія чату дійшла до оверлея гри")
         self.feed.push(event)
         self._wake()
 
@@ -331,6 +356,21 @@ class GameOverlay(QObject):
             self._heartbeat += 1
             self.writer.write(img, self.anchor, self.margin_x, self.margin_y,
                               self.opacity, self._heartbeat)
+            # Коли вже прийшли події — рахуємо непорожні пікселі кадру: так видно,
+            # чи офскрин-вікно справді намалювало чат, чи віддає прозору пустку
+            # (тоді проблема в рендері вікна, а не в подіях). Перший кадр не
+            # рахуємо — він порожній за визначенням (сторінка щойно завантажилась).
+            if not self._content_logged and self._pushed > 0:
+                self._content_logged = True
+                nb = 0
+                step = max(1, img.width() // 90)
+                for y in range(0, img.height(), 6):
+                    for x in range(0, img.width(), step):
+                        c = img.pixelColor(x, y)
+                        if c.alpha() > 10 and (c.red() + c.green() + c.blue()) > 20:
+                            nb += 1
+                _diag("кадр після подій %dx%d, непорожніх пікселів (вибірка)=%d, target=%d, heartbeat=%d"
+                      % (img.width(), img.height(), nb, self.writer.target_pid, self._heartbeat))
 
         # Тихо стало — переходимо на рідкі знімки, щоб не молоти вхолосту.
         if _now() > self._busy_until and self._timer.interval() != self.IDLE_MS:

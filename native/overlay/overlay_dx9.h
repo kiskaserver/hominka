@@ -35,10 +35,21 @@ public:
 
         FrameView f;
         bool got = reader_.read(&f);
+        if (got && !logged_) {
+            logged_ = true;
+            log("overlay(dx9): кадр — enabled=%u target=%u ми=%u розмір=%ux%u",
+                (unsigned)f.enabled, f.target_pid, (unsigned)GetCurrentProcessId(),
+                f.width, f.height);
+        }
         if (got) {
             // Малюємо лише у процесі-цілі: інакше чат зʼявився б у кожному
             // вікні, куди DLL випадково потрапила.
-            if (f.target_pid && f.target_pid != GetCurrentProcessId()) return;
+            if (f.target_pid && f.target_pid != GetCurrentProcessId()) {
+                if (!pid_warned_) { pid_warned_ = true;
+                    log("overlay(dx9): НЕ малюю — ціль pid=%u, а ми pid=%u",
+                        f.target_pid, (unsigned)GetCurrentProcessId()); }
+                return;
+            }
             if (!f.enabled) { enabled_ = false; return; }
             enabled_ = true;
             // Перезаливаємо і коли текстури немає: після Reset пристрою (зміна
@@ -212,6 +223,8 @@ private:
     uint32_t tex_w_ = 0, tex_h_ = 0, tex_seq_ = 0;
     bool enabled_ = false;
     bool ready_ = false;
+    bool logged_ = false;
+    bool pid_warned_ = false;
     FrameView last_;
 };
 

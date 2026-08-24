@@ -34,9 +34,18 @@ public:
             // якщо він у нас уже є.
             if (tex_seq_ == 0 || !tex_enabled_) return;
         } else {
+            if (!logged_) { logged_ = true;
+                log("overlay(dx11): кадр — enabled=%u target=%u ми=%u розмір=%ux%u",
+                    (unsigned)f.enabled, f.target_pid, (unsigned)GetCurrentProcessId(),
+                    f.width, f.height); }
             // Малюємо лише у процесі-цілі: інакше чат зʼявився б у кожному
             // вікні, куди DLL випадково потрапила.
-            if (f.target_pid && f.target_pid != GetCurrentProcessId()) return;
+            if (f.target_pid && f.target_pid != GetCurrentProcessId()) {
+                if (!pid_warned_) { pid_warned_ = true;
+                    log("overlay(dx11): НЕ малюю — ціль pid=%u, а ми pid=%u",
+                        f.target_pid, (unsigned)GetCurrentProcessId()); }
+                return;
+            }
             if (!f.enabled) { tex_enabled_ = false; return; }
             tex_enabled_ = true;
             if (f.seq != tex_seq_ || f.width != tex_w_ || f.height != tex_h_) {
@@ -229,6 +238,8 @@ private:
 
     FrameView last_;
     bool ready_ = false;
+    bool logged_ = false;
+    bool pid_warned_ = false;
 };
 
 }  // namespace hominka
