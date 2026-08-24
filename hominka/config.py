@@ -44,11 +44,6 @@ class ConfigMixin:
         self.custom_css = cfg.get("customCss") or ""
         self.chat_layout = chatfeed.clean_layout(cfg.get("chatLayout"))
         self.keep_top = bool(cfg.get("keepTop", True))
-        # Дзеркало в RTSS вмикаємо не тут, а нижче — після того, як прочитаємо
-        # канал оновлень. Інакше виходило, що збережене «rtss: true» оживало
-        # ще до того, як програма дізнавалася, що вона в стабільному каналі,
-        # де цієї можливості не існує.
-        want_rtss = bool(cfg.get("rtss"))
         # Розташування чату в грі. Саме ввімкнення (game_on) не відновлюємо: гра
         # після перезапуску вже не та (DLL пішла разом із нею), тож продюсер має
         # вмикатися свідомо, кнопкою, а не сам.
@@ -103,15 +98,9 @@ class ConfigMixin:
         self.panel.auto_upd.setChecked(self.auto_update)
         self.panel.auto_upd.blockSignals(False)
         self.panel.set_status("Версія %s (%s)" % (APP_VERSION, updater.channel_label(self.channel)))
-        # Канал відомий — тепер вирішуємо долю експериментальних можливостей.
-        # Панель будувалася зі стабільним каналом (overlay.py), тож без цього
-        # рядка бета після кожного перезапуску лишалася без своїх галочок.
-        if want_rtss:
-            self.set_rtss(True)
+        # Канал відомий — тепер вирішуємо долю експериментальних можливостей
+        # (розділ інжектора видно лише в тестових каналах).
         self.apply_experimental()
-        self.panel.rtss.blockSignals(True)
-        self.panel.rtss.setChecked(self.rtss_on)
-        self.panel.rtss.blockSignals(False)
         # синхронізуємо панель з завантаженими значеннями
         self.panel.opacity.setValue(int(op * 100))
         self.panel.bg.setValue(int(self.bg_alpha * 100))
@@ -137,7 +126,6 @@ class ConfigMixin:
                     "customCss": self.custom_css,
                     "chatLayout": self.chat_layout,
                     "keepTop": self.keep_top,
-                    "rtss": self.rtss_on,
                     "gameOverlay": {
                         "anchor": self.game_anchor,
                         "marginX": self.game_margin_x,

@@ -182,10 +182,6 @@ class SourcesMixin:
         self.readers = []
 
     def _on_chat_event(self, event: dict):
-        # Копія в OSD RTSS, якщо його ввімкнено (див. rtss.py). Робимо це до
-        # стрічки: там подія може затриматися, а в OSD затримка ні до чого.
-        if getattr(self, "rtss_on", False):
-            self.rtss.push(event)
         # Копія у гру, якщо ввімкнено (див. gameoverlay.py). Незалежно від режиму
         # головного вікна: у грі чат потрібен і тоді, коли на сайті показано
         # сторінку YouTube, а не спільну стрічку.

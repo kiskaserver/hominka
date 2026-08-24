@@ -7,8 +7,7 @@
 
 from typing import TYPE_CHECKING
 
-from PySide6.QtCore import Qt, QTimer, QUrl
-from PySide6.QtGui import QDesktopServices
+from PySide6.QtCore import Qt, QTimer
 from PySide6.QtWidgets import (
     QCheckBox, QComboBox, QFrame, QHBoxLayout, QLabel, QLineEdit, QPushButton,
     QSlider,
@@ -16,7 +15,6 @@ from PySide6.QtWidgets import (
 
 from ... import fullscreen as fs_mod
 from ... import inject as inject_mod
-from ... import rtss as rtss_mod
 from ... import update as updater
 from ...fullscreen import changed_window as _changed_window
 from ...version import APP_VERSION
@@ -170,28 +168,6 @@ class CardsMixin:
         row.addWidget(self.restore_btn)
         lay.addLayout(row)
 
-        # Дзеркало в RTSS: єдиний спосіб побачити чат у виключному
-        # повноекранному режимі без інʼєкції в гру.
-        #
-        # Показуємо лише в тестових каналах. У стабільному каналі люди ведуть
-        # ефіри, і експериментальні можливості мають доходити до них уже
-        # перевіреними — а не «спробуйте, раптом спрацює».
-        self.rtss = QCheckBox("Дублювати чат в RTSS (текстом)", self)
-        self.rtss.setToolTip(
-            "RivaTuner Statistics Server уже вміє малювати поверх гри — ми просто "
-            "просимо його показати останні рядки чату. Без аватарок і емоутів, "
-            "зате видно навіть у виключному повноекранному режимі.")
-        self.rtss.toggled.connect(self._toggle_rtss)
-        lay.addWidget(self.rtss)
-
-        # Кнопка з'являється лише тоді, коли є що робити: запустити вже
-        # встановлений RTSS або піти по нього.
-        self.rtss_action = QPushButton("", self)
-        self.rtss_action.setObjectName("ghost")
-        self.rtss_action.setFixedHeight(26)
-        self.rtss_action.clicked.connect(self._rtss_action)
-        self.rtss_action.hide()
-        lay.addWidget(self.rtss_action)
 
         # --- справжній чат у грі (інжектор) ---------------------------------
         # Найпотужніше і найризикованіше: своя бібліотека всередині процесу гри
@@ -200,20 +176,23 @@ class CardsMixin:
         self.game_box = QCheckBox("Справжній чат у грі (для одиночних ігор)", self)
         self.game_box.setToolTip(
             "Показує повний чат — з аватарками й емоутами — поверх гри, навіть "
-            "коли вона у виключному повноекранному режимі. Це єдиний спосіб без "
-            "RTSS, але він вкладає бібліотеку в процес гри.")
+            "коли вона у виключному повноекранному режимі. Вкладає бібліотеку в "
+            "процес гри — на свій страх і ризик.")
         self.game_box.toggled.connect(self._toggle_game)
         lay.addWidget(self.game_box)
 
+        # Червоне попередження: пряма інʼєкція — потужно, але на свій ризик.
         self.game_warn = QLabel(
-            "У змагальних іграх з античитом (Valorant, CS2, Rust, Apex, EFT…) "
-            "вкладати щось у процес НЕ МОЖНА — це загрожує баном, і програма туди "
-            "не пускає. Discord і OBS живуть у білих списках античитів за "
-            "домовленістю; у нас такого списку немає. Бібліотека непідписана — "
-            "Defender чи SmartScreen можуть застерегти. Для змагальних ігор "
-            "лишається безрамковий режим вище.", self)
-        self.game_warn.setObjectName("dim")
+            "⚠ Прямий інжект у гру — НА СВІЙ СТРАХ І РИЗИК. Ми вкладаємо власну "
+            "бібліотеку в процес гри. У ЗМАГАЛЬНИХ іграх з античитом (Valorant, "
+            "CS2, Rust, Apex, EFT…) це загрожує БАНОМ акаунта — туди програма не "
+            "пускає взагалі. Бібліотека непідписана, тож Defender чи SmartScreen "
+            "можуть застерегти. Чат у грі видно і в OBS Game Capture. Для "
+            "змагальних ігор та щоб сховатися від OBS — безрамковий режим вище.", self)
         self.game_warn.setWordWrap(True)
+        self.game_warn.setStyleSheet(
+            "color:#fca5a5; background:rgba(220,38,38,0.12);"
+            "border:1px solid rgba(220,38,38,0.45); border-radius:6px; padding:6px 8px;")
         self.game_warn.hide()
         lay.addWidget(self.game_warn)
 
@@ -287,10 +266,6 @@ class CardsMixin:
         if self.win.channel != "stable":
             self.set_game_experimental(True)
 
-        if self.win.channel == "stable":
-            self.rtss.hide()
-            self.rtss_action.hide()
-
         self.keep_top = QCheckBox("Тримати поверх усіх вікон", self)
         self.keep_top.setToolTip(
             "У рідкісних старих іграх це дає мерехтіння — тоді вимкніть.")
@@ -298,44 +273,9 @@ class CardsMixin:
         lay.addWidget(self.keep_top)
         return card
 
-    def _toggle_rtss(self, on: bool):
-        """Вмикає дзеркало, а якщо RTSS немає — пропонує зробити наступний крок.
-
-        Просто сказати «не працює» мало: людина не зобов'язана знати, що таке
-        RTSS і де його брати.
-        """
-        if on and not self.win.rtss.available():
-            self.rtss.blockSignals(True)
-            self.rtss.setChecked(False)
-            self.rtss.blockSignals(False)
-            if rtss_mod.installed_path():
-                self.top_status.setText("RTSS встановлено, але не запущено.")
-                self.rtss_action.setText("Запустити RTSS")
-            else:
-                self.top_status.setText(
-                    "Потрібен RivaTuner Statistics Server — безкоштовна програма, "
-                    "яка вміє малювати поверх гри (йде разом із MSI Afterburner).")
-                self.rtss_action.setText("Завантажити RTSS")
-            self.rtss_action.show()
-            return
-        self.rtss_action.hide()
-        self.win.set_rtss(on)
-
-    def _rtss_action(self):
-        """Запустити RTSS або відкрити сторінку завантаження."""
-        if rtss_mod.installed_path():
-            if rtss_mod.launch():
-                self.top_status.setText("Запускаю RTSS… за кілька секунд увімкніть галочку ще раз.")
-                self.rtss_action.hide()
-            else:
-                self.top_status.setText("Не вдалося запустити RTSS — спробуйте вручну.")
-            return
-        QDesktopServices.openUrl(QUrl(rtss_mod.RTSS_SITE))
-        self.top_status.setText("Відкрив сторінку завантаження RTSS.")
-
     # --- інжектор чату в гру ---
     def set_game_experimental(self, on: bool):
-        """Показує розділ інжектора лише в тестових каналах (як і RTSS)."""
+        """Показує розділ інжектора лише в тестових каналах."""
         show = on and inject_mod.available()
         self.game_box.setVisible(show)
         if not show:

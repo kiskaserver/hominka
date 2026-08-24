@@ -30,20 +30,14 @@ class UpdatingMixin:
         self.check_updates(manual=True)
 
     def apply_experimental(self):
-        """Експериментальні можливості живуть тільки в тестових каналах.
+        """Експериментальні можливості (інжектор) живуть лише в тестових каналах.
 
-        Правило одне, а місць, де його треба застосувати, два: коли людина
-        перемикає канал і коли програма стартує з config.json. Друге раніше
-        було пропущене — панель будується зі стабільним каналом, тож бета після
-        перезапуску лишалася без галочки RTSS, а стабільна могла успадкувати
-        ввімкнене дзеркало зі старих налаштувань.
+        Правило одне, а місць, де його застосувати, два: коли людина перемикає
+        канал і коли програма стартує з config.json. Друге легко пропустити —
+        панель будується зі стабільним каналом, тож бета після перезапуску
+        лишалася б без розділу гри.
         """
         experimental = self.channel != "stable"
-        self.panel.rtss.setVisible(experimental)
-        self.panel.rtss_action.setVisible(False)
-        if not experimental and self.rtss_on:
-            self.set_rtss(False)
-        # Інжектор — теж лише в тестових каналах, і за тим самим правилом.
         if hasattr(self.panel, "set_game_experimental"):
             self.panel.set_game_experimental(experimental)
         if not experimental and getattr(self, "game_on", False):

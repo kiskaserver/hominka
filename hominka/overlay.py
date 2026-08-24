@@ -26,7 +26,7 @@ from PySide6.QtWebEngineWidgets import QWebEngineView
 from . import feed as chatfeed
 from . import update as updater
 from .config import ConfigMixin
-from . import fullscreen, rtss, x11
+from . import fullscreen, x11
 from .paths import BASE_DIR, resource_path
 from .probe import LiveProbe
 from .sources import SourcesMixin
@@ -125,11 +125,6 @@ class Overlay(SourcesMixin, UpdatingMixin, ConfigMixin, LookMixin, QMainWindow):
         # змогу його вимкнути.
         self.keep_top = True
         self._topmost = fullscreen.TopMostKeeper(self)
-
-        # Дзеркало чату в OSD RTSS — єдиний спосіб побачити чат у виключному
-        # повноекранному режимі, не лізучи в чужий процес (див. rtss.py).
-        self.rtss_on = False
-        self.rtss = rtss.ChatMirror()
 
         # Справжній чат у грі через інжектор (native/). Створюємо лениво —
         # тільки коли вмикають, бо це друге приховане вікно з рушієм браузера.
@@ -428,7 +423,7 @@ class Overlay(SourcesMixin, UpdatingMixin, ConfigMixin, LookMixin, QMainWindow):
     def set_game_overlay(self, on: bool):
         """Вмикає/вимикає продюсера кадру чату для гри.
 
-        У стабільному каналі — ніколи (як і RTSS): експеримент з інʼєкцією не
+        У стабільному каналі — ніколи: експеримент з інʼєкцією не
         має вмикатися в тих, хто просто веде ефір.
         """
         if on and self.channel == "stable":
@@ -463,21 +458,6 @@ class Overlay(SourcesMixin, UpdatingMixin, ConfigMixin, LookMixin, QMainWindow):
             self.game_overlay.set_geometry(anchor, margin_x, margin_y, opacity)
         self.save_config()
 
-    def set_rtss(self, on: bool):
-        """Вмикає дублювання чату в OSD RTSS.
-
-        У стабільному каналі — ніколи. Це остання застава: галочки там і так
-        не видно, але жоден config.json — свій, чужий чи принесений з бети —
-        не має права оживити в стабільній програмі те, чого в ній немає.
-        """
-        if on and self.channel == "stable":
-            on = False
-        self.rtss_on = bool(on) and self.rtss.set_enabled(bool(on))
-        if not on:
-            self.rtss.set_enabled(False)
-        self.save_config()
-        return self.rtss_on
-
     def set_keep_top(self, on: bool):
         self.keep_top = bool(on)
         self._topmost.enabled = self.keep_top
@@ -494,9 +474,6 @@ class Overlay(SourcesMixin, UpdatingMixin, ConfigMixin, LookMixin, QMainWindow):
         return fullscreen.restore(fullscreen.changed_window())
 
     def closeEvent(self, e):
-        # Слот OSD чужий, і лишати в ньому свій текст після виходу не можна:
-        # RTSS показуватиме його доти, доки сам не перезапуститься.
-        self.rtss.stop()
         if self.game_overlay is not None:
             self.game_overlay.close()
         self._stop_readers()

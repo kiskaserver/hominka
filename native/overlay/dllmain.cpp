@@ -307,6 +307,13 @@ DWORD WINAPI init_thread(LPVOID) {
 
 }  // namespace
 
+// Підпис «це наша бібліотека». Інжектор перевіряє його ПЕРЕД тим, як щось
+// вкладати: так наш інжектор не можна нацькувати на чужу (наприклад, чит-) DLL —
+// він вантажить лише файл із цим маркером. Рядок унікальний навмисно.
+extern "C" __declspec(dllexport) const char* HominkaOverlayMarker() {
+    return "HOMINKA-OVERLAY-D7A1F3E9-b2c4-4a6e-9f10-chat-in-game";
+}
+
 BOOL WINAPI DllMain(HINSTANCE inst, DWORD reason, LPVOID) {
     if (reason == DLL_PROCESS_ATTACH) {
         DisableThreadLibraryCalls(inst);

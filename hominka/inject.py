@@ -16,6 +16,10 @@ from .paths import BASE_DIR, resource_path
 
 IS_WINDOWS = sys.platform == "win32"
 
+# Токен запуску інжектора — дзеркало HOMINKA_INJECT_TOKEN з native/common/secret.h.
+# Без нього інжектор відмовляє: щоб ним не користувалися окремо від програми.
+INJECT_TOKEN = "HMK-INJ-7F3A9C21-64bd-4e0a-choose-your-game"
+
 # Коди виходу інжектора (native/injector/injector.cpp).
 EX_OK = 0
 EX_ARGS = 1
@@ -103,8 +107,11 @@ def inject(hwnd: int) -> Result:
         if not (os.path.isfile(exe) and os.path.isfile(dll)):
             continue
         try:
+            # --token обовʼязковий: без нього інжектор не працює (захист від
+            # запуску сторонніми). Шлях до DLL НЕ передаємо — інжектор бере лише
+            # власну overlay й звіряє в ній маркер.
             proc = subprocess.run(
-                [exe, "--pid", str(pid), "--dll", dll],
+                [exe, "--pid", str(pid), "--token", INJECT_TOKEN],
                 capture_output=True, text=True, timeout=20,
                 creationflags=0x08000000)   # CREATE_NO_WINDOW
         except (OSError, subprocess.TimeoutExpired) as e:

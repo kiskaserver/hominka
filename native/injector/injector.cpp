@@ -13,9 +13,15 @@
 // 64-бітний — 64-бітну. Тому інжектор збирається у двох розрядностях, а яку
 // саме DLL брати, вирішує за розрядністю ЦІЛІ (IsWow64Process2).
 //
-// Аргументи:  injector.exe <pid | --exe game.exe> [--dll шлях\overlay.dll]
-// Коди виходу: 0 успіх, 2 не знайдено процес, 3 заборонено (античит),
-//              4 не та розрядність DLL, 5 інша помилка інʼєкції.
+// Аргументи:  injector.exe (--exe game.exe | --pid N) --token <секрет> [--check]
+// Коди виходу: 0 успіх, 1 аргументи/токен/не наша DLL, 2 не знайдено процес,
+//              3 заборонено (античит), 4 не та розрядність, 5 помилка інʼєкції.
+//
+// ЗАХИСТ (див. common/secret.h): без правильного --token не працює; вкладає
+// ЛИШЕ власну overlay-*.dll з власної теки, звіривши в ній маркер; шлях до DLL
+// з аргументів НЕ приймає. Тобто цим інжектором не можна завантажити чужу
+// (чит-) бібліотеку, і сам він не вміє писати в память нічого, крім шляху до
+// нашої overlay.
 
 #include <windows.h>
 #include <tlhelp32.h>
@@ -25,6 +31,7 @@
 
 #include "../common/log.h"
 #include "../common/guard.h"
+#include "../common/secret.h"
 
 using hominka::log;
 
@@ -95,33 +102,61 @@ bool exe_name_of(DWORD pid, wchar_t* out, size_t out_len) {
     return found;
 }
 
-// Шлях до overlay.dll поруч із самим інжектором, якщо явно не задано інший.
-std::wstring default_dll_path() {
+// Наша overlay-DLL поруч із інжектором. Ім'я — за розрядністю САМОГО інжектора
+// (він однакової розрядності з ціллю, бо програма підбирає відповідний). Шлях
+// НЕ береться з аргументів: інжектор вантажить лише власну overlay, і нічого
+// іншого — це і є захист від «вкладіть мій чит цим інжектором».
+std::wstring our_overlay_path() {
     wchar_t self[MAX_PATH];
     GetModuleFileNameW(NULL, self, MAX_PATH);
     PathRemoveFileSpecW(self);
     std::wstring p = self;
-    p += L"\\overlay.dll";
+#ifdef _WIN64
+    p += L"\\overlay-x64.dll";
+#else
+    p += L"\\overlay-x86.dll";
+#endif
     return p;
+}
+
+// Перевіряє, що файл DLL — справді наша overlay (містить маркер). Читаємо байти,
+// не завантажуючи файл, тож підсунути шкідливу DLL і «виконати» її тут не можна.
+bool is_our_overlay(const std::wstring& path) {
+    HANDLE f = CreateFileW(path.c_str(), GENERIC_READ, FILE_SHARE_READ, NULL,
+                           OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+    if (f == INVALID_HANDLE_VALUE) return false;
+    const char* marker = HOMINKA_OVERLAY_MARKER;
+    size_t mlen = strlen(marker);
+    std::string buf;
+    char chunk[65536];
+    DWORD got = 0;
+    bool found = false;
+    std::string tail;
+    while (ReadFile(f, chunk, sizeof(chunk), &got, NULL) && got) {
+        std::string cur = tail + std::string(chunk, got);
+        if (cur.find(marker) != std::string::npos) { found = true; break; }
+        // Хвіст на випадок, якщо маркер ліг на межу шматків.
+        if (cur.size() > mlen) tail = cur.substr(cur.size() - mlen);
+        else tail = cur;
+    }
+    CloseHandle(f);
+    return found;
 }
 
 }  // namespace
 
 int wmain(int argc, wchar_t** argv) {
     DWORD pid = 0;
-    std::wstring dll_path;
-    // --check: лише сказати, чи можна сюди інжектити (guard + розрядність), не
-    // чіпаючи процес. Програмі це потрібне, щоб показати стан кнопки, не
-    // ризикуючи чужим процесом.
     bool check_only = false;
+    std::wstring token;
 
     for (int i = 1; i < argc; ++i) {
         if (wcscmp(argv[i], L"--exe") == 0 && i + 1 < argc) {
             pid = find_pid_by_exe(argv[++i]);
         } else if (wcscmp(argv[i], L"--pid") == 0 && i + 1 < argc) {
             pid = (DWORD)wcstoul(argv[++i], nullptr, 10);
-        } else if (wcscmp(argv[i], L"--dll") == 0 && i + 1 < argc) {
-            dll_path = argv[++i];
+        } else if (wcscmp(argv[i], L"--token") == 0 && i + 1 < argc) {
+            token = argv[++i];
         } else if (wcscmp(argv[i], L"--check") == 0) {
             check_only = true;
         } else {
@@ -130,7 +165,19 @@ int wmain(int argc, wchar_t** argv) {
             if (end && *end == 0) pid = (DWORD)v;
         }
     }
-    if (dll_path.empty()) dll_path = default_dll_path();
+
+    // Без правильного токена інжектор не працює — щоб його не запускали окремо
+    // від нашої програми.
+    wchar_t wtok[128] = L"";
+    MultiByteToWideChar(CP_UTF8, 0, HOMINKA_INJECT_TOKEN, -1, wtok, 128);
+    if (token != wtok) {
+        fwprintf(stderr, L"refused: this injector runs only from Hominka\n");
+        return EX_ARGS;
+    }
+
+    // DLL — ЗАВЖДИ наша overlay поруч, і тільки якщо вона справді наша (маркер).
+    // Жодних шляхів з аргументів: чужу бібліотеку цим інжектором не завантажити.
+    std::wstring dll_path = our_overlay_path();
 
     if (!pid) {
         log("injector: процес не знайдено");
@@ -153,10 +200,19 @@ int wmain(int argc, wchar_t** argv) {
     }
 
     // --check не інжектить, тож і DLL йому не потрібна.
-    if (!check_only && !PathFileExistsW(dll_path.c_str())) {
-        log("injector: overlay.dll не знайдено поруч");
-        fwprintf(stderr, L"overlay.dll not found: %ls\n", dll_path.c_str());
-        return EX_ARGS;
+    if (!check_only) {
+        if (!PathFileExistsW(dll_path.c_str())) {
+            log("injector: overlay не знайдено поруч (%ls)", dll_path.c_str());
+            fwprintf(stderr, L"overlay dll not found\n");
+            return EX_ARGS;
+        }
+        if (!is_our_overlay(dll_path)) {
+            // Файл на місці, але це не наша overlay (немає маркера). Не вкладаємо
+            // нічого — саме так інжектор захищено від завантаження чужих DLL.
+            log("injector: %ls не має маркера Hominka — відмова", dll_path.c_str());
+            fwprintf(stderr, L"refused: dll is not the Hominka overlay\n");
+            return EX_ARGS;
+        }
     }
 
     HANDLE proc = OpenProcess(
