@@ -18,7 +18,7 @@ mkdir -p "$OUT"
 # -Wl,--kill-at      прибрати «@N» з імен експортів stdcall (для 32-біт це важливо);
 # -municode          wmain як точка входу (юнікодні аргументи).
 COMMON="-O2 -s -static -static-libgcc -static-libstdc++ -Wall -Wextra -Wno-unused-parameter"
-DLL_LIBS="-ld3d11 -ldxgi -ld3d9 -lopengl32 -lgdi32 -lole32 -luuid"
+DLL_LIBS="-ld3d11 -ld3d12 -ldxgi -ld3d9 -lopengl32 -lgdi32 -lole32 -luuid"
 EXE_LIBS="-lshlwapi"
 
 build() {
@@ -42,6 +42,10 @@ build i686-w64-mingw32-g++   x86
 echo ">> x64: testhost.exe (для перевірки)"
 x86_64-w64-mingw32-g++ -O2 -s -static -municode -mwindows \
     "$SRC/testhost/testhost.cpp" -o "$OUT/testhost-x64.exe" -ld3d11 -ldxgi
+
+echo ">> x64: testhost-dx12.exe (для перевірки DX12)"
+x86_64-w64-mingw32-g++ -O2 -s -static -municode -mwindows \
+    "$SRC/testhost/testhost_dx12.cpp" -o "$OUT/testhost-dx12-x64.exe" -ld3d12 -ldxgi
 
 echo ""
 echo "Готово. У $OUT:"

@@ -12,6 +12,7 @@
 // правильний без перестановки.
 
 #include "overlay_dx11.h"
+#include "overlay_dx12.h"
 
 #include <windows.h>
 #include <d3d11.h>
@@ -108,6 +109,22 @@ bool OverlayDX11::build_shaders() {
     cbd.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
     cbd.CPUAccessFlags = D3D11_CPU_ACCESS_WRITE;
     device_->CreateBuffer(&cbd, nullptr, &cbuf_);
+    return true;
+}
+
+// Ті самі шейдери, скомпільовані під DX12 (модель 5_0). Повертає байткод; його
+// вивільняє викликач (overlay_dx12.h).
+bool dx12_compile_shaders(D3D12Shaders* out) {
+    D3DCompileFn compiler = load_compiler();
+    if (!compiler) { log("overlay(dx12): d3dcompiler недоступний"); return false; }
+    out->vs = compile(compiler, kVertexHLSL, "vs_5_0");
+    out->ps = compile(compiler, kPixelHLSL, "ps_5_0");
+    if (!out->vs || !out->ps) {
+        if (out->vs) out->vs->Release();
+        if (out->ps) out->ps->Release();
+        out->vs = out->ps = nullptr;
+        return false;
+    }
     return true;
 }
 

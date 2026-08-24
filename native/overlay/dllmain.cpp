@@ -28,6 +28,7 @@
 #include "vtable_hook.h"
 #include "../common/inline_hook.h"
 #include "overlay_dx11.h"
+#include "overlay_dx12.h"
 #include "overlay_dx9.h"
 #include "overlay_gl.h"
 
@@ -41,7 +42,13 @@ hominka::VtableHook g_present_hook;
 PresentFn g_present_original = nullptr;
 hominka::OverlayDX11 g_overlay;
 volatile LONG g_frames = 0;
-volatile LONG g_dx12_warned = 0;
+volatile LONG g_api = 0;   // 0 невідомо, 1 DX12, 2 DX11
+
+// --- DX12 ---
+typedef void (STDMETHODCALLTYPE *ExecFn)(ID3D12CommandQueue*, UINT, ID3D12CommandList* const*);
+hominka::VtableHook g_exec_hook;
+ExecFn g_exec_original = nullptr;
+hominka::OverlayDX12 g_overlay12;
 
 // --- DX9 ---
 typedef HRESULT (STDMETHODCALLTYPE *EndSceneFn)(IDirect3DDevice9*);
@@ -71,21 +78,63 @@ HRESULT STDMETHODCALLTYPE hooked_present(IDXGISwapChain* swap, UINT interval, UI
     // DXGI_PRESENT_TEST — гра лише перевіряє можливість показу; малювати не
     // треба, інакше ми псуємо саме цю перевірку.
     if (!(flags & DXGI_PRESENT_TEST)) {
-        // DX12 теж показує кадр через IDXGISwapChain::Present, тож цей хук на
-        // нього спрацьовує — але малює DX12 інакше (черга команд, дескриптори),
-        // і OverlayDX11 там нічого не намалює. Поки що чесно кажемо про це в
-        // журнал один раз, а не мовчимо.
-        if (InterlockedCompareExchange(&g_dx12_warned, 1, 0) == 0) {
+        // Той самий Present у DX11 і DX12 — розрізняємо за пристроєм свопчейна
+        // (раз) і далі малюємо відповідним бекендом.
+        if (g_api == 0) {
             ID3D12Device* d12 = nullptr;
             if (SUCCEEDED(swap->GetDevice(__uuidof(ID3D12Device), (void**)&d12)) && d12) {
-                log("overlay: гра на DX12 — малювання чату тут поки не реалізовано (буде далі)");
-                d12->Release();
+                g_api = 1; d12->Release();
+                log("overlay: гра на DX12");
+            } else {
+                g_api = 2;
+                log("overlay: гра на DX11");
             }
         }
-        g_overlay.set_swap(swap);
-        g_overlay.draw(swap);
+        if (g_api == 1) {
+            g_overlay12.set_swap(swap);
+            g_overlay12.draw(swap);
+        } else {
+            g_overlay.set_swap(swap);
+            g_overlay.draw(swap);
+        }
     }
     return g_present_original(swap, interval, flags);
+}
+
+// --- DX12: перехоплення черги команд ---
+void STDMETHODCALLTYPE hooked_execute(ID3D12CommandQueue* q, UINT n, ID3D12CommandList* const* l) {
+    g_overlay12.capture_queue(q);
+    g_exec_original(q, n, l);
+}
+
+// Пробний пристрій DX12 + черга → спільна vtable ID3D12CommandQueue, у якій
+// підміняємо ExecuteCommandLists (індекс 10). Так дізнаємось про чергу гри.
+bool install_d3d12_queue_hook() {
+    HMODULE d12mod = GetModuleHandleW(L"d3d12.dll");
+    if (!d12mod) return false;
+    typedef HRESULT (WINAPI *CreateDevFn)(IUnknown*, D3D_FEATURE_LEVEL, REFIID, void**);
+    CreateDevFn create = (CreateDevFn)GetProcAddress(d12mod, "D3D12CreateDevice");
+    if (!create) return false;
+
+    ID3D12Device* dev = nullptr;
+    if (FAILED(create(nullptr, D3D_FEATURE_LEVEL_11_0, __uuidof(ID3D12Device), (void**)&dev)) || !dev)
+        return false;
+    D3D12_COMMAND_QUEUE_DESC qd = {};
+    qd.Type = D3D12_COMMAND_LIST_TYPE_DIRECT;
+    ID3D12CommandQueue* q = nullptr;
+    HRESULT hr = dev->CreateCommandQueue(&qd, __uuidof(ID3D12CommandQueue), (void**)&q);
+    bool ok = false;
+    if (SUCCEEDED(hr) && q) {
+        // ExecuteCommandLists — індекс 10 у vtable ID3D12CommandQueue.
+        if (g_exec_hook.install(q, 10, reinterpret_cast<void*>(&hooked_execute))) {
+            g_exec_original = g_exec_hook.original<ExecFn>();
+            log("overlay(dx12): ExecuteCommandLists перехоплено");
+            ok = true;
+        }
+        q->Release();
+    }
+    dev->Release();
+    return ok;
 }
 
 // Створює тимчасовий свопчейн на прихованому вікні. Через нього ми дістаємося
@@ -280,7 +329,11 @@ DWORD WINAPI init_thread(LPVOID) {
         bool d9_mod = GetModuleHandleW(L"d3d9.dll") != nullptr;
         bool gl_mod = GetModuleHandleW(L"opengl32.dll") != nullptr;
         bool vk_mod = GetModuleHandleW(L"vulkan-1.dll") != nullptr;
-        if (!dxgi && dxgi_mod) dxgi = install_present_hook();  // DX11 (+ DX12 draw)
+        if (!dxgi && dxgi_mod) {
+            dxgi = install_present_hook();                     // DX11 та DX12
+            // Для DX12 ще й перехоплюємо чергу команд (одноразово).
+            if (dxgi && GetModuleHandleW(L"d3d12.dll")) install_d3d12_queue_hook();
+        }
         if (!d9 && d9_mod) d9 = install_d3d9_hook();           // DX9
         // OpenGL і Vulkan поки не малюємо за замовчуванням: рендер готовий, але
         // в OpenGL лишається рідкісний нестабільний краш у драйвері, і виставляти
@@ -323,10 +376,12 @@ BOOL WINAPI DllMain(HINSTANCE inst, DWORD reason, LPVOID) {
         if (t) CloseHandle(t);
     } else if (reason == DLL_PROCESS_DETACH) {
         g_present_hook.remove();
+        g_exec_hook.remove();
         g_reset_hook.remove();
         g_endscene_hook.remove();
         g_wglswap_hook.remove();
         g_overlay.release();
+        g_overlay12.release();
         g_overlay9.release();
         g_overlaygl.release();
         log("overlay: вивантаження, хуки знято");
