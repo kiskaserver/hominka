@@ -52,13 +52,17 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, LPWSTR, int show) {
     wc.hInstance = inst;
     wc.lpszClassName = L"HominkaTestHost";
     RegisterClassExW(&wc);
-    // Безрамкове на весь екран: саме такий кадр бачить OBS Game Capture (режим
-    // «захопити повноекранний застосунок»), а не Window Capture. Esc — вихід.
+    // Безрамкове на весь екран, як у справжніх ігор (borderless fullscreen):
+    // саме такий кадр ловить OBS Game Capture. WS_EX_APPWINDOW — щоб вікно було
+    // в панелі завдань і у списку вікон OBS; робимо його активним переднім.
+    // Esc — вихід.
     SW = GetSystemMetrics(SM_CXSCREEN);
     SH = GetSystemMetrics(SM_CYSCREEN);
-    HWND hwnd = CreateWindowExW(WS_EX_TOPMOST, wc.lpszClassName, L"Hominka DX11 sample (OBS test)",
+    HWND hwnd = CreateWindowExW(WS_EX_APPWINDOW, wc.lpszClassName, L"Hominka DX11 sample (OBS test)",
                                WS_POPUP, 0, 0, SW, SH, NULL, NULL, inst, NULL);
     ShowWindow(hwnd, SW_SHOW);
+    SetForegroundWindow(hwnd);
+    SetFocus(hwnd);
 
     DXGI_SWAP_CHAIN_DESC sd = {};
     sd.BufferCount = 2;

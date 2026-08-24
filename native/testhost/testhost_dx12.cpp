@@ -51,13 +51,17 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, LPWSTR, int show) {
     wc.cbSize = sizeof(wc); wc.lpfnWndProc = WndProc; wc.hInstance = inst;
     wc.lpszClassName = L"HominkaTestHostDX12";
     RegisterClassExW(&wc);
-    // Безрамкове на весь екран: саме такий кадр бачить OBS Game Capture (режим
-    // «захопити повноекранний застосунок»), а не Window Capture. Esc — вихід.
+    // Безрамкове на весь екран, як у справжніх ігор (borderless fullscreen):
+    // саме такий кадр ловить OBS Game Capture. WS_EX_APPWINDOW — щоб вікно було
+    // в панелі завдань і у списку вікон OBS; робимо його активним переднім.
+    // Esc — вихід.
     SW = GetSystemMetrics(SM_CXSCREEN);
     SH = GetSystemMetrics(SM_CYSCREEN);
-    HWND hwnd = CreateWindowExW(WS_EX_TOPMOST, wc.lpszClassName, L"Hominka DX12 sample (OBS test)",
+    HWND hwnd = CreateWindowExW(WS_EX_APPWINDOW, wc.lpszClassName, L"Hominka DX12 sample (OBS test)",
                                WS_POPUP, 0, 0, SW, SH, NULL, NULL, inst, NULL);
     ShowWindow(hwnd, SW_SHOW);
+    SetForegroundWindow(hwnd);
+    SetFocus(hwnd);
 
     if (FAILED(D3D12CreateDevice(nullptr, D3D_FEATURE_LEVEL_11_0, __uuidof(ID3D12Device), (void**)&g_dev))) {
         MessageBoxW(hwnd, L"no d3d12", L"testhost", 0); return 1;
