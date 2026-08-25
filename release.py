@@ -106,6 +106,18 @@ def build_native() -> str:
                          check=True, capture_output=True, text=True).stdout.strip()
     try:
         os.makedirs(out, exist_ok=True)
+        # Прибираємо старі бінарі ПЕРЕД docker cp: якщо файл заблоковано
+        # (лишився тестовий процес із вкладеним оверлеєм), перезапис тихо не
+        # відбувається і в архів їде стейл — саме так 2.4.9 повезла старий
+        # overlay-x64.dll. Видалення заблокованого впаде голосно, а не мовчки.
+        for f in os.listdir(out):
+            fp = os.path.join(out, f)
+            if os.path.isfile(fp):
+                try:
+                    os.remove(fp)
+                except OSError as e:
+                    raise SystemExit("не можу оновити %s (зайнятий іншим "
+                                     "процесом? закрий тести з оверлеєм): %s" % (fp, e))
         run(["docker", "cp", "%s:/out/." % cid, out])
     finally:
         subprocess.run(["docker", "rm", cid], capture_output=True)
@@ -113,6 +125,19 @@ def build_native() -> str:
     missing = [n for n in need if not os.path.isfile(os.path.join(out, n))]
     if missing:
         raise SystemExit("нативна збірка не дала: %s" % ", ".join(missing))
+    # Перевіряємо, що overlay-*.dll — СВІЖІ й наші: у файлі має бути маркер
+    # (той самий, що звіряє інжектор). Так ловимо випадок, коли docker cp не зміг
+    # перезаписати заблокований файл (напр. лишився запущений тест із вкладеним
+    # оверлеєм) і в dist/ застряг старий білд без маркера — саме через це 2.4.9
+    # поїхала зі стейлним overlay-x64.dll, і інжектор його відхиляв.
+    marker = b"HOMINKA-OVERLAY-D7A1F3E9-b2c4-4a6e-9f10-chat-in-game"
+    for dll in ("overlay-x64.dll", "overlay-x86.dll"):
+        with open(os.path.join(out, dll), "rb") as f:
+            if marker not in f.read():
+                raise SystemExit(
+                    "%s без маркера — імовірно docker cp не перезаписав "
+                    "заблокований файл (закрий тестові процеси з оверлеєм і "
+                    "перезбери)" % dll)
     return out
 
 
