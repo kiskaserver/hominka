@@ -38,6 +38,7 @@ def validate_css(text: str):
             continue
         # рядок у лапках
         if ch in "\"'":
+            start = i
             end = i + 1
             while end < n and text[end] != ch:
                 if text[end] == "\\":
@@ -48,6 +49,12 @@ def validate_css(text: str):
             if end >= n or text[end] != ch:
                 errors.append((line, "лапки %s не закрито" % ch))
                 break
+            # ВАЖЛИВО: лапковий рядок — це ЗНАЧЕННЯ (напр. content: ':'), тож
+            # додаємо його в буфер оголошення. Без цього значення губилося, і
+            # `content: ':'` виглядало як «властивість без значення».
+            if not buf and text[start:end + 1].strip():
+                decl_start_line = line
+            buf.append(text[start:end + 1])
             i = end + 1
             continue
         if ch == "{":
