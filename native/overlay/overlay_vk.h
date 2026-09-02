@@ -35,9 +35,9 @@ public:
     // Завантажує потрібні функції з vulkan-1.dll. Викликається раз при встановленні
     // хука. Повертає false, якщо чогось критичного немає.
     bool load(HMODULE vk) {
-        gipa_ = (PFN_vkGetInstanceProcAddr)GetProcAddress(vk, "vkGetInstanceProcAddr");
+        gipa_ = (PFN_vkGetInstanceProcAddr)(void*)GetProcAddress(vk, "vkGetInstanceProcAddr");
         if (!gipa_) return false;
-        #define VKL(name) name##_ = (PFN_##name)GetProcAddress(vk, #name)
+        #define VKL(name) name##_ = (PFN_##name)(void*)GetProcAddress(vk, #name)
         VKL(vkGetDeviceProcAddr);
         VKL(vkGetPhysicalDeviceMemoryProperties);
         VKL(vkGetSwapchainImagesKHR);
@@ -374,11 +374,13 @@ private:
             VkImageViewCreateInfo iv = {VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
             iv.image = imgs[i]; iv.viewType = VK_IMAGE_VIEW_TYPE_2D; iv.format = s.format;
             iv.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
-            if (vkCreateImageView_(dev_, &iv, nullptr, &s.views[i]) != VK_SUCCESS) return false;
+            if (vkCreateImageView_(dev_, &iv, nullptr, &s.views[i]) != VK_SUCCESS) {
+                destroy_swap(s); return false; }
             VkFramebufferCreateInfo fb = {VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO};
             fb.renderPass = s.rpass; fb.attachmentCount = 1; fb.pAttachments = &s.views[i];
             fb.width = s.extent.width; fb.height = s.extent.height; fb.layers = 1;
-            if (vkCreateFramebuffer_(dev_, &fb, nullptr, &s.fbs[i]) != VK_SUCCESS) return false;
+            if (vkCreateFramebuffer_(dev_, &fb, nullptr, &s.fbs[i]) != VK_SUCCESS) {
+                destroy_swap(s); return false; }
             VkSemaphoreCreateInfo se = {VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO};
             vkCreateSemaphore_(dev_, &se, nullptr, &s.done[i]);
             VkFenceCreateInfo fe = {VK_STRUCTURE_TYPE_FENCE_CREATE_INFO};
@@ -387,7 +389,8 @@ private:
         }
         VkCommandBufferAllocateInfo ca = {VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO};
         ca.commandPool = pool_; ca.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY; ca.commandBufferCount = n;
-        if (vkAllocateCommandBuffers_(dev_, &ca, s.cmds.data()) != VK_SUCCESS) return false;
+        if (vkAllocateCommandBuffers_(dev_, &ca, s.cmds.data()) != VK_SUCCESS) {
+            destroy_swap(s); return false; }
 
         s.ready = true;
         log("overlay(vk): свопчейн готовий (образів=%u, %ux%u)", n, s.extent.width, s.extent.height);
@@ -419,16 +422,9 @@ private:
             tex_layout_ = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
         }
 
-        // Позиція прямокутника чату всередині кадру.
-        float sw = (float)s.extent.width, sh = (float)s.extent.height;
-        float ow = (float)tex_w_, oh = (float)tex_h_;
-        float x, y;
-        switch (frame_.anchor) {
-            case ANCHOR_TOP_RIGHT:    x = sw - ow - frame_.margin_x; y = (float)frame_.margin_y; break;
-            case ANCHOR_BOTTOM_LEFT:  x = (float)frame_.margin_x; y = sh - oh - frame_.margin_y; break;
-            case ANCHOR_BOTTOM_RIGHT: x = sw - ow - frame_.margin_x; y = sh - oh - frame_.margin_y; break;
-            default:                  x = (float)frame_.margin_x; y = (float)frame_.margin_y; break;
-        }
+        // Рамка чату всередині кадру — частки кадру, масштабуємо під гру.
+        float x, y, ow, oh;
+        frame_.rect((float)s.extent.width, (float)s.extent.height, &x, &y, &ow, &oh);
 
         VkClearValue noClear = {};
         VkRenderPassBeginInfo rpb = {VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO};

@@ -147,6 +147,29 @@ class CardsMixin:
         self.top_status.setWordWrap(True)
         lay.addWidget(self.top_status)
 
+        # Вибір вікна гри списком, а не автовизначенням переднього вікна.
+        # Автодетект ловив будь-що, що опинилося попереду (зокрема нашу ж
+        # панель під час Alt-Tab), і людина не бачила, що саме зробить
+        # безрамковим. Список — той самий, що й для чату в грі
+        # (fullscreen.list_windows): видимі вікна ігор, поруч кнопка оновити.
+        bpick_row = QHBoxLayout()
+        bpick_row.setSpacing(6)
+        self.border_pick = QComboBox(self)
+        self.border_pick.setToolTip("Оберіть вікно гри, яке зробити безрамковим.")
+        # Не даємо довгим рядкам списку розсувати панель: ширину комбобокса
+        # рахуємо від кількох символів, а не від найдовшого пункту (той
+        # показується у випадайці; в самому полі — з трьома крапками).
+        self.border_pick.setSizeAdjustPolicy(QComboBox.AdjustToMinimumContentsLengthWithIcon)
+        self.border_pick.setMinimumContentsLength(6)
+        bpick_row.addWidget(self.border_pick, 1)
+        self.border_refresh = QPushButton("⟳", self)
+        self.border_refresh.setObjectName("ghost")
+        self.border_refresh.setFixedSize(30, 28)
+        self.border_refresh.setToolTip("Оновити список вікон.")
+        self.border_refresh.clicked.connect(self._refresh_borderless)
+        bpick_row.addWidget(self.border_refresh)
+        lay.addLayout(bpick_row)
+
         row = QHBoxLayout()
         row.setSpacing(6)
         self.borderless_btn = QPushButton("Зробити гру безрамковою", self)
@@ -157,6 +180,7 @@ class CardsMixin:
             "але малює її вже система — і чат поверх неї видно. Нічого в саму гру ми "
             "не встановлюємо.")
         self.borderless_btn.clicked.connect(self._make_borderless)
+        self.borderless_btn.setEnabled(False)   # доки не оберуть вікно зі списку
         row.addWidget(self.borderless_btn, 1)
 
         self.restore_btn = QPushButton("Повернути", self)
@@ -181,20 +205,27 @@ class CardsMixin:
         self.game_box.toggled.connect(self._toggle_game)
         lay.addWidget(self.game_box)
 
-        # Червоне попередження: пряма інʼєкція — потужно, але на свій ризик.
+        # Спокійне бурштинове попередження (не «стіна червоного»): суть коротко,
+        # деталі — за кнопкою нижче.
         self.game_warn = QLabel(
-            "⚠ Прямий інжект у гру — НА СВІЙ СТРАХ І РИЗИК. Ми вкладаємо власну "
-            "бібліотеку в процес гри. У ЗМАГАЛЬНИХ іграх з античитом (Valorant, "
-            "CS2, Rust, Apex, EFT…) це загрожує БАНОМ акаунта — туди програма не "
-            "пускає взагалі. Бібліотека непідписана, тож Defender чи SmartScreen "
-            "можуть застерегти. Чат у грі видно і в OBS Game Capture. Для "
-            "змагальних ігор та щоб сховатися від OBS — безрамковий режим вище.", self)
+            "Чат малюється всередині гри — це надійно для одиночних ігор. "
+            "Бібліотека непідписана, тож Windows (SmartScreen/Defender) може "
+            "перепитати. В ОНЛАЙН-іграх з античитом так робити НЕ можна — там "
+            "лишається безрамковий режим вище.", self)
         self.game_warn.setWordWrap(True)
         self.game_warn.setStyleSheet(
-            "color:#fca5a5; background:rgba(220,38,38,0.12);"
-            "border:1px solid rgba(220,38,38,0.45); border-radius:6px; padding:6px 8px;")
+            "color:#fcd9a5; background:rgba(217,119,6,0.12);"
+            "border:1px solid rgba(217,119,6,0.40); border-radius:6px; padding:6px 8px;")
         self.game_warn.hide()
         lay.addWidget(self.game_warn)
+
+        # Кнопка з детальним поясненням: що саме перепитає Windows, що і як
+        # (не)вимикати, і де інжект недопустимий.
+        self.game_help_btn = QPushButton("ℹ Що потрібно, щоб чат у грі запрацював", self)
+        self.game_help_btn.setObjectName("ghost")
+        self.game_help_btn.setFixedHeight(26)
+        self.game_help_btn.clicked.connect(self._show_injector_help)
+        lay.addWidget(self.game_help_btn)
 
         # Вибір гри списком, а не «встигни перейти за 4 секунди»: панель
         # зникала разом з Alt-Tab, і натиснути було нікуди. Список — з видимих
@@ -203,6 +234,8 @@ class CardsMixin:
         pick_row.setSpacing(6)
         self.game_pick = QComboBox(self)
         self.game_pick.setToolTip("Оберіть вікно гри, у яке показати чат.")
+        self.game_pick.setSizeAdjustPolicy(QComboBox.AdjustToMinimumContentsLengthWithIcon)
+        self.game_pick.setMinimumContentsLength(6)
         pick_row.addWidget(self.game_pick, 1)
         self.game_refresh = QPushButton("⟳", self)
         self.game_refresh.setObjectName("ghost")
@@ -227,21 +260,15 @@ class CardsMixin:
         self.game_status.setWordWrap(True)
         lay.addWidget(self.game_status)
 
-        # Куди тулити чат у грі та наскільки він прозорий.
-        pos_row = QHBoxLayout()
-        pos_row.setSpacing(6)
-        self.game_corner_lbl = QLabel("Кут:", self)
-        pos_row.addWidget(self.game_corner_lbl)
-        self.game_corner = QComboBox(self)
-        for label, cid in (("Ліворуч угорі", "tl"), ("Праворуч угорі", "tr"),
-                           ("Ліворуч унизу", "bl"), ("Праворуч унизу", "br")):
-            self.game_corner.addItem(label, cid)
-        idx = self.game_corner.findData(self.win.game_anchor)
-        if idx >= 0:
-            self.game_corner.setCurrentIndex(idx)
-        self.game_corner.currentIndexChanged.connect(self._apply_game_geometry)
-        pos_row.addWidget(self.game_corner, 1)
-        lay.addLayout(pos_row)
+        # Позицію й розмір чату в грі задає САМЕ ВІКНО чату: пояснюємо це, щоб
+        # людина не шукала повзунків «куди» — вона просто рухає й тягне вікно.
+        self.game_place_hint = QLabel(
+            "📍 Де стоїть і як розтягнуте це вікно чату на моніторі — там і "
+            "такого ж розміру буде чат у грі. Пересунь/розтягни вікно чату — і "
+            "чат у грі стане на те саме місце.", self)
+        self.game_place_hint.setObjectName("dim")
+        self.game_place_hint.setWordWrap(True)
+        lay.addWidget(self.game_place_hint)
 
         op_row = QHBoxLayout()
         op_row.setSpacing(6)
@@ -250,7 +277,8 @@ class CardsMixin:
         self.game_opacity = QSlider(Qt.Horizontal, self)
         self.game_opacity.setRange(30, 255)
         self.game_opacity.setValue(int(self.win.game_opacity))
-        self.game_opacity.valueChanged.connect(self._apply_game_geometry)
+        self.game_opacity.valueChanged.connect(
+            lambda v: self.win.set_game_opacity(v))
         op_row.addWidget(self.game_opacity, 1)
         lay.addLayout(op_row)
 
@@ -261,35 +289,39 @@ class CardsMixin:
         self.game_hide_obs.toggled.connect(self.win.set_game_hide_obs)
         lay.addWidget(self.game_hide_obs)
         self.game_hide_obs_hint = QLabel(
-            "Малюємо чат перед самим показом кадру, щоб OBS зняв його без чату. "
-            "Для DirectX 11/12; перевірте на своєму OBS.", self)
+            "Надійно працює на DirectX 12: чат лягає в кадр ПІСЛЯ того, як OBS зняв "
+            "його через чергу команд — у грі видно, в ефір не потрапляє. На "
+            "DirectX 9/11, OpenGL і Vulkan чат поки видно і в OBS — для «лише мені» "
+            "там використайте безрамковий режим вище.", self)
         self.game_hide_obs_hint.setObjectName("dim")
         self.game_hide_obs_hint.setWordWrap(True)
         lay.addWidget(self.game_hide_obs_hint)
 
         # Показуємо/ховаємо всю секцію одним списком.
-        self._game_widgets = (self.game_warn, self.game_pick, self.game_refresh,
+        self._game_widgets = (self.game_warn, self.game_help_btn,
+                              self.game_pick, self.game_refresh,
                               self.game_inject, self.game_status,
-                              self.game_corner_lbl, self.game_corner,
+                              self.game_place_hint,
                               self.game_op_lbl, self.game_opacity,
                               self.game_hide_obs, self.game_hide_obs_hint)
         for w in self._game_widgets:
             w.hide()
         self._injected = set()   # hwnd, куди вже вкладено — щоб не інжектити двічі
 
-        if self.win.channel != "stable":
-            self.set_game_experimental(True)
+        self.set_game_experimental(True)   # доступно в усіх каналах
 
         self.keep_top = QCheckBox("Тримати поверх усіх вікон", self)
         self.keep_top.setToolTip(
             "У рідкісних старих іграх це дає мерехтіння — тоді вимкніть.")
         self.keep_top.toggled.connect(self.win.set_keep_top)
         lay.addWidget(self.keep_top)
+
+        self._refresh_borderless()     # наповнити список вікон одразу
         return card
 
     # --- інжектор чату в гру ---
     def set_game_experimental(self, on: bool):
-        """Показує розділ інжектора лише в тестових каналах."""
+        """Показує розділ інжектора, коли поруч є нативні файли (усі канали)."""
         show = on and inject_mod.available()
         self.game_box.setVisible(show)
         if not show:
@@ -368,12 +400,6 @@ class CardsMixin:
             self.game_box.blockSignals(False)
             self._toggle_game(False)
 
-    def _apply_game_geometry(self, *_a):
-        """Кут і прозорість чату в грі — одразу у продюсер."""
-        anchor = self.game_corner.currentData() or "tl"
-        self.win.set_game_geometry(anchor, self.win.game_margin_x,
-                                   self.win.game_margin_y, self.game_opacity.value())
-
     def set_fullscreen_state(self, info: dict):
         """Показує, що зараз попереду, простими словами."""
         kind = info.get("kind", "none")
@@ -390,13 +416,40 @@ class CardsMixin:
         else:
             text = "«%s» у вікні — чат буде видно." % short
         self.top_status.setText(text)
-        self.borderless_btn.setEnabled(kind in ("windowed", "exclusive", "borderless"))
-        self.restore_btn.setVisible(bool(self.win.__class__ and _changed_window()))
+        # Кнопку вмикає ВИБІР зі списку (_refresh_borderless), а не те, що зараз
+        # попереду: людина сама каже, яке вікно чіпати.
+        self.restore_btn.setVisible(bool(_changed_window()))
+
+    def _show_injector_help(self):
+        """Вікно з детальним поясненням: SmartScreen/Defender, що (не) вимикати,
+        де інжект недопустимий."""
+        from ..injector_help import InjectorHelpDialog
+        dlg = InjectorHelpDialog(self.win)
+        dlg.exec()
+
+    def _refresh_borderless(self):
+        """Наповнює список вікон для безрамкового режиму (той самий, що для чату)."""
+        self.border_pick.clear()
+        wins = fs_mod.list_windows()
+        if not wins:
+            self.border_pick.addItem("Немає відкритих ігор — запустіть гру й оновіть", None)
+            self.borderless_btn.setEnabled(False)
+            return
+        for hwnd, pid, exe, title in wins:
+            self.border_pick.addItem("%s — %s" % (title[:40], exe), hwnd)
+        self.borderless_btn.setEnabled(True)
 
     def _make_borderless(self):
-        if self.win.make_game_borderless():
+        hwnd = self.border_pick.currentData()
+        if not hwnd:
+            self.top_status.setText("Спершу оберіть вікно гри зі списку (⟳ оновлює).")
+            return
+        if self.win.make_game_borderless(hwnd):
             self.top_status.setText("Готово: вікно гри тепер безрамкове.")
             self.restore_btn.show()
+        else:
+            self.top_status.setText("Не вдалося змінити це вікно "
+                                    "(уже безрамкове або зникло).")
 
     def _restore_window(self):
         if self.win.restore_game_window():

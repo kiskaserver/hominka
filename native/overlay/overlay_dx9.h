@@ -117,16 +117,8 @@ private:
     void blit(IDirect3DDevice9* device) {
         D3DVIEWPORT9 vp;
         if (FAILED(device->GetViewport(&vp))) return;
-        float sw = (float)vp.Width, sh = (float)vp.Height;
-        float ow = (float)tex_w_, oh = (float)tex_h_;
-
-        float x, y;
-        switch (last_.anchor) {
-            case ANCHOR_TOP_RIGHT:    x = sw - ow - last_.margin_x; y = (float)last_.margin_y; break;
-            case ANCHOR_BOTTOM_LEFT:  x = (float)last_.margin_x; y = sh - oh - last_.margin_y; break;
-            case ANCHOR_BOTTOM_RIGHT: x = sw - ow - last_.margin_x; y = sh - oh - last_.margin_y; break;
-            default:                  x = (float)last_.margin_x; y = (float)last_.margin_y; break;
-        }
+        float x, y, ow, oh;   // рамка чату — частки кадру, масштабуємо під гру
+        last_.rect((float)vp.Width, (float)vp.Height, &x, &y, &ow, &oh);
 
         // Зберігаємо і повертаємо ЛИШЕ той стан, який чіпаємо. Раніше тут був
         // CreateStateBlock — а його НЕ МОЖНА викликати між BeginScene і

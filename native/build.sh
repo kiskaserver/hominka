@@ -17,7 +17,10 @@ mkdir -p "$OUT"
 #                    libstdc++-6.dll / libgcc_s;
 # -Wl,--kill-at      прибрати «@N» з імен експортів stdcall (для 32-біт це важливо);
 # -municode          wmain як точка входу (юнікодні аргументи).
-COMMON="-O2 -s -static -static-libgcc -static-libstdc++ -Wall -Wextra -Wno-unused-parameter"
+# -Wno-missing-field-initializers: ідіоматична нульова ініціалізація структур
+#   (напр. VkXxxInfo x = {VK_STRUCTURE_TYPE_...}; решта полів — нулі, як і треба)
+#   під -Wextra дає сотні хибних попереджень. Решту -Wextra лишаємо.
+COMMON="-O2 -s -static -static-libgcc -static-libstdc++ -Wall -Wextra -Wno-unused-parameter -Wno-missing-field-initializers"
 DLL_LIBS="-ld3d11 -ld3d12 -ldxgi -ld3d9 -lopengl32 -lgdi32 -lole32 -luuid"
 EXE_LIBS="-lshlwapi"
 

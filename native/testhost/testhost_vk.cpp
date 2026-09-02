@@ -48,7 +48,7 @@ template<class T> void load(T& fn, void* ctx, const char* name, bool dev) {
 int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, LPWSTR, int show) {
     HMODULE vk = LoadLibraryW(L"vulkan-1.dll");
     if (!vk) { MessageBoxW(0, L"no vulkan-1.dll", L"testhost", 0); return 1; }
-    vkGetInstanceProcAddr = (PFN_vkGetInstanceProcAddr)GetProcAddress(vk, "vkGetInstanceProcAddr");
+    vkGetInstanceProcAddr = (PFN_vkGetInstanceProcAddr)(void*)GetProcAddress(vk, "vkGetInstanceProcAddr");
 
     // Затримка ПЕРЕД ініціалізацією Vulkan: щоб під час перевірки встигнути
     // заінжектити оверлей до того, як гра створить інстанс/пристрій/свопчейн.

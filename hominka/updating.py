@@ -30,18 +30,16 @@ class UpdatingMixin:
         self.check_updates(manual=True)
 
     def apply_experimental(self):
-        """Експериментальні можливості (інжектор) живуть лише в тестових каналах.
+        """Розділ «чат у грі» (інжектор) доступний в УСІХ каналах.
 
-        Правило одне, а місць, де його застосувати, два: коли людина перемикає
-        канал і коли програма стартує з config.json. Друге легко пропустити —
-        панель будується зі стабільним каналом, тож бета після перезапуску
-        лишалася б без розділу гри.
+        Раніше він жив лише в тестових каналах. Тепер це повноцінна можливість:
+        показуємо її скрізь, де поруч є нативні файли (inject.available()), а
+        безпеку несуть вимкнений за замовчуванням прапорець, спокійне
+        попередження і вікно «Що потрібно…». В онлайн-іграх інжектор сам
+        відмовляється (guard), для них — безрамковий режим.
         """
-        experimental = self.channel != "stable"
         if hasattr(self.panel, "set_game_experimental"):
-            self.panel.set_game_experimental(experimental)
-        if not experimental and getattr(self, "game_on", False):
-            self.set_game_overlay(False)
+            self.panel.set_game_experimental(True)
 
     def check_updates(self, manual: bool = False):
         if getattr(self, "updater", None) is None:

@@ -19,7 +19,11 @@ namespace hominka {
 
 // «HMK2» задом наперед (little-endian): у памʼяті це байти 'H','M','K','2'.
 static const uint32_t SHARED_FRAME_MAGIC = 0x324B4D48u;
-static const uint32_t SHARED_FRAME_VERSION = 2;
+// v3: замість «кут + відступ» — нормована рамка (частка екрана). Розкладку чату
+// в грі задає САМЕ ВІКНО чату на робочому столі: куди його поставив і як
+// розтягнув — там і такого ж розміру зʼявляється чат у грі, у частках екрана,
+// тож збігається за будь-якого розширення гри.
+static const uint32_t SHARED_FRAME_VERSION = 3;
 
 // Стеля буфера. Кадр чату більший за це не буває; більший монітор не привід
 // тримати в спільній памʼяті цілий екран — оверлей займає лише кут.
@@ -31,13 +35,6 @@ static const uint32_t SHARED_FRAME_MAX_H = 1080;
 // кадр іншим сеансам.
 #define HOMINKA_SHARED_FRAME_NAME L"Local\\HominkaOverlayFrame"
 
-enum FrameAnchor {
-    ANCHOR_TOP_LEFT = 0,
-    ANCHOR_TOP_RIGHT = 1,
-    ANCHOR_BOTTOM_LEFT = 2,
-    ANCHOR_BOTTOM_RIGHT = 3,
-};
-
 // Рівно 64 байти. Порядок і розмір полів — частина домовленості; міняти їх
 // можна лише разом із версією.
 #pragma pack(push, 4)
@@ -45,22 +42,22 @@ struct SharedFrameHeader {
     uint32_t magic;       // SHARED_FRAME_MAGIC — інакше це не наша память
     uint32_t version;     // SHARED_FRAME_VERSION
     uint32_t seq;         // seqlock: непарне = запис триває
-    uint32_t width;       // пікселів у кадрі
+    uint32_t width;       // пікселів у кадрі (розмір картинки чату)
     uint32_t height;
     uint32_t stride;      // байтів у рядку (= width*4)
-    uint32_t anchor;      // FrameAnchor: до якого кута гри тулити
-    int32_t  margin_x;    // відступ від кута, пікселів
-    int32_t  margin_y;
+    float    pos_x;       // лівий-верхній кут чату, частка ширини кадру [0..1]
+    float    pos_y;       // частка висоти кадру [0..1]
+    float    size_x;      // ширина чату, частка ширини кадру [0..1]
+    float    size_y;      // висота чату, частка висоти кадру [0..1]
     uint32_t opacity;     // 0..255 — загальна прозорість поверх альфи кадру
     uint32_t enabled;     // 0 = не малювати (чат сховано)
     uint32_t heartbeat;   // Python збільшує щопису: DLL бачить, що продюсер живий
     uint32_t target_pid;  // малює лише процес із цим PID (0 = будь-який). Так чат
                           // не зʼявляється у сторонньому вікні, куди DLL потрапила
                           // випадково (напр. інший процес зі списку).
-    uint32_t hide_from_obs; // 1 = ховати чат від OBS: малювати якнайглибше (перед
-                          // самим показом), щоб захоплення OBS зняло чистий кадр,
-                          // а монітор — уже з чатом. 0 = як є (OBS теж бачить).
-    uint32_t reserved[2];
+    uint32_t hide_from_obs; // 1 = ховати чат від OBS (DX12: малюємо після копії
+                          // OBS через чергу команд). 0 = як є (OBS теж бачить).
+    uint32_t reserved[1];
 };
 #pragma pack(pop)
 

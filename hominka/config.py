@@ -47,10 +47,10 @@ class ConfigMixin:
         # Розташування чату в грі. Саме ввімкнення (game_on) не відновлюємо: гра
         # після перезапуску вже не та (DLL пішла разом із нею), тож продюсер має
         # вмикатися свідомо, кнопкою, а не сам.
+        # Позицію/розмір чату в грі більше не зберігаємо тут: їх задає саме вікно
+        # чату (його геометрія і так зберігається). Лишаються прозорість і
+        # приховування від OBS.
         g = cfg.get("gameOverlay") or {}
-        self.game_anchor = g.get("anchor", "tl")
-        self.game_margin_x = int(g.get("marginX", 24))
-        self.game_margin_y = int(g.get("marginY", 24))
         self.game_opacity = int(g.get("opacity", 235))
         self.game_hide_obs = bool(g.get("hideFromObs", False))
         self._topmost.enabled = self.keep_top
@@ -128,9 +128,6 @@ class ConfigMixin:
                     "chatLayout": self.chat_layout,
                     "keepTop": self.keep_top,
                     "gameOverlay": {
-                        "anchor": self.game_anchor,
-                        "marginX": self.game_margin_x,
-                        "marginY": self.game_margin_y,
                         "opacity": self.game_opacity,
                         "hideFromObs": self.game_hide_obs,
                     },

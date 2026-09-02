@@ -6,7 +6,7 @@
 
 APP_NAME = "Hominka"          # від укр. «гомін» — гомін голосів у чаті
 APP_ICON = "hominka.ico"
-APP_VERSION = "2.4.11"
+APP_VERSION = "2.5.0"
 APP_AUTHOR = "Mykyta Vinnyk"
 
 # Мова, якою програма просить сервер говорити (див. urls.site_chat_url).

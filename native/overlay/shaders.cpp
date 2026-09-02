@@ -52,7 +52,7 @@ D3DCompileFn load_compiler() {
     if (!m) m = LoadLibraryW(L"d3dcompiler_46.dll");
     if (!m) m = LoadLibraryW(L"d3dcompiler_43.dll");
     if (!m) return nullptr;
-    return (D3DCompileFn)GetProcAddress(m, "D3DCompile");
+    return (D3DCompileFn)(void*)GetProcAddress(m, "D3DCompile");
 }
 
 ID3DBlob* compile(D3DCompileFn fn, const char* src, const char* target) {

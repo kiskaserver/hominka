@@ -22,13 +22,29 @@ struct FrameView {
     uint32_t seq = 0;        // номер кадру — щоб не заливати текстуру двічі
     uint32_t width = 0;
     uint32_t height = 0;
-    uint32_t anchor = 0;
-    int32_t margin_x = 0;
-    int32_t margin_y = 0;
+    float pos_x = 0.f;       // рамка чату — частки кадру гри [0..1]
+    float pos_y = 0.f;
+    float size_x = 0.f;
+    float size_y = 0.f;
     uint32_t opacity = 255;
     uint32_t target_pid = 0;          // 0 = будь-який процес
-    uint32_t hide_from_obs = 0;       // 1 = малювати якнайглибше, ховаючись від OBS
+    uint32_t hide_from_obs = 0;       // 1 = ховати чат від OBS
     const uint8_t* pixels = nullptr;  // BGRA, дійсний доти, доки живий Reader
+
+    // Прямокутник чату в пікселях кадру гри frame_w×frame_h. Якщо розмір не
+    // заданий (size==0) — падаємо на натуральний розмір картинки в лівому куті.
+    void rect(float frame_w, float frame_h, float* x, float* y, float* w, float* h) const {
+        float rw = size_x > 0.f ? size_x * frame_w : (float)width;
+        float rh = size_y > 0.f ? size_y * frame_h : (float)height;
+        *w = rw; *h = rh;
+        *x = pos_x * frame_w;
+        *y = pos_y * frame_h;
+        // Тримаємо в межах кадру: за краєм гри чат просто не було б видно.
+        if (*x + rw > frame_w) *x = frame_w - rw;
+        if (*y + rh > frame_h) *y = frame_h - rh;
+        if (*x < 0.f) *x = 0.f;
+        if (*y < 0.f) *y = 0.f;
+    }
 };
 
 class SharedFrameReader {
@@ -65,10 +81,10 @@ public:
         if (seq1 & 1u) return false;              // запис саме триває
 
         uint32_t w = h->width, ht = h->height, stride = h->stride;
-        uint32_t enabled = h->enabled, anchor = h->anchor, opacity = h->opacity;
+        uint32_t enabled = h->enabled, opacity = h->opacity;
         uint32_t target_pid = h->target_pid;
         uint32_t hide_obs = h->hide_from_obs;
-        int32_t mx = h->margin_x, my = h->margin_y;
+        float px = h->pos_x, py = h->pos_y, sx = h->size_x, sy = h->size_y;
         if (w == 0 || ht == 0 || w > SHARED_FRAME_MAX_W || ht > SHARED_FRAME_MAX_H ||
             stride != w * 4)
             return false;
@@ -91,9 +107,10 @@ public:
         out->seq = seq1;
         out->width = w;
         out->height = ht;
-        out->anchor = anchor;
-        out->margin_x = mx;
-        out->margin_y = my;
+        out->pos_x = px;
+        out->pos_y = py;
+        out->size_x = sx;
+        out->size_y = sy;
         out->opacity = opacity > 255 ? 255 : opacity;
         out->target_pid = target_pid;
         out->hide_from_obs = hide_obs;

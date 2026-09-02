@@ -122,15 +122,8 @@ private:
         glGetIntegerv(GL_VIEWPORT, vp);
         float sw = (float)vp[2], sh = (float)vp[3];
         if (sw < 1 || sh < 1) return;
-        float ow = (float)tex_w_, oh = (float)tex_h_;
-
-        float x, y;
-        switch (last_.anchor) {
-            case ANCHOR_TOP_RIGHT:    x = sw - ow - last_.margin_x; y = (float)last_.margin_y; break;
-            case ANCHOR_BOTTOM_LEFT:  x = (float)last_.margin_x; y = sh - oh - last_.margin_y; break;
-            case ANCHOR_BOTTOM_RIGHT: x = sw - ow - last_.margin_x; y = sh - oh - last_.margin_y; break;
-            default:                  x = (float)last_.margin_x; y = (float)last_.margin_y; break;
-        }
+        float x, y, ow, oh;   // рамка чату — частки кадру, масштабуємо під гру
+        last_.rect(sw, sh, &x, &y, &ow, &oh);
 
         // Сучасні GL-ігри тримають прив'язану шейдерну програму — вимикаємо її на
         // час нашого фіксованого малювання, потім повертаємо.
@@ -217,7 +210,7 @@ private:
     static PFN_curctx load_cur_ctx() {
         HMODULE gl = GetModuleHandleW(L"opengl32.dll");
         if (!gl) return nullptr;
-        return (PFN_curctx)GetProcAddress(gl, "wglGetCurrentContext");
+        return (PFN_curctx)(void*)GetProcAddress(gl, "wglGetCurrentContext");
     }
 
     // Будь-яка функція GL новіша за 1.1 живе не в opengl32.dll, а в драйвері й
@@ -229,7 +222,7 @@ private:
         typedef PROC (WINAPI *WGLGetProc)(LPCSTR);
         HMODULE gl = GetModuleHandleW(L"opengl32.dll");
         if (!gl) return nullptr;
-        static WGLGetProc wglGet = (WGLGetProc)GetProcAddress(gl, "wglGetProcAddress");
+        static WGLGetProc wglGet = (WGLGetProc)(void*)GetProcAddress(gl, "wglGetProcAddress");
         if (!wglGet) return nullptr;
         PROC p = wglGet(name);
         intptr_t v = (intptr_t)p;

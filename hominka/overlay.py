@@ -130,9 +130,9 @@ class Overlay(SourcesMixin, UpdatingMixin, ConfigMixin, LookMixin, QMainWindow):
         # тільки коли вмикають, бо це друге приховане вікно з рушієм браузера.
         self.game_on = False
         self.game_overlay = None
-        self.game_anchor = "tl"
-        self.game_margin_x = 24
-        self.game_margin_y = 24
+        # Позицію й розмір чату в грі задає САМЕ ЦЕ ВІКНО чату: куди поставив і
+        # як розтягнув на моніторі — там і такого ж розміру в грі (див.
+        # _game_rect). Тут лишаються тільки прозорість і приховування від OBS.
         self.game_opacity = 235
         self.game_hide_obs = False   # чат у грі бачить лише стрімер, не OBS
 
@@ -345,6 +345,7 @@ class Overlay(SourcesMixin, UpdatingMixin, ConfigMixin, LookMixin, QMainWindow):
         super().moveEvent(e)
         if hasattr(self, "panel") and self.panel.isVisible():
             self._place_panel()
+        self._sync_game_rect()   # пересунув вікно — чат у грі їде слідом
 
 
     def resizeEvent(self, e):
@@ -354,6 +355,7 @@ class Overlay(SourcesMixin, UpdatingMixin, ConfigMixin, LookMixin, QMainWindow):
         self.grip.raise_()
         if self.panel.isVisible():
             self._place_panel()
+        self._sync_game_rect()   # розтягнув вікно — чат у грі росте так само
         self.save_config()
 
     def showEvent(self, e):
@@ -403,13 +405,42 @@ class Overlay(SourcesMixin, UpdatingMixin, ConfigMixin, LookMixin, QMainWindow):
         self.panel.set_fullscreen_state(fullscreen.state())
 
     # --- справжній чат у грі (інжектор) ---
+    def _game_rect(self):
+        """Прямокутник вікна чату як частки СВОГО монітора: (x, y, w, h) ∈ [0..1].
+
+        Саме він стає розкладкою чату в грі. На одному моніторі — точь-у-точь;
+        якщо вікно на іншому екрані, ніж гра, — та сама частка застосовується до
+        монітора гри.
+        """
+        scr = self.screen()
+        g = self.frameGeometry()
+        if scr is None:
+            return (0.72, 0.06, 0.24, 0.40)
+        m = scr.geometry()
+        mw = float(m.width()) or 1.0
+        mh = float(m.height()) or 1.0
+        nx = (g.x() - m.x()) / mw
+        ny = (g.y() - m.y()) / mh
+        nw = g.width() / mw
+        nh = g.height() / mh
+        clamp = lambda v: max(0.0, min(1.0, v))
+        return (clamp(nx), clamp(ny), clamp(nw), clamp(nh))
+
+    def _sync_game_rect(self):
+        """Оновлює рамку й розмір чату в грі з поточного вікна чату."""
+        if getattr(self, "game_overlay", None) is None:
+            return
+        nx, ny, nw, nh = self._game_rect()
+        self.game_overlay.set_rect(nx, ny, nw, nh)
+        self.game_overlay.set_size(self.width(), self.height())
+
     def _ensure_game_overlay(self):
         if self.game_overlay is None:
             from .gameoverlay import GameOverlay
             self.game_overlay = GameOverlay(self)
-            self.game_overlay.set_geometry(self.game_anchor, self.game_margin_x,
-                                           self.game_margin_y, self.game_opacity)
+            self.game_overlay.set_opacity(self.game_opacity)
             self.game_overlay.set_hide_from_obs(self.game_hide_obs)
+            self._sync_game_rect()
         return self.game_overlay
 
     def set_game_hide_obs(self, on: bool):
@@ -430,13 +461,9 @@ class Overlay(SourcesMixin, UpdatingMixin, ConfigMixin, LookMixin, QMainWindow):
             self.game_overlay.set_source(self.mode, self.url, self.is_yt)
 
     def set_game_overlay(self, on: bool):
-        """Вмикає/вимикає продюсера кадру чату для гри.
-
-        У стабільному каналі — ніколи: експеримент з інʼєкцією не
-        має вмикатися в тих, хто просто веде ефір.
-        """
-        if on and self.channel == "stable":
-            on = False
+        """Вмикає/вимикає продюсера кадру чату для гри. Доступно в усіх каналах —
+        безпеку несуть вимкнений за замовчуванням прапорець, попередження і
+        відмова інжектора в онлайн-іграх (guard)."""
         self.game_on = bool(on)
         if self.game_on:
             ov = self._ensure_game_overlay()
@@ -458,13 +485,10 @@ class Overlay(SourcesMixin, UpdatingMixin, ConfigMixin, LookMixin, QMainWindow):
                 self.game_overlay.set_target(res.pid)
         return res
 
-    def set_game_geometry(self, anchor: str, margin_x: int, margin_y: int, opacity: int):
-        self.game_anchor = anchor
-        self.game_margin_x = int(margin_x)
-        self.game_margin_y = int(margin_y)
+    def set_game_opacity(self, opacity: int):
         self.game_opacity = int(opacity)
         if self.game_overlay is not None:
-            self.game_overlay.set_geometry(anchor, margin_x, margin_y, opacity)
+            self.game_overlay.set_opacity(self.game_opacity)
         self.save_config()
 
     def set_keep_top(self, on: bool):
@@ -472,12 +496,16 @@ class Overlay(SourcesMixin, UpdatingMixin, ConfigMixin, LookMixin, QMainWindow):
         self._topmost.enabled = self.keep_top
         self.save_config()
 
-    def make_game_borderless(self):
-        """Переводить вікно гри в безрамковий режим — на прохання людини."""
-        info = fullscreen.state()
-        if info.get("kind") in ("none", "desktop"):
+    def make_game_borderless(self, hwnd: int = 0):
+        """Переводить ВИБРАНЕ вікно гри в безрамковий режим — на прохання людини.
+
+        Вікно приходить зі списку в панелі (fullscreen.list_windows), а не з
+        автовизначення переднього вікна: так людина точно бачить, що саме
+        зробить безрамковим.
+        """
+        if not hwnd:
             return False
-        return fullscreen.make_borderless(info.get("hwnd", 0))
+        return fullscreen.make_borderless(int(hwnd))
 
     def restore_game_window(self):
         return fullscreen.restore(fullscreen.changed_window())

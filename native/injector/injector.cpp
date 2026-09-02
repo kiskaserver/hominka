@@ -47,7 +47,7 @@ bool is_64bit(HANDLE proc, bool* ok) {
     USHORT process_machine = IMAGE_FILE_MACHINE_UNKNOWN;
     USHORT native_machine = IMAGE_FILE_MACHINE_UNKNOWN;
     typedef BOOL (WINAPI *Fn)(HANDLE, USHORT*, USHORT*);
-    Fn fn = (Fn)GetProcAddress(GetModuleHandleW(L"kernel32.dll"), "IsWow64Process2");
+    Fn fn = (Fn)(void*)GetProcAddress(GetModuleHandleW(L"kernel32.dll"), "IsWow64Process2");
     if (!fn) return false;
     if (!fn(proc, &process_machine, &native_machine)) return false;
     *ok = true;
@@ -260,7 +260,7 @@ int wmain(int argc, wchar_t** argv) {
 
     // LoadLibraryW у kernel32 — той самий адрес у всіх процесах цієї розрядності.
     LPTHREAD_START_ROUTINE loader =
-        (LPTHREAD_START_ROUTINE)GetProcAddress(GetModuleHandleW(L"kernel32.dll"), "LoadLibraryW");
+        (LPTHREAD_START_ROUTINE)(void*)GetProcAddress(GetModuleHandleW(L"kernel32.dll"), "LoadLibraryW");
     HANDLE thread = CreateRemoteThread(proc, NULL, 0, loader, remote, 0, NULL);
     if (!thread) {
         log("injector: CreateRemoteThread не вдалося, err=%lu", GetLastError());

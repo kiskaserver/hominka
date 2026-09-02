@@ -8,11 +8,11 @@
 
 from typing import TYPE_CHECKING
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QEvent, QObject, Qt
 from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
-    QFrame, QGraphicsDropShadowEffect, QHBoxLayout, QLabel, QPushButton, QScrollArea,
-    QVBoxLayout, QWidget,
+    QAbstractSpinBox, QApplication, QComboBox, QFrame, QGraphicsDropShadowEffect,
+    QHBoxLayout, QLabel, QPushButton, QScrollArea, QSlider, QVBoxLayout, QWidget,
 )
 
 from ...styles import PANEL_CSS, SLIDER_CSS
@@ -23,6 +23,27 @@ from .widgets import WidgetsMixin
 
 if TYPE_CHECKING:                      # тільки для підказок типів
     from ...overlay import Overlay
+
+
+class _WheelGuard(QObject):
+    """Колесо миші над комбобоксом/повзунком у прокрутці МАЄ гортати список, а
+    не міняти значення під курсором.
+
+    Стандартна пастка Qt: QComboBox/QSlider ловлять колесо навіть без фокуса, і
+    прокрутка панелі фантомно перемикає опції чи совгає прозорість. Тому колесо
+    над таким віджетом, коли він НЕ у фокусі, ми перенаправляємо у прокрутку, а
+    до самого віджета не пускаємо. Клацнув, сфокусував — тоді крути на здоров'я.
+    """
+
+    def __init__(self, scroll: QScrollArea):
+        super().__init__(scroll)
+        self._scroll = scroll
+
+    def eventFilter(self, obj, ev):
+        if ev.type() == QEvent.Wheel and not obj.hasFocus():
+            QApplication.sendEvent(self._scroll.viewport(), ev)
+            return True                # до віджета не доходить — значення не міняється
+        return False
 
 
 class SettingsPanel(CardsMixin, WidgetsMixin, QWidget):
@@ -97,6 +118,14 @@ class SettingsPanel(CardsMixin, WidgetsMixin, QWidget):
         self.scroll.setWidget(content)
         self._content = content
         body_lay.addWidget(self.scroll)
+
+        # Колесо над комбобоксами/повзунками у прокрутці більше не міняє їх
+        # фантомно — гортає панель (див. _WheelGuard).
+        self._wheel_guard = _WheelGuard(self.scroll)
+        for cls in (QComboBox, QSlider, QAbstractSpinBox):
+            for w in content.findChildren(cls):
+                w.installEventFilter(self._wheel_guard)
+                w.setFocusPolicy(Qt.StrongFocus)
 
         self.hide()
 

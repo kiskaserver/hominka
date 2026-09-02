@@ -24,13 +24,12 @@ namespace hominka {
 class OverlayDX11 {
 public:
     // Викликається з перехопленого Present. swap — свопчейн гри.
-    // inner  — виклик з ІНЛАЙН-хука самого Present (найглибше, перед показом);
-    //          false = зі свопчейн-хука (зовні).
-    // obs_split — режим приховування від OBS активний (стоять обидва хуки). Тоді
-    //          малює лише той шар, що відповідає прапорцю кадру hide_from_obs:
-    //          сховати → лише inner; показувати → лише зовнішній. Так захоплення
-    //          OBS (на рівні свопчейна) знімає кадр ДО нашого глибокого малювання.
-    void draw(IDXGISwapChain* swap, bool inner = false, bool obs_split = false) {
+    // obs_present / after_obs_copy — задля єдиного підпису з DX12. У DX11 OBS
+    // копіює кадр не через чергу команд, а на immediate-контексті, тож окремого
+    // шляху «після копії OBS» тут немає: малюємо при Present (after_obs_copy=false).
+    // Приховування від OBS у DX11 наразі не гарантуємо — воно зроблене для DX12.
+    void draw(IDXGISwapChain* swap, bool obs_present = false, bool after_obs_copy = false) {
+        (void)obs_present;
         if (!reader_.ensure_open()) return;   // Python ще не запустив чат
         if (!ensure_device(swap)) return;
 
@@ -61,9 +60,8 @@ public:
         }
         if (!srv_ || tex_w_ == 0) return;
 
-        // Розподіл шарів для приховування від OBS: малює рівно один із двох
-        // хуків. Без поділу (obs_split=false) малює завжди зовнішній.
-        if (obs_split && (last_.hide_from_obs ? !inner : inner)) return;
+        // DX11 малює лише при Present; окремого «після копії OBS» шляху немає.
+        if (after_obs_copy) return;
 
         blit();
     }
@@ -155,14 +153,8 @@ private:
         back->Release();
         if (FAILED(hr) || !rtv) return;
 
-        float ow = (float)tex_w_, oh = (float)tex_h_;
-        float x, y;
-        switch (last_.anchor) {
-            case ANCHOR_TOP_RIGHT:    x = bd.Width - ow - last_.margin_x; y = (float)last_.margin_y; break;
-            case ANCHOR_BOTTOM_LEFT:  x = (float)last_.margin_x; y = bd.Height - oh - last_.margin_y; break;
-            case ANCHOR_BOTTOM_RIGHT: x = bd.Width - ow - last_.margin_x; y = bd.Height - oh - last_.margin_y; break;
-            default:                  x = (float)last_.margin_x; y = (float)last_.margin_y; break;
-        }
+        float x, y, ow, oh;   // рамка чату — частки кадру, масштабуємо під гру
+        last_.rect((float)bd.Width, (float)bd.Height, &x, &y, &ow, &oh);
 
         D3D11_VIEWPORT vp = {};
         vp.TopLeftX = x;

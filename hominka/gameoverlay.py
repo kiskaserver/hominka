@@ -43,15 +43,22 @@ def _diag(msg: str):
         pass
 
 # --- дзеркало shared_frame.h ------------------------------------------------
+# v3: розкладку чату задає САМЕ ВІКНО чату (позиція + розмір у частках екрана),
+# а не «кут + відступ». Зсуви полів заголовка (байти):
+#   magic0 version4 seq8 width12 height16 stride20
+#   pos_x24 pos_y28 size_x32 size_y36 (float, частки кадру)
+#   opacity40 enabled44 heartbeat48 target_pid52 hide_from_obs56 reserved60
 SHM_NAME = "Local\\HominkaOverlayFrame"
 MAGIC = 0x324B4D48          # «HMK2» у памʼяті
-VERSION = 2
+VERSION = 3
 MAX_W, MAX_H = 1920, 1080
 HEADER_SIZE = 64
 DATA_MAX = MAX_W * MAX_H * 4
 TOTAL = HEADER_SIZE + DATA_MAX
 
-ANCHOR = {"tl": 0, "tr": 1, "bl": 2, "br": 3}
+OFF_ENABLED = 44
+OFF_TARGET = 52
+OFF_HIDE_OBS = 56
 
 _IS_WINDOWS = hasattr(ctypes, "windll")
 
@@ -125,26 +132,25 @@ class SharedFrameWriter:
         self.target_pid = int(pid) & 0xFFFFFFFF
         if self._view:
             self._begin()
-            struct.pack_into("<I", self._buf, 48, self.target_pid)
+            struct.pack_into("<I", self._buf, OFF_TARGET, self.target_pid)
             self._commit_header()
 
     def set_enabled(self, on: bool):
         """Показати/сховати чат у грі, не чіпаючи самого кадру."""
         if not self._view:
             return
-        # enabled — 11-те 32-бітне поле (зсув 40). Пишемо його окремо, під
-        # seqlock, щоб DLL не побачив півстану.
+        # enabled пишемо окремо, під seqlock, щоб DLL не побачив півстану.
         self._begin()
-        struct.pack_into("<I", self._buf, 40, 1 if on else 0)
+        struct.pack_into("<I", self._buf, OFF_ENABLED, 1 if on else 0)
         self._commit_header()
 
     def set_hide_from_obs(self, on: bool):
-        """Ховати чат від OBS: DLL малюватиме якнайглибше (перед показом), щоб
-        захоплення OBS зняло чистий кадр. hide_from_obs — зсув 52 у заголовку."""
+        """Ховати чат від OBS: у DX12 DLL малює після копії OBS через чергу
+        команд. hide_from_obs — зсув OFF_HIDE_OBS у заголовку."""
         self.hide_from_obs = 1 if on else 0
         if self._view:
             self._begin()
-            struct.pack_into("<I", self._buf, 52, self.hide_from_obs)
+            struct.pack_into("<I", self._buf, OFF_HIDE_OBS, self.hide_from_obs)
             self._commit_header()
 
     # --- внутрішнє ---
@@ -163,9 +169,13 @@ class SharedFrameWriter:
         struct.pack_into("<I", self._buf, 8, self._seq)
         ctypes.memmove(self._view, bytes(self._buf), HEADER_SIZE)
 
-    def write(self, img: QImage, anchor: int, margin_x: int, margin_y: int,
-              opacity: int, heartbeat: int):
-        """Кладе кадр (QImage ARGB32) у память під seqlock."""
+    def write(self, img: QImage, pos_x: float, pos_y: float,
+              size_x: float, size_y: float, opacity: int, heartbeat: int):
+        """Кладе кадр (QImage ARGB32) у память під seqlock.
+
+        pos_*/size_* — рамка чату в частках кадру гри [0..1] (звідки й якого
+        розміру взяв вікно чату на моніторі — там і в грі).
+        """
         if not self._view:
             return
         w, h = img.width(), img.height()
@@ -177,10 +187,11 @@ class SharedFrameWriter:
             return
 
         buf = bytearray(HEADER_SIZE)
-        struct.pack_into("<IIIIIIIiiIIIII", buf, 0,
+        struct.pack_into("<IIIIIIffffIIIII", buf, 0,
                          MAGIC, VERSION, 0,           # seq заповнимо навколо запису
-                         w, h, stride, anchor,
-                         margin_x, margin_y, opacity & 0xFF, 1, heartbeat & 0xFFFFFFFF,
+                         w, h, stride,
+                         float(pos_x), float(pos_y), float(size_x), float(size_y),
+                         opacity & 0xFF, 1, heartbeat & 0xFFFFFFFF,
                          self.target_pid & 0xFFFFFFFF,
                          self.hide_from_obs & 0xFFFFFFFF)
         self._buf = buf
@@ -238,9 +249,13 @@ class GameOverlay(QObject):
         super().__init__()
         self.win = win
         self.enabled = False
-        self.anchor = ANCHOR["tl"]
-        self.margin_x = 24
-        self.margin_y = 24
+        # Рамка чату в частках кадру гри [0..1] — задає ВІКНО чату на моніторі
+        # (overlay.py рахує його прямокутник відносно монітора й кличе set_rect).
+        # Типове: правий-верхній кут, чверть екрана — поки вікно ще не зміряли.
+        self.pos_x = 0.72
+        self.pos_y = 0.06
+        self.size_x = 0.24
+        self.size_y = 0.40
         self.opacity = 255
         self._heartbeat = 0
         self._last_crc = 0
@@ -331,14 +346,21 @@ class GameOverlay(QObject):
         else:
             self.feed.load()   # немає url — хоч порожня стрічка, а не біла сторінка
 
-    def set_geometry(self, anchor: str, margin_x: int, margin_y: int, opacity: int):
-        self.anchor = ANCHOR.get(anchor, 0)
-        self.margin_x = int(margin_x)
-        self.margin_y = int(margin_y)
-        self.opacity = max(0, min(255, int(opacity)))
+    def set_rect(self, pos_x: float, pos_y: float, size_x: float, size_y: float):
+        """Рамка чату у грі в частках кадру [0..1] — з прямокутника вікна чату."""
+        self.pos_x = max(0.0, min(1.0, float(pos_x)))
+        self.pos_y = max(0.0, min(1.0, float(pos_y)))
+        self.size_x = max(0.02, min(1.0, float(size_x)))
+        self.size_y = max(0.02, min(1.0, float(size_y)))
         self._last_crc = 0    # змусити перезапис із новими полями
 
+    def set_opacity(self, opacity: int):
+        self.opacity = max(0, min(255, int(opacity)))
+        self._last_crc = 0
+
     def set_size(self, w: int, h: int):
+        """Розмір прихованого вікна = розмір вікна чату: так пропорції картинки
+        збігаються з тим, що бачить стрімер, і масштаб у грі не спотворює чат."""
         self.view.resize(max(80, min(MAX_W, w)), max(60, min(MAX_H, h)))
         self._last_crc = 0
 
@@ -449,12 +471,15 @@ class GameOverlay(QObject):
                              Qt.KeepAspectRatio, Qt.SmoothTransformation)
 
         crc = zlib.crc32(bytes(memoryview(img.constBits())))
-        crc ^= (self.anchor << 24) ^ (self.opacity << 16) ^ \
-               ((self.margin_x & 0xFF) << 8) ^ (self.margin_y & 0xFF)
+        # У контрольну суму домішуємо і рамку/прозорість — щоб зсув чи новий
+        # розмір теж викликали перезапис, навіть коли пікселі ті самі.
+        geom = struct.pack("<ffffI", self.pos_x, self.pos_y,
+                           self.size_x, self.size_y, self.opacity)
+        crc = zlib.crc32(geom, crc)
         if crc != self._last_crc:
             self._last_crc = crc
             self._heartbeat += 1
-            self.writer.write(img, self.anchor, self.margin_x, self.margin_y,
+            self.writer.write(img, self.pos_x, self.pos_y, self.size_x, self.size_y,
                               self.opacity, self._heartbeat)
             # Коли вже прийшли події — рахуємо непорожні пікселі кадру: так видно,
             # чи офскрин-вікно справді намалювало чат, чи віддає прозору пустку

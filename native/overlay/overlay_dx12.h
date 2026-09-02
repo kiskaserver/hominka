@@ -37,16 +37,24 @@ public:
         log("overlay(dx12): чергу команд (DIRECT) захоплено");
     }
 
-    // inner/obs_split — див. overlay_dx11.h: приховування від OBS малює лише
-    // потрібний із двох шарів (зовнішній свопчейн-хук / внутрішній інлайн Present).
-    void draw(IDXGISwapChain* swap, bool inner = false, bool obs_split = false) {
-        if (!queue_) return;                 // ще не знаємо, куди слати команди
+    // Виклик при Present (КОЖЕН кадр). Читає кадр чату, оновлює текстуру й малює.
+    //
+    // Приховування від OBS у DX12 — через ЧЕРГУ КОМАНД, а не порядок хуків Present
+    // (у DX12 надійного порядку немає). OBS копіює бекбуфер своїм D3D11On12, і його
+    // .Flush() шле ExecuteCommandLists на чергу ГРИ — ту саму, яку ловимо ми. Щоб
+    // не мерехтіло на будь-якому FPS (v2): при КОЖНОМУ Present робимо знімок
+    // чистого кадру й малюємо чат (моник завжди з чатом); а коли OBS робить копію
+    // (obs_wrap_before/after із hooked_execute) — повертаємо чистий кадр ПЕРЕД
+    // копією і домальовуємо чат ПІСЛЯ. Тож OBS завжди знімає чисте, а екран завжди
+    // з чатом. Показ/без OBS — простий blit при Present.
+    void present_draw(IDXGISwapChain* swap, bool obs_present) {
+        hide_armed_ = false;
+        if (!queue_) return;
         if (!reader_.ensure_open()) return;
         if (!ensure_init(swap)) return;
 
         FrameView f;
         bool got = reader_.read(&f);
-        bool have_new = false;
         if (got) {
             if (f.target_pid && f.target_pid != GetCurrentProcessId()) return;
             if (!logged_) { logged_ = true;
@@ -55,6 +63,12 @@ public:
                     f.width, f.height); }
             if (!f.enabled) { enabled_ = false; return; }
             enabled_ = true;
+        } else if (!enabled_ || tex_seq_ == 0) {
+            return;
+        }
+
+        bool have_new = false;
+        if (got) {
             if (f.seq != tex_seq_ || f.width != tex_w_ || f.height != tex_h_) {
                 if (!ensure_texture(f.width, f.height)) return;
                 stage_pixels(f);
@@ -62,20 +76,32 @@ public:
                 tex_seq_ = f.seq;
             }
             last_ = f;
-        } else if (!enabled_ || tex_seq_ == 0) {
-            return;
         }
         if (!srv_ok_ || tex_w_ == 0) return;
 
-        if (obs_split && (last_.hide_from_obs ? !inner : inner)) return;
-
-        blit(have_new);
+        bool hide = last_.hide_from_obs && obs_present;
+        if (hide && ensure_hide()) {
+            do_snapshot_and_draw(have_new, queue_);   // знімок чистого + чат
+            hide_armed_ = true;                       // цей Present треба обгорнути
+        } else {
+            blit(have_new, queue_);                   // показ / без OBS
+        }
     }
+
+    // Чи треба цього Present обгортати копію OBS (тобто ми в режимі приховування).
+    bool hide_armed() const { return hide_armed_; }
+    // Перед копією OBS: повертаємо в бекбуфер чистий (без чату) знімок.
+    void obs_wrap_before(ID3D12CommandQueue* q) { if (hide_armed_ && hide_ready_) do_restore(q); }
+    // Після копії OBS: домальовуємо чат назад (щоб показ був з чатом).
+    void obs_wrap_after(ID3D12CommandQueue* q)  { if (hide_armed_ && hide_ready_) do_redraw(q); }
 
     void release() {
         wait_idle();
+        if (fence_event_) { CloseHandle(fence_event_); fence_event_ = nullptr; }
         rel(fence_); rel(srv_heap_); rel(rtv_heap_); rel(cmd_list_);
         for (auto& a : alloc_) rel(a);
+        rel(hlist_); rel(saved_);
+        for (auto& a : halloc_) rel(a);
         rel(pso_); rel(root_); rel(tex_); rel(upload_);
         for (auto& b : back_) rel(b);
         rel(device_);
@@ -275,70 +301,153 @@ private:
         cl->ResourceBarrier(1, &br);
     }
 
-    void blit(bool copy_tex) {
+    // Поточний індекс заднього буфера свопчейна.
+    bool cur_idx(UINT* out) {
         IDXGISwapChain3* sc3 = nullptr;
-        if (FAILED(swap_->QueryInterface(__uuidof(IDXGISwapChain3), (void**)&sc3)) || !sc3) return;
+        if (FAILED(swap_->QueryInterface(__uuidof(IDXGISwapChain3), (void**)&sc3)) || !sc3) return false;
         UINT idx = sc3->GetCurrentBackBufferIndex();
         sc3->Release();
-        if (idx >= buffers_) return;
+        if (idx >= buffers_) return false;
+        *out = idx; return true;
+    }
 
-        // Чекаємо, поки попереднє наше подання на цей allocator завершилось.
+    // Копія upload-буфера в текстуру чату (коли кадр оновився).
+    void record_tex_copy(ID3D12GraphicsCommandList* cl) {
+        barrier(cl, tex_, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
+                D3D12_RESOURCE_STATE_COPY_DEST);
+        D3D12_TEXTURE_COPY_LOCATION d = {}; d.pResource = tex_;
+        d.Type = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX; d.SubresourceIndex = 0;
+        D3D12_TEXTURE_COPY_LOCATION s = {}; s.pResource = upload_;
+        s.Type = D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT; s.PlacedFootprint = footprint_;
+        cl->CopyTextureRegion(&d, 0, 0, 0, &s, nullptr);
+        barrier(cl, tex_, D3D12_RESOURCE_STATE_COPY_DEST,
+                D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+    }
+
+    // Малює квад чату в back_[idx]. Задній буфер уже має бути в RENDER_TARGET.
+    void record_quad(ID3D12GraphicsCommandList* cl, UINT idx) {
+        cl->OMSetRenderTargets(1, &rtv_[idx], FALSE, nullptr);
+        D3D12_RESOURCE_DESC bd = back_[idx]->GetDesc();
+        float x, y, ow, oh;   // рамка чату — частки кадру, масштабуємо під гру
+        last_.rect((float)bd.Width, (float)bd.Height, &x, &y, &ow, &oh);
+        D3D12_VIEWPORT vp = { x, y, ow, oh, 0.f, 1.f };
+        D3D12_RECT sr = { (LONG)x, (LONG)y, (LONG)(x + ow), (LONG)(y + oh) };
+        cl->RSSetViewports(1, &vp);
+        cl->RSSetScissorRects(1, &sr);
+        ID3D12DescriptorHeap* heaps[] = { srv_heap_ };
+        cl->SetDescriptorHeaps(1, heaps);
+        cl->SetGraphicsRootSignature(root_);
+        cl->SetGraphicsRootDescriptorTable(0, srv_heap_->GetGPUDescriptorHandleForHeapStart());
+        float op = last_.opacity / 255.0f;
+        cl->SetGraphicsRoot32BitConstants(1, 1, &op, 0);
+        cl->SetPipelineState(pso_);
+        cl->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLESTRIP);
+        cl->DrawInstanced(4, 1, 0, 0);
+    }
+
+    // Звичайний показ (не приховуємо): чат прямо в задній буфер при Present.
+    void blit(bool copy_tex, ID3D12CommandQueue* q) {
+        if (!q) q = queue_;
+        UINT idx; if (!cur_idx(&idx)) return;
         if (fence_val_[idx] && fence_->GetCompletedValue() < fence_val_[idx]) {
             fence_->SetEventOnCompletion(fence_val_[idx], fence_event_);
             WaitForSingleObject(fence_event_, 100);
         }
         alloc_[idx]->Reset();
         cmd_list_->Reset(alloc_[idx], pso_);
-
-        if (copy_tex) {
-            barrier(cmd_list_, tex_, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
-                    D3D12_RESOURCE_STATE_COPY_DEST);
-            D3D12_TEXTURE_COPY_LOCATION d = {}; d.pResource = tex_;
-            d.Type = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX; d.SubresourceIndex = 0;
-            D3D12_TEXTURE_COPY_LOCATION s = {}; s.pResource = upload_;
-            s.Type = D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT; s.PlacedFootprint = footprint_;
-            cmd_list_->CopyTextureRegion(&d, 0, 0, 0, &s, nullptr);
-            barrier(cmd_list_, tex_, D3D12_RESOURCE_STATE_COPY_DEST,
-                    D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
-        }
-
+        if (copy_tex) record_tex_copy(cmd_list_);
         barrier(cmd_list_, back_[idx], D3D12_RESOURCE_STATE_PRESENT,
                 D3D12_RESOURCE_STATE_RENDER_TARGET);
-        cmd_list_->OMSetRenderTargets(1, &rtv_[idx], FALSE, nullptr);
-
-        D3D12_RESOURCE_DESC bd = back_[idx]->GetDesc();
-        float ow = (float)tex_w_, oh = (float)tex_h_;
-        float sw = (float)bd.Width, sh = (float)bd.Height;
-        float x, y;
-        switch (last_.anchor) {
-            case ANCHOR_TOP_RIGHT:    x = sw - ow - last_.margin_x; y = (float)last_.margin_y; break;
-            case ANCHOR_BOTTOM_LEFT:  x = (float)last_.margin_x; y = sh - oh - last_.margin_y; break;
-            case ANCHOR_BOTTOM_RIGHT: x = sw - ow - last_.margin_x; y = sh - oh - last_.margin_y; break;
-            default:                  x = (float)last_.margin_x; y = (float)last_.margin_y; break;
-        }
-        D3D12_VIEWPORT vp = { x, y, ow, oh, 0.f, 1.f };
-        D3D12_RECT sr = { (LONG)x, (LONG)y, (LONG)(x + ow), (LONG)(y + oh) };
-        cmd_list_->RSSetViewports(1, &vp);
-        cmd_list_->RSSetScissorRects(1, &sr);
-
-        ID3D12DescriptorHeap* heaps[] = { srv_heap_ };
-        cmd_list_->SetDescriptorHeaps(1, heaps);
-        cmd_list_->SetGraphicsRootSignature(root_);
-        cmd_list_->SetGraphicsRootDescriptorTable(0, srv_heap_->GetGPUDescriptorHandleForHeapStart());
-        float op = last_.opacity / 255.0f;
-        cmd_list_->SetGraphicsRoot32BitConstants(1, 1, &op, 0);
-        cmd_list_->SetPipelineState(pso_);
-        cmd_list_->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLESTRIP);
-        cmd_list_->DrawInstanced(4, 1, 0, 0);
-
+        record_quad(cmd_list_, idx);
         barrier(cmd_list_, back_[idx], D3D12_RESOURCE_STATE_RENDER_TARGET,
                 D3D12_RESOURCE_STATE_PRESENT);
         cmd_list_->Close();
-
         ID3D12CommandList* lists[] = { cmd_list_ };
-        queue_->ExecuteCommandLists(1, lists);
+        q->ExecuteCommandLists(1, lists);
         fence_val_[idx] = ++fence_counter_;
-        queue_->Signal(fence_, fence_val_[idx]);
+        q->Signal(fence_, fence_val_[idx]);
+    }
+
+    // --- Приховування без мерехтіння (v2) ---------------------------------
+    // Окремий пул алокаторів + список: за один Present буває до трьох подань
+    // (знімок+чат, повернення чистого, домалювання), тож vtable blit-а їм замало.
+
+    bool ensure_hide() {
+        if (hide_ready_) return true;
+        if (!inited_ || !back_[0]) return false;
+        for (UINT i = 0; i < kHPool; ++i)
+            if (FAILED(device_->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT,
+                    __uuidof(ID3D12CommandAllocator), (void**)&halloc_[i]))) return false;
+        if (FAILED(device_->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, halloc_[0],
+                nullptr, __uuidof(ID3D12GraphicsCommandList), (void**)&hlist_))) return false;
+        hlist_->Close();
+        // Знімок = резерв під чистий кадр, розміром і форматом як задній буфер.
+        D3D12_RESOURCE_DESC bd = back_[0]->GetDesc();
+        bd.Flags = D3D12_RESOURCE_FLAG_NONE;
+        D3D12_HEAP_PROPERTIES hp = {}; hp.Type = D3D12_HEAP_TYPE_DEFAULT;
+        if (FAILED(device_->CreateCommittedResource(&hp, D3D12_HEAP_FLAG_NONE, &bd,
+                D3D12_RESOURCE_STATE_COMMON, nullptr, __uuidof(ID3D12Resource), (void**)&saved_)))
+            return false;
+        saved_state_ = D3D12_RESOURCE_STATE_COMMON;
+        hide_ready_ = true;
+        log("overlay(dx12): приховування від OBS без мерехтіння готове (знімок кадру)");
+        return true;
+    }
+
+    UINT begin_h(ID3D12PipelineState* pso) {
+        UINT s = hcursor_++ % kHPool;
+        if (hfence_[s] && fence_->GetCompletedValue() < hfence_[s]) {
+            fence_->SetEventOnCompletion(hfence_[s], fence_event_);
+            WaitForSingleObject(fence_event_, 100);
+        }
+        halloc_[s]->Reset();
+        hlist_->Reset(halloc_[s], pso);
+        return s;
+    }
+    void end_h(UINT s, ID3D12CommandQueue* q) {
+        hlist_->Close();
+        ID3D12CommandList* lists[] = { hlist_ };
+        q->ExecuteCommandLists(1, lists);
+        hfence_[s] = ++fence_counter_;
+        q->Signal(fence_, hfence_[s]);
+    }
+    void saved_to(D3D12_RESOURCE_STATES to) {
+        if (saved_state_ == to) return;
+        barrier(hlist_, saved_, saved_state_, to);
+        saved_state_ = to;
+    }
+
+    // При Present: знімок чистого кадру в saved_, потім чат у кадр.
+    void do_snapshot_and_draw(bool copy_tex, ID3D12CommandQueue* q) {
+        UINT idx; if (!cur_idx(&idx)) return;
+        UINT s = begin_h(pso_);
+        if (copy_tex) record_tex_copy(hlist_);
+        saved_to(D3D12_RESOURCE_STATE_COPY_DEST);
+        barrier(hlist_, back_[idx], D3D12_RESOURCE_STATE_PRESENT, D3D12_RESOURCE_STATE_COPY_SOURCE);
+        hlist_->CopyResource(saved_, back_[idx]);
+        barrier(hlist_, back_[idx], D3D12_RESOURCE_STATE_COPY_SOURCE, D3D12_RESOURCE_STATE_RENDER_TARGET);
+        record_quad(hlist_, idx);
+        barrier(hlist_, back_[idx], D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATE_PRESENT);
+        end_h(s, q);
+    }
+    // Перед копією OBS: повертаємо чистий знімок у задній буфер.
+    void do_restore(ID3D12CommandQueue* q) {
+        UINT idx; if (!cur_idx(&idx)) return;
+        UINT s = begin_h(nullptr);
+        saved_to(D3D12_RESOURCE_STATE_COPY_SOURCE);
+        barrier(hlist_, back_[idx], D3D12_RESOURCE_STATE_PRESENT, D3D12_RESOURCE_STATE_COPY_DEST);
+        hlist_->CopyResource(back_[idx], saved_);
+        barrier(hlist_, back_[idx], D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_PRESENT);
+        end_h(s, q);
+    }
+    // Після копії OBS: домальовуємо чат назад для показу.
+    void do_redraw(ID3D12CommandQueue* q) {
+        UINT idx; if (!cur_idx(&idx)) return;
+        UINT s = begin_h(pso_);
+        barrier(hlist_, back_[idx], D3D12_RESOURCE_STATE_PRESENT, D3D12_RESOURCE_STATE_RENDER_TARGET);
+        record_quad(hlist_, idx);
+        barrier(hlist_, back_[idx], D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATE_PRESENT);
+        end_h(s, q);
     }
 
     void wait_idle() {
@@ -382,6 +491,17 @@ private:
     uint32_t tex_w_ = 0, tex_h_ = 0, tex_seq_ = 0;
     bool inited_ = false, srv_ok_ = false, enabled_ = false, logged_ = false;
     FrameView last_;
+
+    // Приховування без мерехтіння (v2): окремий пул + знімок чистого кадру.
+    static const UINT kHPool = 8;
+    ID3D12CommandAllocator* halloc_[kHPool] = {};
+    UINT64 hfence_[kHPool] = {};
+    UINT hcursor_ = 0;
+    ID3D12GraphicsCommandList* hlist_ = nullptr;
+    ID3D12Resource* saved_ = nullptr;
+    D3D12_RESOURCE_STATES saved_state_ = D3D12_RESOURCE_STATE_COMMON;
+    bool hide_armed_ = false;   // цей Present у режимі приховування — обгортати копію OBS
+    bool hide_ready_ = false;   // пул + знімок створені
 };
 
 }  // namespace hominka

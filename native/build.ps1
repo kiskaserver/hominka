@@ -38,5 +38,5 @@ try {
 }
 
 Write-Host ""
-Write-Host "Готово. Артефакти в $dist:" -ForegroundColor Green
+Write-Host "Готово. Артефакти в ${dist}:" -ForegroundColor Green
 Get-ChildItem $dist | Format-Table Name, Length
