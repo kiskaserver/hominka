@@ -68,11 +68,23 @@ hominka::OverlayDX12 g_overlay12;
 // --- DX9 ---
 typedef HRESULT (STDMETHODCALLTYPE *EndSceneFn)(IDirect3DDevice9*);
 typedef HRESULT (STDMETHODCALLTYPE *ResetFn)(IDirect3DDevice9*, D3DPRESENT_PARAMETERS*);
+// Приховування від OBS у DX9: OBS копіює бекбуфер у своєму хуку Present через
+// StretchRect (shtex) або GetRenderTargetData (shmem). Хукаємо обидва, ловимо
+// копію саме бекбуфера й обгортаємо її (чистий кадр → копія → назад із чатом).
+typedef HRESULT (STDMETHODCALLTYPE *StretchRectFn)(IDirect3DDevice9*, IDirect3DSurface9*,
+        const RECT*, IDirect3DSurface9*, const RECT*, D3DTEXTUREFILTERTYPE);
+typedef HRESULT (STDMETHODCALLTYPE *GetRTDataFn)(IDirect3DDevice9*, IDirect3DSurface9*,
+        IDirect3DSurface9*);
 
 hominka::InlineHook g_endscene_hook;
 hominka::InlineHook g_reset_hook;
+hominka::InlineHook g_d9_stretch_hook;
+hominka::InlineHook g_d9_getrtdata_hook;
 EndSceneFn g_endscene_original = nullptr;
 ResetFn g_reset_original = nullptr;
+StretchRectFn g_d9_stretch_orig = nullptr;
+GetRTDataFn g_d9_getrtdata_orig = nullptr;
+volatile LONG g_d9_wrapping = 0;   // ми самі свопаємо бекбуфер — не сплутати з копією OBS
 hominka::OverlayDX9 g_overlay9;
 
 // --- OpenGL ---
@@ -411,8 +423,59 @@ bool install_present_hook() {
 HRESULT STDMETHODCALLTYPE hooked_endscene(IDirect3DDevice9* device) {
     LONG n = InterlockedIncrement(&g_dx9_frames);
     if (n == 1) log("overlay(dx9): перший перехоплений EndScene — кадр наш");
-    g_overlay9.draw(device);
+
+    bool draw = g_overlay9.prepare(device, obs_capture_present());
+    if (draw && g_overlay9.wants_hide()) {
+        // Ховаємо від OBS — усе БЕЗ своєї сцени (див. overlay_dx9.h):
+        //  А) знімок чистого кадру (RT на мить убік → StretchRect → назад);
+        //  Б) чат у сцену ГРИ (як звичайний показ);
+        //  В) original EndScene; Г) знімок кадру з чатом (поза сценою).
+        // Копію OBS обгорнемо в hooked_d9_stretchrect/getrtdata.
+        InterlockedExchange(&g_d9_wrapping, 1);   // наші StretchRect'и — не копія OBS
+        g_overlay9.hide_snapshot_clean(device);
+        InterlockedExchange(&g_d9_wrapping, 0);
+        g_overlay9.draw(device);                  // чат у сцену гри
+        HRESULT r = g_endscene_original(device);
+        InterlockedExchange(&g_d9_wrapping, 1);
+        g_overlay9.hide_snapshot_dirty(device);
+        InterlockedExchange(&g_d9_wrapping, 0);
+        return r;
+    }
+    if (draw) g_overlay9.draw(device);            // показ: чат у сцені гри
     return g_endscene_original(device);
+}
+
+// OBS копіює бекбуфер (джерело == бекбуфер) — обгортаємо: чистий → копія → з чатом.
+static bool d9_is_obs_copy(IDirect3DSurface9* src) {
+    return src && !g_d9_wrapping && g_overlay9.wants_hide()
+        && src == g_overlay9.obs_backbuffer();
+}
+
+HRESULT STDMETHODCALLTYPE hooked_d9_stretchrect(IDirect3DDevice9* dev,
+        IDirect3DSurface9* src, const RECT* sr, IDirect3DSurface9* dst,
+        const RECT* dr, D3DTEXTUREFILTERTYPE filter) {
+    if (d9_is_obs_copy(src)) {
+        InterlockedExchange(&g_d9_wrapping, 1);
+        g_overlay9.obs_copy_before(dev, src);
+        HRESULT r = g_d9_stretch_orig(dev, src, sr, dst, dr, filter);
+        g_overlay9.obs_copy_after(dev, src);
+        InterlockedExchange(&g_d9_wrapping, 0);
+        return r;
+    }
+    return g_d9_stretch_orig(dev, src, sr, dst, dr, filter);
+}
+
+HRESULT STDMETHODCALLTYPE hooked_d9_getrtdata(IDirect3DDevice9* dev,
+        IDirect3DSurface9* src, IDirect3DSurface9* dst) {
+    if (d9_is_obs_copy(src)) {
+        InterlockedExchange(&g_d9_wrapping, 1);
+        g_overlay9.obs_copy_before(dev, src);
+        HRESULT r = g_d9_getrtdata_orig(dev, src, dst);
+        g_overlay9.obs_copy_after(dev, src);
+        InterlockedExchange(&g_d9_wrapping, 0);
+        return r;
+    }
+    return g_d9_getrtdata_orig(dev, src, dst);
 }
 
 HRESULT STDMETHODCALLTYPE hooked_reset(IDirect3DDevice9* device, D3DPRESENT_PARAMETERS* pp) {
@@ -533,7 +596,14 @@ bool install_d3d9_hook() {
         g_endscene_original = g_endscene_hook.original<EndSceneFn>();
         if (g_reset_hook.install(vt[16], reinterpret_cast<void*>(&hooked_reset)))
             g_reset_original = g_reset_hook.original<ResetFn>();
-        log("overlay(dx9): EndScene перехоплено інлайн-хуком");
+        // Для приховування від OBS: StretchRect — індекс 34, GetRenderTargetData —
+        // 32. Пролог не піддався — не біда: цей шлях копії OBS не обгортається.
+        if (g_d9_stretch_hook.install(vt[34], reinterpret_cast<void*>(&hooked_d9_stretchrect)))
+            g_d9_stretch_orig = g_d9_stretch_hook.original<StretchRectFn>();
+        if (g_d9_getrtdata_hook.install(vt[32], reinterpret_cast<void*>(&hooked_d9_getrtdata)))
+            g_d9_getrtdata_orig = g_d9_getrtdata_hook.original<GetRTDataFn>();
+        log("overlay(dx9): EndScene перехоплено (приховування OBS: StretchRect=%s GetRTData=%s)",
+            g_d9_stretch_orig ? "так" : "ні", g_d9_getrtdata_orig ? "так" : "ні");
     }
 
     device->Release();
@@ -620,6 +690,8 @@ BOOL WINAPI DllMain(HINSTANCE inst, DWORD reason, LPVOID) {
     } else if (reason == DLL_PROCESS_DETACH) {
         g_present_hook.remove();
         g_exec_hook.remove();
+        g_d9_stretch_hook.remove();
+        g_d9_getrtdata_hook.remove();
         g_reset_hook.remove();
         g_endscene_hook.remove();
         g_wglswap_hook.remove();
