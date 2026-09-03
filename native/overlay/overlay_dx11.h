@@ -28,8 +28,12 @@ public:
     // копіює кадр не через чергу команд, а на immediate-контексті, тож окремого
     // шляху «після копії OBS» тут немає: малюємо при Present (after_obs_copy=false).
     // Приховування від OBS у DX11 наразі не гарантуємо — воно зроблене для DX12.
-    void draw(IDXGISwapChain* swap, bool obs_present = false, bool after_obs_copy = false) {
-        (void)obs_present;
+    // obs — чи OBS зараз захоплює (визначає режим приховування). Викликається з
+    // hooked_present. У режимі приховування знімаємо ЧИСТИЙ кадр, малюємо чат, і
+    // знімаємо кадр З ЧАТОМ — а копію OBS (у його Present-детурі) обгортаємо в
+    // hooked_d11_copyresource: чистий → копія OBS → назад із чатом.
+    void draw(IDXGISwapChain* swap, bool obs = false) {
+        hide_ = false;
         if (!reader_.ensure_open()) return;   // Python ще не запустив чат
         if (!ensure_device(swap)) return;
 
@@ -60,15 +64,28 @@ public:
         }
         if (!srv_ || tex_w_ == 0) return;
 
-        // DX11 малює лише при Present; окремого «після копії OBS» шляху немає.
-        if (after_obs_copy) return;
-
-        blit();
+        // Приховування від OBS (source-swap): ПЕРЕД чатом знімаємо ЧИСТИЙ кадр у
+        // clean_, тоді малюємо чат у бекбуфер (моник бачить чат). Коли OBS копіює
+        // бекбуфер, у хуку копії ми підміняємо ДЖЕРЕЛО на clean_ — OBS читає
+        // чисте, а бекбуфер із чатом лишається недоторканим (менше копій, без
+        // гонок). Fail-safe: знімки не готові — просто малюємо (чат буде і в OBS).
+        if ((last_.hide_from_obs != 0) && obs && ensure_snapshots()) {
+            hide_ = true;
+            snapshot_clean();   // CopyResource(clean_ <- бекбуфер) — чистий кадр
+            blit();             // чат у бекбуфер (моник бачить чат)
+        } else {
+            blit();
+        }
     }
+
+    bool wants_hide() const { return hide_; }
+    // Чистий знімок кадру — його віддаємо OBS замість бекбуфера (хук GetBuffer).
+    ID3D11Resource* clean_resource() const { return hide_ready_ ? clean_ : nullptr; }
 
     void release() {
         release_pipeline();
         release_texture();
+        release_snapshots();
         reader_.close();
     }
 
@@ -174,6 +191,27 @@ private:
             }
         }
 
+        // Зберігаємо стан контексту ГРИ, який зараз змінимо, і повертаємо його
+        // після себе. Без цього наші шейдери/blend/viewport/RTV лишаються в
+        // контексті й псують наступний кадр гри (пливуть текстури) — раніше це
+        // сходило з рук, бо ми часто малювали останніми, але покладатися на це
+        // не можна. Стандартний для оверлеїв прийом (так робить ImGui).
+        ID3D11RenderTargetView* o_rtv[D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT] = {};
+        ID3D11DepthStencilView* o_dsv = nullptr;
+        context_->OMGetRenderTargets(D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT, o_rtv, &o_dsv);
+        UINT o_nvp = D3D11_VIEWPORT_AND_SCISSORRECT_OBJECT_COUNT_PER_PIPELINE;
+        D3D11_VIEWPORT o_vp[D3D11_VIEWPORT_AND_SCISSORRECT_OBJECT_COUNT_PER_PIPELINE];
+        context_->RSGetViewports(&o_nvp, o_vp);
+        ID3D11VertexShader* o_vs = nullptr; context_->VSGetShader(&o_vs, nullptr, nullptr);
+        ID3D11PixelShader*  o_ps = nullptr; context_->PSGetShader(&o_ps, nullptr, nullptr);
+        ID3D11ShaderResourceView* o_srv = nullptr; context_->PSGetShaderResources(0, 1, &o_srv);
+        ID3D11SamplerState* o_samp = nullptr; context_->PSGetSamplers(0, 1, &o_samp);
+        ID3D11Buffer* o_cb = nullptr; context_->PSGetConstantBuffers(0, 1, &o_cb);
+        ID3D11InputLayout* o_il = nullptr; context_->IAGetInputLayout(&o_il);
+        D3D11_PRIMITIVE_TOPOLOGY o_topo; context_->IAGetPrimitiveTopology(&o_topo);
+        ID3D11BlendState* o_blend = nullptr; float o_bf[4] = {}; UINT o_mask = 0;
+        context_->OMGetBlendState(&o_blend, o_bf, &o_mask);
+
         float blend_factor[4] = {1, 1, 1, 1};
         context_->OMSetRenderTargets(1, &rtv, nullptr);
         context_->RSSetViewports(1, &vp);
@@ -186,6 +224,21 @@ private:
         context_->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLESTRIP);
         context_->OMSetBlendState(blend_, blend_factor, 0xffffffff);
         context_->Draw(4, 0);
+
+        // Повертаємо стан гри (у зворотному порядку) і звільняємо посилання, які
+        // додали Get*-виклики (кожен Get* робить AddRef).
+        context_->OMSetRenderTargets(D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT, o_rtv, o_dsv);
+        for (auto* r : o_rtv) if (r) r->Release();
+        if (o_dsv) o_dsv->Release();
+        context_->RSSetViewports(o_nvp, o_vp);
+        context_->VSSetShader(o_vs, nullptr, 0); if (o_vs) o_vs->Release();
+        context_->PSSetShader(o_ps, nullptr, 0); if (o_ps) o_ps->Release();
+        context_->PSSetShaderResources(0, 1, &o_srv); if (o_srv) o_srv->Release();
+        context_->PSSetSamplers(0, 1, &o_samp); if (o_samp) o_samp->Release();
+        context_->PSSetConstantBuffers(0, 1, &o_cb); if (o_cb) o_cb->Release();
+        context_->IASetInputLayout(o_il); if (o_il) o_il->Release();
+        context_->IASetPrimitiveTopology(o_topo);
+        context_->OMSetBlendState(o_blend, o_bf, o_mask); if (o_blend) o_blend->Release();
 
         rtv->Release();
     }
@@ -222,6 +275,40 @@ private:
         ready_ = false;
     }
 
+    // --- Приховування від OBS ---
+    // Дві текстури розміром із бекбуфер: clean_ (чистий кадр), dirty_ (з чатом).
+    // Копії робимо на immediate-контексті; наш власний CopyResource огорнутий
+    // g_d11_wrapping (у dllmain) — щоб хук копії OBS не сплутав його з копією OBS.
+    bool ensure_snapshots() {
+        ID3D11Texture2D* bb = nullptr;
+        if (FAILED(swap_get_back(&bb)) || !bb) return false;
+        D3D11_TEXTURE2D_DESC d; bb->GetDesc(&d); bb->Release();
+        if (hide_ready_ && d.Width == snap_w_ && d.Height == snap_h_) return true;
+        release_snapshots();
+        D3D11_TEXTURE2D_DESC td = d;    // той самий формат/розмір/MSAA, що бекбуфер
+        td.Usage = D3D11_USAGE_DEFAULT;
+        td.BindFlags = 0;               // лише ціль/джерело копіювання
+        td.CPUAccessFlags = 0;
+        td.MiscFlags = 0;
+        if (FAILED(device_->CreateTexture2D(&td, nullptr, &clean_))) {
+            release_snapshots(); return false;
+        }
+        snap_w_ = d.Width; snap_h_ = d.Height; hide_ready_ = true;
+        log("overlay(dx11): приховування від OBS готове (знімок %ux%u)", d.Width, d.Height);
+        return true;
+    }
+    void snapshot_clean() {
+        ID3D11Texture2D* bb = nullptr;
+        if (FAILED(swap_get_back(&bb)) || !bb) return;
+        context_->CopyResource(clean_, bb);   // clean_ <- поточний бекбуфер кадру
+        bb->Release();
+    }
+    void release_snapshots() {
+        if (clean_) { clean_->Release(); clean_ = nullptr; }
+        snap_w_ = snap_h_ = 0;
+        hide_ready_ = false;
+    }
+
     SharedFrameReader reader_;
     IDXGISwapChain* swap_ = nullptr;
 
@@ -242,6 +329,12 @@ private:
     bool ready_ = false;
     bool logged_ = false;
     bool pid_warned_ = false;
+
+    // Приховування від OBS (source-swap): чистий знімок кадру.
+    ID3D11Texture2D* clean_ = nullptr;
+    uint32_t snap_w_ = 0, snap_h_ = 0;
+    bool hide_ = false;
+    bool hide_ready_ = false;
 };
 
 }  // namespace hominka

@@ -43,7 +43,21 @@ namespace {
 typedef HRESULT (STDMETHODCALLTYPE *PresentFn)(IDXGISwapChain*, UINT, UINT);
 
 hominka::VtableHook g_present_hook;
+hominka::InlineHook g_present_inline;   // альтернатива vtable-хуку: коли тіло вже
+                                        // під чужим inline-хуком (OBS/Steam), стаємо
+                                        // ланкою inline-ланцюга, не чіпаючи vtable
 PresentFn g_present_original = nullptr;
+// «Чистий flip» — шлях у справжній показ кадру В ОБХІД чужого inline-хука тіла
+// Present (Steam-оверлей патчить перший байт тіла на E9 → свій детур). Будуємо
+// його з непропатчених байтів dxgi.dll на диску; кличемо лише на реентрантному
+// вході, коли Steam зсередини свого детура знову викликає swap->Present(), — так
+// рветься нескінченна рекурсія Steam↔ми (див. build_clean_flip і hooked_present).
+PresentFn g_clean_flip = nullptr;
+// Захист від реентрантної рекурсії Present. ГЛОБАЛЬНИЙ атомік, а не thread_local:
+// у інжектнутій mingw-DLL thread_local для потоків гри, що виникли ДО інжекту (а
+// саме на потоці рендера все й крутиться), не ініціалізований і завжди читає 0 —
+// тобто thread_local-вартовий мертвий. Атомік працює завжди й для всіх потоків.
+volatile LONG g_present_busy = 0;
 hominka::OverlayDX11 g_overlay;
 volatile LONG g_frames = 0;
 volatile LONG g_api = 0;   // 0 невідомо, 1 DX12, 2 DX11
@@ -64,6 +78,19 @@ typedef void (STDMETHODCALLTYPE *ExecFn)(ID3D12CommandQueue*, UINT, ID3D12Comman
 hominka::VtableHook g_exec_hook;
 ExecFn g_exec_original = nullptr;
 hominka::OverlayDX12 g_overlay12;
+
+// --- DX11: приховування від OBS через хук GetBuffer ---
+// OBS Game Capture у СВОЄМУ Present-детурі щокадру бере бекбуфер через
+// swap->GetBuffer(0) і копіює його. Тож замість перехоплювати саму копію на
+// гарячому immediate-контексті (тисячі викликів рендеру → просадка FPS), ми
+// хукаємо GetBuffer на спільній DXGI-vtable: коли бекбуфер просять УСЕРЕДИНІ
+// Present у режимі приховування (це OBS), віддаємо ЧИСТИЙ знімок кадру замість
+// справжнього бекбуфера — OBS зніме без чату, а на моніторі лишиться бекбуфер із
+// чатом. 0 хуків на копію, ~1 підміна за кадр. Наші/ігрові GetBuffer (поза
+// Present) не чіпаємо — гра рендерить у справжній бекбуфер.
+typedef HRESULT (STDMETHODCALLTYPE *GetBufferFn)(IDXGISwapChain*, UINT, REFIID, void**);
+hominka::VtableHook g_getbuffer_hook;
+GetBufferFn g_getbuffer_orig = nullptr;
 
 // --- DX9 ---
 typedef HRESULT (STDMETHODCALLTYPE *EndSceneFn)(IDirect3DDevice9*);
@@ -210,17 +237,38 @@ static void dxgi_present(IDXGISwapChain* swap) {
         g_overlay12.present_draw(swap, obs);
     } else {
         g_overlay.set_swap(swap);
-        g_overlay.draw(swap, obs, false);
+        // Знімок чистого кадру + чат у бекбуфер (g_in_present ще 0, тож наш власний
+        // GetBuffer у знімку/малюванні отримує СПРАВЖНІЙ бекбуфер). Підміну для
+        // OBS робить хук GetBuffer уже в межах Present (g_in_present=1).
+        g_overlay.draw(swap, obs);
     }
 }
 
 HRESULT STDMETHODCALLTYPE hooked_present(IDXGISwapChain* swap, UINT interval, UINT flags) {
+    // Реентрантний вхід: ми вже в цьому виклику Present (глобальний прапорець уже
+    // піднято). Так буває з чужими оверлеями (Steam), які ЗСЕРЕДИНИ свого детура
+    // знову кличуть swap->Present() і повертають керування сюди. Якщо тут знову
+    // піти в g_present_original (тіло → E9 → Steam), утвориться нескінченна
+    // рекурсія і STACK_OVERFLOW. Тому показуємо кадр обхідним трампліном у
+    // справжній dxgi (повз чужий детур) і виходимо — ланцюг стає скінченним.
+    if (InterlockedCompareExchange(&g_present_busy, 1, 0) != 0) {
+        static LONG once = 0;
+        if (InterlockedCompareExchange(&once, 1, 0) == 0)
+            log("overlay: РЕЕНТРАНТ Present спіймано — обхід через %s",
+                g_clean_flip ? "clean_flip" : "g_present_original");
+        return g_clean_flip ? g_clean_flip(swap, interval, flags)
+                            : g_present_original(swap, interval, flags);
+    }
+
     LONG n = InterlockedIncrement(&g_frames);
     if (n == 1) log("overlay: перший перехоплений Present — кадр наш");
     else if ((n % 600) == 0) log("overlay: кадрів перехоплено %ld", n);
 
     // DXGI_PRESENT_TEST — гра лише перевіряє можливість показу; нічого не робимо.
-    if (flags & DXGI_PRESENT_TEST) return g_present_original(swap, interval, flags);
+    if (flags & DXGI_PRESENT_TEST) {
+        InterlockedExchange(&g_present_busy, 0);
+        return g_present_original(swap, interval, flags);
+    }
 
     g_last_swap = swap;
     // Малюємо чат при КОЖНОМУ Present (моник завжди з чатом). У режимі приховування
@@ -231,8 +279,12 @@ HRESULT STDMETHODCALLTYPE hooked_present(IDXGISwapChain* swap, UINT interval, UI
     // → ExecuteCommandLists на черзі гри) — позначаємо вікно для hooked_execute.
     g_obs_drew_this_present = false;
     InterlockedExchange(&g_in_present, 1);
+    // Звичайний показ: кличемо оригінал (у грі зі Steam-оверлеєм це його детур —
+    // хай малює свій оверлей). Якщо Steam зсередини знову покличе Present, його
+    // спіймає реентрантний вартовий вище й покаже кадр обхідним flip — без петлі.
     HRESULT r = g_present_original(swap, interval, flags);
     InterlockedExchange(&g_in_present, 0);
+    InterlockedExchange(&g_present_busy, 0);
     return r;
 }
 
@@ -285,6 +337,41 @@ bool install_d3d12_queue_hook() {
     }
     dev->Release();
     return ok;
+}
+
+// Хук GetBuffer на спільній DXGI-vtable. Коли бекбуфер (індекс 0) просять
+// УСЕРЕДИНІ Present у режимі приховування — це OBS у своєму детурі бере кадр для
+// копії; віддаємо йому ЧИСТИЙ знімок замість справжнього бекбуфера. Поза Present
+// (рендер гри, наші знімок/малювання) — віддаємо справжній бекбуфер, тож гра
+// малює куди слід, а на моніторі лишається чат.
+HRESULT STDMETHODCALLTYPE hooked_getbuffer(IDXGISwapChain* swap, UINT idx,
+        REFIID riid, void** out) {
+    if (idx == 0 && g_in_present && g_overlay.wants_hide() && out) {
+        ID3D11Resource* clean = g_overlay.clean_resource();
+        // Віддаємо чисту текстуру в ТОМУ інтерфейсі, який просить OBS (він бере
+        // бекбуфер як IDXGIResource через IID_PPV_ARGS, не як ID3D11Texture2D).
+        // QueryInterface сам робить AddRef — OBS зробить Release після копії.
+        if (clean && SUCCEEDED(clean->QueryInterface(riid, out))) {
+            static LONG w = 0;
+            LONG c = InterlockedIncrement(&w);
+            if (c == 1 || (c % 600) == 0)
+                log("overlay(dx11): бекбуфер підмінено для OBS, разів=%ld", c);
+            return S_OK;
+        }
+    }
+    return g_getbuffer_orig(swap, idx, riid, out);
+}
+
+// GetBuffer — індекс 9 у спільній vtable IDXGISwapChain (Present=8). Ставимо через
+// пробний свопчейн: vtable у DXGI спільна на процес, тож підміна діє й для гри.
+bool install_getbuffer_hook(IDXGISwapChain* probe) {
+    if (g_getbuffer_hook.installed()) return true;
+    if (g_getbuffer_hook.install(probe, 9, reinterpret_cast<void*>(&hooked_getbuffer))) {
+        g_getbuffer_orig = g_getbuffer_hook.original<GetBufferFn>();
+        log("overlay(dx11): GetBuffer перехоплено (для приховування від OBS)");
+        return true;
+    }
+    return false;
 }
 
 // Створює тимчасовий свопчейн на прихованому вікні. Через нього ми дістаємося
@@ -364,6 +451,39 @@ static const wchar_t* module_of(void* addr) {
     return L"(поза модулями)";
 }
 
+// Логгер краху: не глушить виняток (повертає CONTINUE_SEARCH — гра падає як
+// падала), а лише пише в лог точну адресу фолту, її модуль і скільки кадрів ми
+// вже намалювали. Так у ОДНОМУ повторі краху видно, ДЕ саме валиться: у dxgi, у
+// Steam-оверлеї (gameoverlayrenderer64), у нас чи це переповнення стека
+// (STACK_OVERFLOW = таки нескінченна рекурсія).
+static LONG CALLBACK crash_logger(EXCEPTION_POINTERS* ep) {
+    DWORD code = ep->ExceptionRecord->ExceptionCode;
+    if (code == EXCEPTION_ACCESS_VIOLATION || code == EXCEPTION_ILLEGAL_INSTRUCTION ||
+        code == EXCEPTION_PRIV_INSTRUCTION || code == EXCEPTION_STACK_OVERFLOW ||
+        code == EXCEPTION_IN_PAGE_ERROR) {
+        void* addr = ep->ExceptionRecord->ExceptionAddress;
+        log("overlay(КРАШ): code=0x%08lx addr=%p модуль=%ls кадрів=%ld in_present=%ld busy=%ld",
+            (unsigned long)code, addr, module_of(addr),
+            g_frames, g_in_present, g_present_busy);
+        // Стек виклику в момент краху — показує повторюваний цикл рекурсії
+        // (які функції/модулі чергуються). Знімаємо раз, щоб не залити лог.
+        static LONG once_bt = 0;
+        if (InterlockedCompareExchange(&once_bt, 1, 0) == 0) {
+            void* bt[30];
+            USHORT k = RtlCaptureStackBackTrace(0, 30, bt, nullptr);
+            for (USHORT i = 0; i < k; ++i)
+                log("overlay(КРАШ-стек) #%02u %p %ls", i, bt[i], module_of(bt[i]));
+        }
+        if (code == EXCEPTION_ACCESS_VIOLATION &&
+            ep->ExceptionRecord->NumberParameters >= 2) {
+            log("overlay(КРАШ): AV %s за адресою %p",
+                ep->ExceptionRecord->ExceptionInformation[0] ? "запис" : "читання",
+                (void*)ep->ExceptionRecord->ExceptionInformation[1]);
+        }
+    }
+    return EXCEPTION_CONTINUE_SEARCH;
+}
+
 // Діагностика: як ПРЯМО ЗАРАЗ перехоплено Present (можливо, іншим оверлеєм —
 // OBS). Нічого не змінює — лише пише в лог. За цим ми точно дізнаємось спосіб
 // хука конкретної версії OBS: чи це підміна покажчика у vtable[8], чи інлайн-
@@ -393,6 +513,110 @@ static void diagnose_present(IDXGISwapChain* swap) {
     }
 }
 
+// Виділяє блок ПОРУЧ із target (±2 ГБ), щоб перерахований RIP-операдний зсув у
+// скопійованому пролозі дотягнувся до своєї цілі (на x64 disp32 обмежений ±2 ГБ).
+static uint8_t* alloc_near_body(uint8_t* target) {
+    const uint64_t GB2 = 0x60000000ULL;
+    const uint64_t step = 0x10000ULL;
+    uint64_t base = (uint64_t)target;
+    for (uint64_t off = step; off < GB2; off += step) {
+        for (int dir = 0; dir < 2; ++dir) {
+            uint64_t addr = dir ? base + off : base - off;
+            void* p = VirtualAlloc((void*)(addr & ~(step - 1)), 64,
+                                   MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE);
+            if (p) return (uint8_t*)p;
+        }
+    }
+    return nullptr;
+}
+
+// Будує «чистий flip» — трамплін у справжній показ кадру В ОБХІД чужого inline-
+// хука тіла Present. Чужий хук (Steam-оверлей) затирає перші байти тіла 5-байтним
+// E9 на свій детур; оригінальні байти в памʼяті вже втрачені, але у ФАЙЛІ
+// dxgi.dll на диску вони цілі. Читаємо пролог із файлу, копіюємо ЦІЛІ інструкції,
+// поки не накриємо 5 байтів (та сама межа, куди чужий хук поклав свій E9), і
+// будуємо [оригінальний пролог][далекий стрибок на тіло+N] — точну копію
+// трампліна, який тримає для себе сам чужий хук. Виклик цього трампліна показує
+// кадр, не заходячи в чужий детур, тож рекурсія Steam↔ми не виникає.
+static PresentFn build_clean_flip(uint8_t* body) {
+    HMODULE dxgi = GetModuleHandleW(L"dxgi.dll");
+    if (!dxgi) return nullptr;
+    uint64_t rva = (uint64_t)body - (uint64_t)dxgi;
+
+    wchar_t path[MAX_PATH];
+    if (!GetModuleFileNameW(dxgi, path, MAX_PATH)) return nullptr;
+    HANDLE fh = CreateFileW(path, GENERIC_READ, FILE_SHARE_READ, nullptr,
+                            OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (fh == INVALID_HANDLE_VALUE) return nullptr;
+    HANDLE mp = CreateFileMappingW(fh, nullptr, PAGE_READONLY, 0, 0, nullptr);
+    if (!mp) { CloseHandle(fh); return nullptr; }
+    uint8_t* file = reinterpret_cast<uint8_t*>(MapViewOfFile(mp, FILE_MAP_READ, 0, 0, 0));
+    PresentFn result = nullptr;
+
+    if (file) {
+        auto* dos = reinterpret_cast<IMAGE_DOS_HEADER*>(file);
+        if (dos->e_magic == IMAGE_DOS_SIGNATURE) {
+            auto* nt = reinterpret_cast<IMAGE_NT_HEADERS*>(file + dos->e_lfanew);
+            if (nt->Signature == IMAGE_NT_SIGNATURE) {
+                // RVA → файловий зсув через таблицю секцій.
+                IMAGE_SECTION_HEADER* sec = IMAGE_FIRST_SECTION(nt);
+                uint32_t foff = 0;
+                for (int i = 0; i < nt->FileHeader.NumberOfSections; ++i) {
+                    uint32_t va = sec[i].VirtualAddress;
+                    uint32_t vsz = sec[i].Misc.VirtualSize;
+                    if (rva >= va && rva < va + vsz) {
+                        foff = sec[i].PointerToRawData + (uint32_t)(rva - va);
+                        break;
+                    }
+                }
+                if (foff) {
+                    const uint8_t* clean = file + foff;
+                    int copied = 0, rip_at[8], rip_n = 0;
+                    bool ok = true;
+                    while (copied < 5) {
+                        int off = -1;
+                        int n = hominka::insn_len(clean + copied, &off);
+                        if (n <= 0) { ok = false; break; }
+                        if (off >= 0 && rip_n < 8) rip_at[rip_n++] = copied + off;
+                        copied += n;
+                    }
+                    if (ok && copied <= 24) {
+                        uint8_t* stub = alloc_near_body(body);
+                        if (stub) {
+                            memcpy(stub, clean, copied);
+                            // Перерахунок RIP-відносних disp32: пролог тепер не за
+                            // адресою body, а в stub — зсуваємо на різницю.
+                            int64_t delta = (int64_t)body - (int64_t)stub;
+                            bool reloc_ok = true;
+                            for (int j = 0; j < rip_n; ++j) {
+                                int32_t* d = reinterpret_cast<int32_t*>(stub + rip_at[j]);
+                                int64_t nd = (int64_t)*d + delta;
+                                if (nd < INT32_MIN || nd > INT32_MAX) { reloc_ok = false; break; }
+                                *d = (int32_t)nd;
+                            }
+                            if (reloc_ok) {
+                                // Далекий абсолютний стрибок на тіло+copied (за чужим хуком).
+                                stub[copied] = 0xFF; stub[copied + 1] = 0x25;
+                                *reinterpret_cast<uint32_t*>(stub + copied + 2) = 0;
+                                *reinterpret_cast<uint64_t*>(stub + copied + 6) =
+                                    reinterpret_cast<uint64_t>(body + copied);
+                                FlushInstructionCache(GetCurrentProcess(), stub, copied + 14);
+                                result = reinterpret_cast<PresentFn>(stub);
+                            } else {
+                                VirtualFree(stub, 0, MEM_RELEASE);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        UnmapViewOfFile(file);
+    }
+    CloseHandle(mp);
+    CloseHandle(fh);
+    return result;
+}
+
 bool install_present_hook() {
     HWND hwnd = nullptr;
     IDXGISwapChain* swap = make_probe_swapchain(&hwnd, L"HominkaHookProbe");
@@ -401,15 +625,45 @@ bool install_present_hook() {
     // ПЕРЕД тим як щось чіпати — знімок того, як Present перехоплено зараз.
     diagnose_present(swap);
 
-    bool ok = g_present_hook.install(swap, 8, reinterpret_cast<void*>(&hooked_present));
-    if (ok) {
-        g_present_original = g_present_hook.original<PresentFn>();
-        log("overlay: адресу Present підмінено у спільній vtable");
-        // Приховування від OBS у DX12 більше НЕ спирається на інлайн-хук тіла
-        // Present (у DX12 порядок хуків Present ненадійний). Замість цього чат
-        // кладеться після копії OBS через хук ExecuteCommandLists — див.
-        // hooked_execute та overlay_dx12.h.
+    bool ok = false;
+    {
+        void** vt = *reinterpret_cast<void***>(swap);
+        uint8_t* body = reinterpret_cast<uint8_t*>(vt[8]);
+        if (body && body[0] == 0xE9) {
+            // Тіло Present уже під чужим inline-хуком (OBS graphics-hook і/або
+            // Steam-оверлей). НЕ чіпаємо vtable: якби ми підмінили vtable[8] на
+            // себе, то swap->Present() інших оверлеїв резолвився б у нас, і Steam
+            // ішов би в нескінченну рекурсію (краш), а зняття чужого хука ламає
+            // захоплення OBS. Замість цього стаємо ЛАНКОЮ inline-ланцюга просто на
+            // тілі: гра→тіло→[ми→наступний детур→…]→dxgi. vtable лишається = тіло,
+            // тож чужі swap->Present() йдуть звичним ЛІНІЙНИМ ланцюгом — без
+            // рекурсії, а оверлей Steam і захоплення OBS лишаються робочими.
+            g_clean_flip = build_clean_flip(body);   // страховка для реентранту
+            if (g_present_inline.install(body, reinterpret_cast<void*>(&hooked_present))) {
+                g_present_original = g_present_inline.original<PresentFn>();
+                ok = true;
+                log("overlay: тіло Present під чужим хуком — стаю ланкою inline-"
+                    "ланцюга, vtable не чіпаю (обхідний flip %s)",
+                    g_clean_flip ? "є" : "нема");
+            } else {
+                log("overlay: inline-хук тіла Present не вдався — відкат на vtable");
+            }
+        }
     }
+    if (!ok) {
+        ok = g_present_hook.install(swap, 8, reinterpret_cast<void*>(&hooked_present));
+        if (ok) {
+            g_present_original = g_present_hook.original<PresentFn>();
+            log("overlay: адресу Present підмінено у спільній vtable");
+            // Приховування від OBS у DX12 більше НЕ спирається на інлайн-хук тіла
+            // Present (у DX12 порядок хуків Present ненадійний). Замість цього чат
+            // кладеться після копії OBS через хук ExecuteCommandLists — див.
+            // hooked_execute та overlay_dx12.h.
+        }
+    }
+
+    // Хук GetBuffer на тій самій спільній DXGI-vtable — для приховування від OBS.
+    install_getbuffer_hook(swap);
 
     // Обʼєкт більше не потрібен: підміна лишилася в памʼяті vtable, спільної для
     // всього процесу.
@@ -620,6 +874,9 @@ static bool obs_capture_present() {
 }
 
 DWORD WINAPI init_thread(LPVOID) {
+    // Логгер краху ставимо ПЕРШИМ — щоб зловити навіть падіння під час установки
+    // хуків. Він лише пише в лог і пропускає виняток далі.
+    AddVectoredExceptionHandler(1, crash_logger);
     log("overlay: старт, шукаю, як гра показує кадр (DX9/DX11/DX12)");
     if (obs_capture_present())
         log("overlay: помічено graphics-hook OBS — захоплення через Present активне");
@@ -637,6 +894,9 @@ DWORD WINAPI init_thread(LPVOID) {
         bool gl_mod = GetModuleHandleW(L"opengl32.dll") != nullptr;
         bool vk_mod = GetModuleHandleW(L"vulkan-1.dll") != nullptr;
         if (!dxgi && dxgi_mod) {
+            // install_present_hook сам знешкодить графічний хук Steam на тілі
+            // Present (якщо є), перш ніж ставити свій, — інакше детур Steam-оверлея
+            // на DX11 йде в нескінченну рекурсію й гра падає.
             dxgi = install_present_hook();                     // DX11 та DX12
             // Для DX12 ще й перехоплюємо чергу команд (одноразово).
             if (dxgi && GetModuleHandleW(L"d3d12.dll")) install_d3d12_queue_hook();
@@ -689,6 +949,8 @@ BOOL WINAPI DllMain(HINSTANCE inst, DWORD reason, LPVOID) {
         if (t) CloseHandle(t);
     } else if (reason == DLL_PROCESS_DETACH) {
         g_present_hook.remove();
+        g_present_inline.remove();
+        g_getbuffer_hook.remove();
         g_exec_hook.remove();
         g_d9_stretch_hook.remove();
         g_d9_getrtdata_hook.remove();
