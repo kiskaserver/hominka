@@ -1007,7 +1007,7 @@ extern "C" __declspec(dllexport) const char* HominkaOverlayMarker() {
     return "HOMINKA-OVERLAY-D7A1F3E9-b2c4-4a6e-9f10-chat-in-game";
 }
 
-BOOL WINAPI DllMain(HINSTANCE inst, DWORD reason, LPVOID) {
+BOOL WINAPI DllMain(HINSTANCE inst, DWORD reason, LPVOID reserved) {
     if (reason == DLL_PROCESS_ATTACH) {
         DisableThreadLibraryCalls(inst);
         // У DllMain майже нічого робити не можна (loader lock), тому вся робота
@@ -1015,6 +1015,14 @@ BOOL WINAPI DllMain(HINSTANCE inst, DWORD reason, LPVOID) {
         HANDLE t = CreateThread(NULL, 0, init_thread, NULL, 0, NULL);
         if (t) CloseHandle(t);
     } else if (reason == DLL_PROCESS_DETACH) {
+        // reserved != NULL → процес ЗАВЕРШУЄТЬСЯ: Windows уже зупинила всі інші
+        // потоки, а частину модулів (GL-драйвер, dxgi.dll, наші near-острівці)
+        // могла вже вивантажити. Знімати інлайн-хуки означало б ПИСАТИ байти назад
+        // у ЧУЖИЙ код, якого вже може не бути в памʼяті — саме це й давало рідкісний
+        // AV-краш на виході з гри. При завершенні процесу нічого не прибираємо: ОС
+        // поверне все сама. Чистимо лише при справжньому FreeLibrary (reserved==NULL),
+        // коли гра ще жива й хуки треба зняти акуратно.
+        if (reserved) return TRUE;
         g_present_hook.remove();
         g_present_inline.remove();
         g_getbuffer_hook.remove();

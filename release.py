@@ -145,6 +145,22 @@ def build_native() -> str:
     return out
 
 
+def build_splash(version: str, channel: str):
+    """Перемальовує splash.png із версією-каналом (напр. «2.7.0-beta») у куті.
+
+    Заставку видно ВЕСЬ час розпаковування, тож людина одразу бачить, що саме
+    запускається — зручно, коли поруч стоять стабільна й бета. Не критично:
+    якщо перемалювати не вдалось (немає Pillow тощо), лишаємо стару splash.png і
+    йдемо далі — випуск через це зривати не варто."""
+    py = os.path.join(HERE, ".venv", "Scripts", "python.exe")
+    if not os.path.isfile(py):
+        py = sys.executable
+    try:
+        run([py, "make_splash.py", version, channel], cwd=HERE)
+    except SystemExit:
+        print("УВАГА: не вдалося перемалювати splash.png — беру наявну")
+
+
 def build_exe():
     """PyInstaller за Hominka_one.spec — збірка ОДНИМ файлом.
 
@@ -331,6 +347,7 @@ def main():
         if not linux_zip and not args.no_linux:
             linux_zip = build_linux(args.version)
         if not args.no_build:
+            build_splash(args.version, args.channel)   # версія-канал на заставці
             build_exe()
         # Інжектор («чат у грі») тепер їде в УСІ канали — це повноцінна
         # можливість, вимкнена за замовчуванням і з попередженням. Збираємо його

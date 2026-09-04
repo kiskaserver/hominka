@@ -5,10 +5,13 @@
 запускається»; під нею bootloader сам пише, що саме зараз розпаковує, а перед
 самою появою вікна текст міняємо на свій.
 
-Запуск: python make_splash.py
+Запуск: python make_splash.py [версія] [канал]
+    напр. python make_splash.py 2.7.0 beta  →  на заставці «2.7.0-beta»
+Без аргументів версію бере з hominka/version.py, канал не показує.
 """
 
 import os
+import sys
 
 from PIL import Image, ImageDraw, ImageFilter, ImageFont
 
@@ -43,7 +46,7 @@ def rounded(size, radius, fill):
     return img
 
 
-def build() -> Image.Image:
+def build(badge: str = "") -> Image.Image:
     w, h = W * SCALE, H * SCALE
     img = Image.new("RGBA", (w, h), (0, 0, 0, 0))
     draw = ImageDraw.Draw(img)
@@ -98,10 +101,29 @@ def build() -> Image.Image:
         radius=4 * SCALE, fill=(255, 255, 255, 28))
     img.alpha_composite(track)
 
+    # Версія-канал у правому нижньому куті картки. Видно ввесь час, поки збірка
+    # розпаковується, тож людина одразу бачить, ЩО саме запускається (напр.
+    # «2.7.0-beta») — зручно, коли поруч живуть стабільна й бета.
+    if badge:
+        draw.text(((W - 54) * SCALE, 300 * SCALE), badge,
+                  font=font("segoeui.ttf", 20 * SCALE),
+                  fill=(150, 140, 170), anchor="rs")
+
     return img.resize((W, H), Image.LANCZOS)
 
 
+def _default_version() -> str:
+    try:
+        from hominka.version import APP_VERSION
+        return APP_VERSION
+    except Exception:
+        return ""
+
+
 if __name__ == "__main__":
+    version = sys.argv[1] if len(sys.argv) > 1 else _default_version()
+    channel = sys.argv[2] if len(sys.argv) > 2 else ""
+    badge = ("%s-%s" % (version, channel)) if (version and channel) else version
     out = os.path.join(os.path.dirname(os.path.abspath(__file__)), "splash.png")
-    build().save(out)
-    print("готово:", out)
+    build(badge).save(out)
+    print("готово:", out, "(%s)" % (badge or "без версії"))
