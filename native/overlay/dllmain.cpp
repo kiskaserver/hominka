@@ -122,6 +122,20 @@ hominka::OverlayGL g_overlaygl;
 volatile LONG g_gl_frames = 0;
 volatile LONG g_dx9_frames = 0;
 
+// Приховування від OBS у OpenGL: OBS у своєму хуку wglSwapBuffers копіює екран
+// через glBlitFramebuffer(read=FBO 0 → своя текстура) ПЕРЕД справжнім показом.
+// Ми теж інлайн-хукаємо реальну glBlitFramebuffer у драйвері: коли ми всередині
+// ланцюга swap і треба ховати, підмінюємо джерело читання з екрана (0) на наш
+// cleanFBO (чистий кадр, знятий ДО малювання чату). OBS забирає кадр без чату,
+// на моніторі лишається чат. Порядок хуків swap між нами й OBS неважливий:
+// якщо OBS зовні — він копіює до нашого малювання (уже чисто); якщо ми зовні —
+// його копія летить усередині нашого g_in_swap і ми її підмінюємо.
+volatile LONG g_in_swap = 0;
+typedef void (APIENTRY *BlitFbFn)(GLint, GLint, GLint, GLint, GLint, GLint,
+                                  GLint, GLint, GLbitfield, GLenum);
+hominka::InlineHook g_glblit_hook;
+BlitFbFn g_glblit_original = nullptr;
+
 // --- Vulkan ---
 // Чіпляємось до плоских експортів vulkan-1.dll (завантажувач Vulkan проксіює
 // їх для всього процесу). Інлайн-хук уже безпечний (заморозка потоків).
@@ -740,11 +754,52 @@ HRESULT STDMETHODCALLTYPE hooked_reset(IDirect3DDevice9* device, D3DPRESENT_PARA
 }
 
 // --- OpenGL ---
+// Хук реальної glBlitFramebuffer. Коли ми всередині swap і ховаємо чат, а OBS
+// читає з дефолтного фреймбуфера (0) — підмінюємо джерело на cleanFBO, тож OBS
+// копіює чистий кадр. Свій знімок (recording) не чіпаємо. Поза swap і поза
+// приховуванням — прозорий прохід, гра/гра-блити не зачеплені.
+void APIENTRY hooked_glblitframebuffer(GLint sx0, GLint sy0, GLint sx1, GLint sy1,
+        GLint dx0, GLint dy0, GLint dx1, GLint dy1, GLbitfield mask, GLenum filter) {
+    if (g_in_swap && !g_overlaygl.recording_snapshot() && g_overlaygl.hiding()) {
+        GLuint clean = g_overlaygl.clean_fbo();
+        if (clean && g_overlaygl.current_read_fbo() == 0) {
+            g_overlaygl.bind_read_fbo(clean);
+            g_glblit_original(sx0, sy0, sx1, sy1, dx0, dy0, dx1, dy1, mask, filter);
+            g_overlaygl.bind_read_fbo(0);
+            static LONG w = 0; LONG c = InterlockedIncrement(&w);
+            if (c == 1 || (c % 600) == 0)
+                log("overlay(gl): кадр OBS підмінено на чистий, разів=%ld", c);
+            return;
+        }
+    }
+    g_glblit_original(sx0, sy0, sx1, sy1, dx0, dy0, dx1, dy1, mask, filter);
+}
+
+// Ставимо хук на glBlitFramebuffer ліниво: її адресу дає wglGetProcAddress лише
+// коли активний контекст (тобто вже в swap). Один раз на процес.
+void ensure_glblit_hook() {
+    if (g_glblit_hook.installed()) return;
+    void* addr = g_overlaygl.blitframebuffer_proc();
+    if (!addr) return;   // драйвер без FBO-blit — приховування просто не працює
+    if (g_glblit_hook.install(addr, reinterpret_cast<void*>(&hooked_glblitframebuffer))) {
+        g_glblit_original = g_glblit_hook.original<BlitFbFn>();
+        log("overlay(gl): glBlitFramebuffer перехоплено (для приховування від OBS)");
+    } else {
+        log("overlay(gl): glBlitFramebuffer НЕ перехоплено");
+    }
+}
+
 BOOL WINAPI hooked_wglswap(HDC hdc) {
     LONG n = InterlockedIncrement(&g_gl_frames);
     if (n == 1) log("overlay(gl): перший перехоплений wglSwapBuffers — кадр наш");
     g_overlaygl.draw();
-    return g_wglswap_original(hdc);
+    ensure_glblit_hook();   // контекст активний — тепер адреса blit відома
+    // g_in_swap огортає лише виклик вниз по ланцюгу (там копіює OBS, якщо ми
+    // зовнішні): наш власний знімок/малювання вже позаду й не підміняться.
+    InterlockedExchange(&g_in_swap, 1);
+    BOOL r = g_wglswap_original(hdc);
+    InterlockedExchange(&g_in_swap, 0);
+    return r;
 }
 
 // wglSwapBuffers — плоский експорт opengl32.dll (не COM), тож інлайн-хук.
@@ -969,6 +1024,7 @@ BOOL WINAPI DllMain(HINSTANCE inst, DWORD reason, LPVOID) {
         g_reset_hook.remove();
         g_endscene_hook.remove();
         g_wglswap_hook.remove();
+        g_glblit_hook.remove();
         g_vk_gipa_hook.remove();
         g_vk_gdpa_hook.remove();
         g_vk_present_hook.remove();

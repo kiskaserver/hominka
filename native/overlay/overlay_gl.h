@@ -38,7 +38,104 @@
 #define GL_TEXTURE0 0x84C0
 #endif
 
+// --- сучасний GL (шейдери, VAO, FBO) — для core-профілю та приховування ------
+#ifndef GL_FRAGMENT_SHADER
+#define GL_FRAGMENT_SHADER 0x8B30
+#endif
+#ifndef GL_VERTEX_SHADER
+#define GL_VERTEX_SHADER 0x8B31
+#endif
+#ifndef GL_COMPILE_STATUS
+#define GL_COMPILE_STATUS 0x8B81
+#endif
+#ifndef GL_LINK_STATUS
+#define GL_LINK_STATUS 0x8B82
+#endif
+#ifndef GL_ARRAY_BUFFER
+#define GL_ARRAY_BUFFER 0x8892
+#endif
+#ifndef GL_ARRAY_BUFFER_BINDING
+#define GL_ARRAY_BUFFER_BINDING 0x8894
+#endif
+#ifndef GL_STREAM_DRAW
+#define GL_STREAM_DRAW 0x88E0
+#endif
+#ifndef GL_RGBA8
+#define GL_RGBA8 0x8058
+#endif
+#ifndef GL_READ_FRAMEBUFFER
+#define GL_READ_FRAMEBUFFER 0x8CA8
+#endif
+#ifndef GL_DRAW_FRAMEBUFFER
+#define GL_DRAW_FRAMEBUFFER 0x8CA9
+#endif
+#ifndef GL_FRAMEBUFFER
+#define GL_FRAMEBUFFER 0x8D40
+#endif
+#ifndef GL_COLOR_ATTACHMENT0
+#define GL_COLOR_ATTACHMENT0 0x8CE0
+#endif
+#ifndef GL_READ_FRAMEBUFFER_BINDING
+#define GL_READ_FRAMEBUFFER_BINDING 0x8CAA
+#endif
+#ifndef GL_DRAW_FRAMEBUFFER_BINDING
+#define GL_DRAW_FRAMEBUFFER_BINDING 0x8CA6
+#endif
+#ifndef GL_TEXTURE_BINDING_2D
+#define GL_TEXTURE_BINDING_2D 0x8069
+#endif
+
+#ifndef GLchar
+typedef char GLchar;
+#endif
+#ifndef HM_GL_PTR_TYPES
+#define HM_GL_PTR_TYPES
+typedef ptrdiff_t hm_GLsizeiptr;
+#endif
+
 namespace hominka {
+
+// Вказівники на сучасні GL-функції (їх немає в opengl32.dll — беруться через
+// wglGetProcAddress). Один набір на процес; вантажимо ліниво, коли активний
+// контекст. Використовується і для малювання в core-профілі, і для FBO-знімка
+// чистого кадру (приховування від OBS).
+struct GL3 {
+    // шейдери / програма
+    GLuint (APIENTRY *CreateShader)(GLenum) = nullptr;
+    void   (APIENTRY *ShaderSource)(GLuint, GLsizei, const GLchar* const*, const GLint*) = nullptr;
+    void   (APIENTRY *CompileShader)(GLuint) = nullptr;
+    void   (APIENTRY *GetShaderiv)(GLuint, GLenum, GLint*) = nullptr;
+    void   (APIENTRY *GetShaderInfoLog)(GLuint, GLsizei, GLsizei*, GLchar*) = nullptr;
+    GLuint (APIENTRY *CreateProgram)() = nullptr;
+    void   (APIENTRY *AttachShader)(GLuint, GLuint) = nullptr;
+    void   (APIENTRY *BindAttribLocation)(GLuint, GLuint, const GLchar*) = nullptr;
+    void   (APIENTRY *LinkProgram)(GLuint) = nullptr;
+    void   (APIENTRY *GetProgramiv)(GLuint, GLenum, GLint*) = nullptr;
+    void   (APIENTRY *DeleteShader)(GLuint) = nullptr;
+    void   (APIENTRY *UseProgram)(GLuint) = nullptr;
+    GLint  (APIENTRY *GetUniformLocation)(GLuint, const GLchar*) = nullptr;
+    void   (APIENTRY *Uniform1i)(GLint, GLint) = nullptr;
+    void   (APIENTRY *Uniform1f)(GLint, GLfloat) = nullptr;
+    // VAO / VBO
+    void   (APIENTRY *GenVertexArrays)(GLsizei, GLuint*) = nullptr;
+    void   (APIENTRY *BindVertexArray)(GLuint) = nullptr;
+    void   (APIENTRY *GenBuffers)(GLsizei, GLuint*) = nullptr;
+    void   (APIENTRY *BindBuffer)(GLenum, GLuint) = nullptr;
+    void   (APIENTRY *BufferData)(GLenum, hm_GLsizeiptr, const void*, GLenum) = nullptr;
+    void   (APIENTRY *VertexAttribPointer)(GLuint, GLint, GLenum, GLboolean, GLsizei, const void*) = nullptr;
+    void   (APIENTRY *EnableVertexAttribArray)(GLuint) = nullptr;
+    void   (APIENTRY *ActiveTexture)(GLenum) = nullptr;
+    // FBO
+    void   (APIENTRY *GenFramebuffers)(GLsizei, GLuint*) = nullptr;
+    void   (APIENTRY *BindFramebuffer)(GLenum, GLuint) = nullptr;
+    void   (APIENTRY *FramebufferTexture2D)(GLenum, GLenum, GLenum, GLuint, GLint) = nullptr;
+    void   (APIENTRY *BlitFramebuffer)(GLint, GLint, GLint, GLint, GLint, GLint,
+                                       GLint, GLint, GLbitfield, GLenum) = nullptr;
+    void   (APIENTRY *DeleteFramebuffers)(GLsizei, const GLuint*) = nullptr;
+
+    bool core_ok = false;   // всі функції для малювання в core-профілі є
+    bool fbo_ok = false;    // всі функції для FBO-знімка є
+};
 
 class OverlayGL {
 public:
@@ -68,7 +165,16 @@ public:
             return;
         }
         if (!tex_ || tex_w_ == 0) return;
-        blit();
+
+        ensure_gl3();
+        // Ховаємося від OBS: ПЕРЕД малюванням чату знімаємо чистий кадр із
+        // дефолтного фреймбуфера (екран гри) у власний cleanFBO. OBS у своєму
+        // хуку копіює екран через glBlitFramebuffer(read=0 → своя текстура);
+        // наш хук на glBlitFramebuffer підмінить джерело з 0 на cleanFBO, і OBS
+        // забере кадр БЕЗ чату. На моніторі чат лишається.
+        if (last_.hide_from_obs) snapshot_clean();
+
+        if (is_core_profile()) blit_core(); else blit();
     }
 
     void release() {
@@ -78,6 +184,22 @@ public:
         tex_ = 0;
         tex_w_ = tex_h_ = tex_seq_ = 0;
         reader_.close();
+    }
+
+    // --- приховування від OBS (звертається хук glBlitFramebuffer у dllmain) ---
+    // Адреса справжньої glBlitFramebuffer у драйвері — щоб dllmain поставив на
+    // неї інлайн-хук. OBS копіює нею екран; ми підмінимо джерело на cleanFBO.
+    void* blitframebuffer_proc() { return load_gl_proc("glBlitFramebuffer"); }
+
+    bool hiding() const { return enabled_ && last_.hide_from_obs && clean_fbo_ != 0; }
+    bool recording_snapshot() const { return recording_snapshot_; }
+    GLuint clean_fbo() const { return clean_fbo_; }
+
+    int current_read_fbo() {
+        GLint b = 0; glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &b); return b;
+    }
+    void bind_read_fbo(GLuint fbo) {
+        if (g3_.BindFramebuffer) g3_.BindFramebuffer(GL_READ_FRAMEBUFFER, fbo);
     }
 
 private:
@@ -100,24 +222,9 @@ private:
         tex_seq_ = f.seq;
     }
 
+    // Фіксований конвеєр 1.1 — для сумісних (compat) контекстів: старий
+    // Minecraft, id Tech 3/4, HPL, багато інді. Core-профіль іде в blit_core().
     void blit() {
-        // Ключове для стабільності в СУЧАСНИХ GL-іграх (саме тут був
-        // випадковий краш у драйвері вже після нашого малювання):
-        //
-        // 1. Core-профіль. Якщо гра створила контекст core-профілю, режим
-        //    негайного малювання (glBegin/glOrtho/фіксований конвеєр) там не
-        //    просто заборонений — деякі драйвери від нього падають, а не тихо
-        //    повертають помилку. Тоді чесно не малюємо взагалі (краще без чату,
-        //    ніж покласти гру). Малюнок лишається для сумісних контекстів —
-        //    Minecraft, емулятори, багато інді.
-        if (is_core_profile()) {
-            if (!core_logged_) { core_logged_ = true;
-                log("overlay(gl): контекст core-профілю — не малюємо, щоб не "
-                    "покласти гру (потрібен сумісний контекст)"); }
-            while (glGetError() != GL_NO_ERROR) {}   // прибрати нашу ж помилку від запиту
-            return;
-        }
-
         GLint vp[4] = {0, 0, 0, 0};
         glGetIntegerv(GL_VIEWPORT, vp);
         float sw = (float)vp[2], sh = (float)vp[3];
@@ -202,6 +309,260 @@ private:
         for (int i = 0; i < 8 && glGetError() != GL_NO_ERROR; ++i) {}
     }
 
+    // Малювання в CORE-профілі (GL 3.2+): фіксованого конвеєра там немає, тож
+    // шейдерна програма + VAO/VBO. Квадрат рахуємо в NDC на CPU щокадру.
+    void blit_core() {
+        if (core_failed_) return;
+        if (!g3_.core_ok) {
+            if (!core_failed_) { core_failed_ = true;
+                log("overlay(gl): core-профіль, але не всі сучасні GL-функції "
+                    "доступні — чат не малюємо"); }
+            return;
+        }
+        if (!ensure_core_program()) { core_failed_ = true;
+            log("overlay(gl): не вдалося зібрати шейдер для core-профілю — "
+                "чат не малюємо"); return; }
+
+        GLint vp[4] = {0, 0, 0, 0};
+        glGetIntegerv(GL_VIEWPORT, vp);
+        float sw = (float)vp[2], sh = (float)vp[3];
+        if (sw < 1 || sh < 1) return;
+        float x, y, ow, oh;
+        last_.rect(sw, sh, &x, &y, &ow, &oh);
+
+        // Верхньо-лівий початок координат → NDC з переворотом Y. UV як у compat:
+        // v=0 зверху (рядок 0 картинки лежить у teximage як v=0).
+        auto ndx = [&](float px) { return (px / sw) * 2.f - 1.f; };
+        auto ndy = [&](float py) { return 1.f - (py / sh) * 2.f; };
+        const float verts[16] = {
+            ndx(x),      ndy(y),      0.f, 0.f,   // TL
+            ndx(x),      ndy(y + oh), 0.f, 1.f,   // BL
+            ndx(x + ow), ndy(y),      1.f, 0.f,   // TR
+            ndx(x + ow), ndy(y + oh), 1.f, 1.f,   // BR
+        };
+
+        // Малюємо у ДЕФОЛТНИЙ фреймбуфер (екран): деякі ігри (напр. сучасний
+        // Minecraft) на момент swap лишають прив'язаним власний FBO — намалюй ми
+        // туди, чат не потрапив би на монітор. Тимчасово ставимо draw=0.
+        GLint sDrawFbo = 0;
+        if (g3_.BindFramebuffer) {
+            glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &sDrawFbo);
+            if (sDrawFbo != 0) g3_.BindFramebuffer(GL_DRAW_FRAMEBUFFER, 0);
+        }
+
+        // Зберігаємо рівно те, що чіпаємо (машина станів глобальна).
+        GLint sProg = 0, sVao = 0, sAbuf = 0, sActive = GL_TEXTURE0, sTex0 = 0;
+        glGetIntegerv(GL_CURRENT_PROGRAM, &sProg);
+        glGetIntegerv(GL_VERTEX_ARRAY_BINDING, &sVao);
+        glGetIntegerv(GL_ARRAY_BUFFER_BINDING, &sAbuf);
+        glGetIntegerv(GL_ACTIVE_TEXTURE, &sActive);
+        GLboolean wasBlend = glIsEnabled(GL_BLEND);
+        GLboolean wasDepth = glIsEnabled(GL_DEPTH_TEST);
+        GLboolean wasCull = glIsEnabled(GL_CULL_FACE);
+        GLboolean wasScissor = glIsEnabled(GL_SCISSOR_TEST);
+        GLint sBlendS = GL_SRC_ALPHA, sBlendD = GL_ONE_MINUS_SRC_ALPHA;
+        glGetIntegerv(GL_BLEND_SRC, &sBlendS);
+        glGetIntegerv(GL_BLEND_DST, &sBlendD);
+
+        g3_.UseProgram(prog_);
+        g3_.ActiveTexture(GL_TEXTURE0);
+        glGetIntegerv(GL_TEXTURE_BINDING_2D, &sTex0);
+        glBindTexture(GL_TEXTURE_2D, tex_);
+        g3_.Uniform1i(u_tex_, 0);
+        g3_.Uniform1f(u_opacity_, last_.opacity / 255.f);
+
+        g3_.BindVertexArray(vao_);
+        g3_.BindBuffer(GL_ARRAY_BUFFER, vbo_);
+        g3_.BufferData(GL_ARRAY_BUFFER, sizeof(verts), verts, GL_STREAM_DRAW);
+
+        glDisable(GL_DEPTH_TEST);
+        glDisable(GL_CULL_FACE);
+        glDisable(GL_SCISSOR_TEST);
+        glEnable(GL_BLEND);
+        glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+
+        glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
+
+        // Повертаємо все як було.
+        glBindTexture(GL_TEXTURE_2D, (GLuint)sTex0);
+        glBlendFunc((GLenum)sBlendS, (GLenum)sBlendD);
+        set_enabled_gl(GL_BLEND, wasBlend);
+        set_enabled_gl(GL_DEPTH_TEST, wasDepth);
+        set_enabled_gl(GL_CULL_FACE, wasCull);
+        set_enabled_gl(GL_SCISSOR_TEST, wasScissor);
+        g3_.BindBuffer(GL_ARRAY_BUFFER, (GLuint)sAbuf);
+        g3_.BindVertexArray((GLuint)sVao);
+        g3_.UseProgram((GLuint)sProg);
+        if ((GLenum)sActive != GL_TEXTURE0) g3_.ActiveTexture((GLenum)sActive);
+        if (g3_.BindFramebuffer && sDrawFbo != 0)
+            g3_.BindFramebuffer(GL_DRAW_FRAMEBUFFER, (GLuint)sDrawFbo);
+        for (int i = 0; i < 8 && glGetError() != GL_NO_ERROR; ++i) {}
+    }
+
+    // Збирає шейдерну програму + VAO/VBO один раз. false — якщо не вдалося.
+    bool ensure_core_program() {
+        if (prog_) return true;
+        static const char* VS =
+            "#version 150\n"
+            "in vec2 aPos; in vec2 aUV; out vec2 vUV;\n"
+            "void main(){ vUV=aUV; gl_Position=vec4(aPos,0.0,1.0); }\n";
+        static const char* FS =
+            "#version 150\n"
+            "uniform sampler2D uTex; uniform float uOpacity;\n"
+            "in vec2 vUV; out vec4 frag;\n"
+            "void main(){ vec4 c=texture(uTex,vUV); frag=vec4(c.rgb, c.a*uOpacity); }\n";
+        GLuint vs = compile_shader(GL_VERTEX_SHADER, VS);
+        GLuint fs = compile_shader(GL_FRAGMENT_SHADER, FS);
+        if (!vs || !fs) return false;
+        GLuint p = g3_.CreateProgram();
+        if (!p) return false;
+        g3_.AttachShader(p, vs);
+        g3_.AttachShader(p, fs);
+        g3_.BindAttribLocation(p, 0, "aPos");
+        g3_.BindAttribLocation(p, 1, "aUV");
+        g3_.LinkProgram(p);
+        GLint ok = 0; g3_.GetProgramiv(p, GL_LINK_STATUS, &ok);
+        g3_.DeleteShader(vs); g3_.DeleteShader(fs);
+        if (!ok) return false;
+        u_tex_ = g3_.GetUniformLocation(p, "uTex");
+        u_opacity_ = g3_.GetUniformLocation(p, "uOpacity");
+
+        // VAO з описом атрибутів (посилається на vbo_). Зберігаємо/повертаємо
+        // попередні прив'язки, щоб не зачепити гру.
+        GLint sVao = 0, sAbuf = 0;
+        glGetIntegerv(GL_VERTEX_ARRAY_BINDING, &sVao);
+        glGetIntegerv(GL_ARRAY_BUFFER_BINDING, &sAbuf);
+        g3_.GenVertexArrays(1, &vao_);
+        g3_.BindVertexArray(vao_);
+        g3_.GenBuffers(1, &vbo_);
+        g3_.BindBuffer(GL_ARRAY_BUFFER, vbo_);
+        g3_.BufferData(GL_ARRAY_BUFFER, sizeof(float) * 16, nullptr, GL_STREAM_DRAW);
+        g3_.EnableVertexAttribArray(0);
+        g3_.VertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, sizeof(float) * 4, (void*)0);
+        g3_.EnableVertexAttribArray(1);
+        g3_.VertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, sizeof(float) * 4,
+                                (void*)(sizeof(float) * 2));
+        g3_.BindVertexArray((GLuint)sVao);
+        g3_.BindBuffer(GL_ARRAY_BUFFER, (GLuint)sAbuf);
+        prog_ = p;
+        log("overlay(gl): core-профіль — шейдер зібрано, малюємо");
+        return true;
+    }
+
+    GLuint compile_shader(GLenum type, const char* src) {
+        GLuint s = g3_.CreateShader(type);
+        if (!s) return 0;
+        g3_.ShaderSource(s, 1, &src, nullptr);
+        g3_.CompileShader(s);
+        GLint ok = 0; g3_.GetShaderiv(s, GL_COMPILE_STATUS, &ok);
+        if (!ok) {
+            char buf[512] = {0}; GLsizei n = 0;
+            if (g3_.GetShaderInfoLog) g3_.GetShaderInfoLog(s, sizeof(buf) - 1, &n, buf);
+            log("overlay(gl): помилка компіляції шейдера: %s", buf);
+            g3_.DeleteShader(s);
+            return 0;
+        }
+        return s;
+    }
+
+    // Знімок чистого кадру (екран гри БЕЗ чату) у cleanFBO. Кличемо ПЕРЕД
+    // малюванням чату. recording_snapshot_ захищає наш власний blit від того,
+    // щоб хук на glBlitFramebuffer підмінив ЙОГО джерело.
+    void snapshot_clean() {
+        if (!g3_.fbo_ok) return;
+        GLint vp[4] = {0, 0, 0, 0};
+        glGetIntegerv(GL_VIEWPORT, vp);
+        int w = vp[2], h = vp[3];
+        if (w < 1 || h < 1) return;
+        if (!ensure_clean_fbo(w, h)) return;
+
+        recording_snapshot_ = true;
+        GLint sRead = 0, sDraw = 0, sReadBuf = 0x0405 /*GL_BACK*/;
+        glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &sRead);
+        glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &sDraw);
+        g3_.BindFramebuffer(GL_READ_FRAMEBUFFER, 0);
+        glGetIntegerv(0x0C02 /*GL_READ_BUFFER*/, &sReadBuf);
+        glReadBuffer(0x0405 /*GL_BACK*/);
+        g3_.BindFramebuffer(GL_DRAW_FRAMEBUFFER, clean_fbo_);
+        g3_.BlitFramebuffer(0, 0, w, h, 0, 0, w, h, GL_COLOR_BUFFER_BIT, GL_NEAREST);
+        glReadBuffer((GLenum)sReadBuf);
+        g3_.BindFramebuffer(GL_READ_FRAMEBUFFER, (GLuint)sRead);
+        g3_.BindFramebuffer(GL_DRAW_FRAMEBUFFER, (GLuint)sDraw);
+        recording_snapshot_ = false;
+        for (int i = 0; i < 8 && glGetError() != GL_NO_ERROR; ++i) {}
+    }
+
+    bool ensure_clean_fbo(int w, int h) {
+        if (clean_fbo_ && clean_w_ == w && clean_h_ == h) return true;
+        GLint sTex = 0; glGetIntegerv(GL_TEXTURE_BINDING_2D, &sTex);
+        if (!clean_tex_) glGenTextures(1, &clean_tex_);
+        glBindTexture(GL_TEXTURE_2D, clean_tex_);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, w, h, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+        glBindTexture(GL_TEXTURE_2D, (GLuint)sTex);
+
+        if (!clean_fbo_) g3_.GenFramebuffers(1, &clean_fbo_);
+        GLint sRead = 0, sDraw = 0;
+        glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &sRead);
+        glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &sDraw);
+        g3_.BindFramebuffer(GL_FRAMEBUFFER, clean_fbo_);
+        g3_.FramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, clean_tex_, 0);
+        g3_.BindFramebuffer(GL_READ_FRAMEBUFFER, (GLuint)sRead);
+        g3_.BindFramebuffer(GL_DRAW_FRAMEBUFFER, (GLuint)sDraw);
+        clean_w_ = w; clean_h_ = h;
+        return true;
+    }
+
+    // Ліниво вантажимо сучасні GL-функції (потрібен активний контекст). Один раз.
+    void ensure_gl3() {
+        if (gl3_tried_) return;
+        gl3_tried_ = true;
+        g3_.CreateShader = (GLuint (APIENTRY*)(GLenum))load_gl_proc("glCreateShader");
+        g3_.ShaderSource = (void (APIENTRY*)(GLuint, GLsizei, const GLchar* const*, const GLint*))load_gl_proc("glShaderSource");
+        g3_.CompileShader = (void (APIENTRY*)(GLuint))load_gl_proc("glCompileShader");
+        g3_.GetShaderiv = (void (APIENTRY*)(GLuint, GLenum, GLint*))load_gl_proc("glGetShaderiv");
+        g3_.GetShaderInfoLog = (void (APIENTRY*)(GLuint, GLsizei, GLsizei*, GLchar*))load_gl_proc("glGetShaderInfoLog");
+        g3_.CreateProgram = (GLuint (APIENTRY*)())load_gl_proc("glCreateProgram");
+        g3_.AttachShader = (void (APIENTRY*)(GLuint, GLuint))load_gl_proc("glAttachShader");
+        g3_.BindAttribLocation = (void (APIENTRY*)(GLuint, GLuint, const GLchar*))load_gl_proc("glBindAttribLocation");
+        g3_.LinkProgram = (void (APIENTRY*)(GLuint))load_gl_proc("glLinkProgram");
+        g3_.GetProgramiv = (void (APIENTRY*)(GLuint, GLenum, GLint*))load_gl_proc("glGetProgramiv");
+        g3_.DeleteShader = (void (APIENTRY*)(GLuint))load_gl_proc("glDeleteShader");
+        g3_.UseProgram = (void (APIENTRY*)(GLuint))load_gl_proc("glUseProgram");
+        g3_.GetUniformLocation = (GLint (APIENTRY*)(GLuint, const GLchar*))load_gl_proc("glGetUniformLocation");
+        g3_.Uniform1i = (void (APIENTRY*)(GLint, GLint))load_gl_proc("glUniform1i");
+        g3_.Uniform1f = (void (APIENTRY*)(GLint, GLfloat))load_gl_proc("glUniform1f");
+        g3_.GenVertexArrays = (void (APIENTRY*)(GLsizei, GLuint*))load_gl_proc("glGenVertexArrays");
+        g3_.BindVertexArray = (void (APIENTRY*)(GLuint))load_gl_proc("glBindVertexArray");
+        g3_.GenBuffers = (void (APIENTRY*)(GLsizei, GLuint*))load_gl_proc("glGenBuffers");
+        g3_.BindBuffer = (void (APIENTRY*)(GLenum, GLuint))load_gl_proc("glBindBuffer");
+        g3_.BufferData = (void (APIENTRY*)(GLenum, hm_GLsizeiptr, const void*, GLenum))load_gl_proc("glBufferData");
+        g3_.VertexAttribPointer = (void (APIENTRY*)(GLuint, GLint, GLenum, GLboolean, GLsizei, const void*))load_gl_proc("glVertexAttribPointer");
+        g3_.EnableVertexAttribArray = (void (APIENTRY*)(GLuint))load_gl_proc("glEnableVertexAttribArray");
+        g3_.ActiveTexture = (void (APIENTRY*)(GLenum))load_gl_proc("glActiveTexture");
+        g3_.GenFramebuffers = (void (APIENTRY*)(GLsizei, GLuint*))load_gl_proc("glGenFramebuffers");
+        g3_.BindFramebuffer = (void (APIENTRY*)(GLenum, GLuint))load_gl_proc("glBindFramebuffer");
+        g3_.FramebufferTexture2D = (void (APIENTRY*)(GLenum, GLenum, GLenum, GLuint, GLint))load_gl_proc("glFramebufferTexture2D");
+        g3_.BlitFramebuffer = (void (APIENTRY*)(GLint, GLint, GLint, GLint, GLint, GLint, GLint, GLint, GLbitfield, GLenum))load_gl_proc("glBlitFramebuffer");
+        g3_.DeleteFramebuffers = (void (APIENTRY*)(GLsizei, const GLuint*))load_gl_proc("glDeleteFramebuffers");
+
+        g3_.core_ok = g3_.CreateShader && g3_.ShaderSource && g3_.CompileShader &&
+            g3_.GetShaderiv && g3_.CreateProgram && g3_.AttachShader &&
+            g3_.BindAttribLocation && g3_.LinkProgram && g3_.GetProgramiv &&
+            g3_.DeleteShader && g3_.UseProgram && g3_.GetUniformLocation &&
+            g3_.Uniform1i && g3_.Uniform1f && g3_.GenVertexArrays &&
+            g3_.BindVertexArray && g3_.GenBuffers && g3_.BindBuffer &&
+            g3_.BufferData && g3_.VertexAttribPointer &&
+            g3_.EnableVertexAttribArray && g3_.ActiveTexture;
+        g3_.fbo_ok = g3_.GenFramebuffers && g3_.BindFramebuffer &&
+            g3_.FramebufferTexture2D && g3_.BlitFramebuffer;
+        log("overlay(gl): сучасні GL-функції — core=%s, fbo=%s",
+            g3_.core_ok ? "так" : "ні", g3_.fbo_ok ? "так" : "ні");
+    }
+
     static void set_enabled_gl(GLenum cap, GLboolean on) {
         if (on) glEnable(cap); else glDisable(cap);
     }
@@ -259,8 +620,21 @@ private:
     uint32_t tex_w_ = 0, tex_h_ = 0, tex_seq_ = 0;
     bool enabled_ = false;
     bool logged_ = false;
-    bool core_logged_ = false;
     FrameView last_;
+
+    // Сучасний GL (шейдери/VAO/FBO) — заповнюється ensure_gl3().
+    GL3 g3_;
+    bool gl3_tried_ = false;
+
+    // core-профіль: шейдерна програма + буфери.
+    GLuint prog_ = 0, vao_ = 0, vbo_ = 0;
+    GLint u_tex_ = -1, u_opacity_ = -1;
+    bool core_failed_ = false;
+
+    // Приховування від OBS: чистий кадр у власному FBO.
+    GLuint clean_tex_ = 0, clean_fbo_ = 0;
+    int clean_w_ = 0, clean_h_ = 0;
+    bool recording_snapshot_ = false;
 };
 
 }  // namespace hominka
