@@ -10,7 +10,7 @@ import os
 import sys
 from ctypes import wintypes
 
-from PySide6.QtCore import QEvent, QObject, Qt
+from PySide6.QtCore import QEvent, QObject, Qt, QTimer
 from PySide6.QtWidgets import QApplication, QWidget
 
 # === Платформа ==============================================================
@@ -107,6 +107,17 @@ def exclude_from_capture(win) -> bool:
         return False
 
 
+def _reexclude(w):
+    """Повторно ховає вікно від захоплення на наступному такті циклу подій —
+    коли воно вже показане (див. CaptureGuard). Вікно могло за цей час зникнути,
+    тому будь-яка помилка доступу до знищеного QWidget — не привід падати."""
+    try:
+        if w is not None and w.isVisible():
+            exclude_from_capture(w)
+    except Exception:
+        pass
+
+
 def _is_excluded(hwnd: int) -> bool:
     """Чи вже приховане вікно від захоплення (щоб не смикати WinAPI даремно)."""
     if not IS_WINDOWS:
@@ -132,6 +143,14 @@ class CaptureGuard(QObject):
     def eventFilter(self, obj, event):
         if event.type() == QEvent.Type.Show and isinstance(obj, QWidget) and obj.isWindow():
             exclude_from_capture(obj)
+            # Windows 10: подія Show приходить ще ДО того, як вікно реально
+            # показалося й склалося композитором, і застосоване лише в цю мить
+            # виключення там інколи «не прилипає» (на Win11 сильніше — тому
+            # головне вікно чата, що ховає себе у власному showEvent ПІСЛЯ
+            # super(), приховувалося, а панель налаштувань — ні й протікала в OBS/
+            # Discord). Повторюємо на наступному такті циклу подій, коли вікно вже
+            # на екрані. На Win11 це нешкідливий повтор.
+            QTimer.singleShot(0, lambda o=obj: _reexclude(o))
         return False
 
 
