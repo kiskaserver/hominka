@@ -67,29 +67,35 @@ FILE_ATTRIBUTE_HIDDEN = 0x2
 
 
 def hide_internal_folder():
-    """Ховає службову теку профілю поруч із програмою.
+    """Прибирає службові теки поруч із програмою.
 
-    Тека _internal тут більше не з'являється: збірка одним файлом тримає все
-    всередині .exe (див. Hominka_one.spec). Але після оновлення зі старої
-    версії вона може лишитися на диску — тоді ховаємо і її, щоб не плуталася
-    під ногами.
+    Дані програми (config.json, профіль браузера) тепер живуть у %LOCALAPPDATA%
+    (див. paths.py), тож поруч із .exe ховати вже нічого. Лишилося дві дрібниці:
+    (1) стара тека _internal від колишньої збірки текою — її ховаємо, щоб не
+    плуталася під ногами; (2) стара тека profile, що могла лишитися поруч із .exe
+    від попередніх версій, — її, навпаки, ПОКАЗУЄМО (знімаємо атрибут «прихована»):
+    програма її більше не використовує, і тримати приховане сміття негарно.
 
-    Робиться щоразу при старті: після оновлення теки копіюють наново, і атрибут
-    з них злітає.
+    Робиться щоразу при старті: після оновлення теки копіюють наново, і атрибути
+    з них злітають.
     """
     if not getattr(sys, "frozen", False) or not IS_WINDOWS:
         return
     here = os.path.dirname(sys.executable)
-    # profile — кеш браузера, службовий. config.json НЕ ховаємо: це
-    # налаштування користувача, і шукати їх у прихованому — знущання.
-    for name in ("_internal", "profile"):
-        folder = os.path.join(here, name)
-        if not os.path.isdir(folder):
-            continue
+    legacy = os.path.join(here, "_internal")
+    if os.path.isdir(legacy):
         try:
-            ctypes.windll.kernel32.SetFileAttributesW(folder, FILE_ATTRIBUTE_HIDDEN)
+            ctypes.windll.kernel32.SetFileAttributesW(legacy, FILE_ATTRIBUTE_HIDDEN)
         except Exception:
-            pass      # не вийшло приховати — не привід не запускатися
+            pass
+    # Стара тека profile поруч із .exe — знімаємо приховування (FILE_ATTRIBUTE_NORMAL),
+    # хай користувач її бачить і за бажання прибере.
+    old_profile = os.path.join(here, "profile")
+    if os.path.isdir(old_profile):
+        try:
+            ctypes.windll.kernel32.SetFileAttributesW(old_profile, 0x80)  # FILE_ATTRIBUTE_NORMAL
+        except Exception:
+            pass
 
 
 def exclude_from_capture(win) -> bool:

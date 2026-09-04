@@ -58,6 +58,65 @@ def _pid_of(hwnd: int) -> int:
     return int(pid.value)
 
 
+# DLL графічних API, які вміє малювати наш оверлей. Якщо в процесі не завантажено
+# ЖОДНОЇ — це не гра (нотатник, провідник, консоль…), і вкладатися туди нема сенсу.
+GRAPHICS_DLLS = ("d3d9.dll", "d3d11.dll", "d3d12.dll", "dxgi.dll",
+                 "opengl32.dll", "vulkan-1.dll")
+
+
+def _loaded_modules(pid: int):
+    """Імена завантажених у процес DLL (нижнім регістром) або None, якщо
+    перелічити не вдалося (гра від адміністратора тощо). None ≠ «порожньо»:
+    у такому разі НЕ блокуємо — хай вирішує інжектор і сам оверлей."""
+    if not IS_WINDOWS:
+        return None
+    k32 = ctypes.windll.kernel32
+    psapi = ctypes.windll.psapi
+    # Без argtypes ctypes бере HANDLE/HMODULE за c_int і переповнюється на 64-бітних
+    # значеннях (адреси > 2 ГБ) — саме на цьому падав GetModuleBaseNameW.
+    k32.OpenProcess.restype = wintypes.HANDLE
+    k32.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+    k32.CloseHandle.argtypes = [wintypes.HANDLE]
+    psapi.EnumProcessModulesEx.argtypes = [
+        wintypes.HANDLE, ctypes.POINTER(wintypes.HMODULE), wintypes.DWORD,
+        ctypes.POINTER(wintypes.DWORD), wintypes.DWORD]
+    psapi.GetModuleBaseNameW.restype = wintypes.DWORD
+    psapi.GetModuleBaseNameW.argtypes = [
+        wintypes.HANDLE, wintypes.HMODULE, wintypes.LPWSTR, wintypes.DWORD]
+
+    PROCESS_QUERY_INFORMATION = 0x0400
+    PROCESS_VM_READ = 0x0010
+    h = k32.OpenProcess(PROCESS_QUERY_INFORMATION | PROCESS_VM_READ, False, pid)
+    if not h:
+        return None
+    try:
+        arr = (wintypes.HMODULE * 1024)()
+        needed = wintypes.DWORD()
+        LIST_MODULES_ALL = 0x03   # і 32-, і 64-бітні модулі (важливо для WOW64-цілі)
+        if not psapi.EnumProcessModulesEx(h, arr, ctypes.sizeof(arr),
+                                          ctypes.byref(needed), LIST_MODULES_ALL):
+            return None
+        count = min(len(arr), needed.value // ctypes.sizeof(wintypes.HMODULE))
+        names = set()
+        buf = ctypes.create_unicode_buffer(260)
+        for i in range(count):
+            if psapi.GetModuleBaseNameW(h, arr[i], buf, 260):
+                names.add(buf.value.lower())
+        return names
+    finally:
+        k32.CloseHandle(h)
+
+
+def _has_graphics_api(pid: int) -> bool:
+    """Чи схоже, що в процесі є гра з підтримуваним графічним API. Якщо модулі
+    перелічити не вдалося — вважаємо, що так (краще спробувати, ніж дарма
+    відмовити грі від адміністратора)."""
+    mods = _loaded_modules(pid)
+    if mods is None:
+        return True
+    return any(dll in mods for dll in GRAPHICS_DLLS)
+
+
 def _target_is_64(pid: int) -> bool:
     """64-бітна ціль? Потрібне, щоб одразу взяти правильний інжектор і не
     ганяти його даремно на явно не тій розрядності."""
@@ -96,6 +155,15 @@ def inject(hwnd: int) -> Result:
     pid = _pid_of(hwnd)
     if not pid:
         return Result(EX_NO_PROC, "Не вдалося визначити гру у фокусі.")
+
+    # Вкладаємося ЛИШЕ в ігри з підтримуваним графічним API (DirectX 9/11/12,
+    # OpenGL, Vulkan). У звичайну програму без нього оверлею нема куди малювати —
+    # і робити з неї «ціль» безглуздо, тож чесно відмовляємо ще до вкладення.
+    if not _has_graphics_api(pid):
+        return Result(EX_BLOCKED,
+                      "У цьому вікні немає гри з підтримуваним графічним API "
+                      "(DirectX 9/11/12, OpenGL чи Vulkan) — оверлей працює лише "
+                      "в іграх, тож вкладати чат сюди нема куди.")
 
     d = native_dir()
     order = ["x64", "x86"] if _target_is_64(pid) else ["x86", "x64"]
