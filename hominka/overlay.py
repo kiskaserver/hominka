@@ -469,8 +469,21 @@ class Overlay(SourcesMixin, UpdatingMixin, ConfigMixin, LookMixin, QMainWindow):
             ov = self._ensure_game_overlay()
             ov.set_source(self.mode, self.url, self.is_yt)
             ov.set_enabled(True)
+            # Vulkan-гру не можна «вкласти» після старту — шар має бути на місці
+            # ще до запуску гри. Реєструємо його, поки чат у грі ввімкнено; при
+            # вимкненні/виході знімаємо, щоб не вантажився в чужі Vulkan-застосунки.
+            try:
+                from . import vklayer
+                vklayer.register()
+            except Exception:
+                pass
         elif self.game_overlay is not None:
             self.game_overlay.set_enabled(False)
+            try:
+                from . import vklayer
+                vklayer.unregister()
+            except Exception:
+                pass
         self.save_config()
 
     def inject_game(self, hwnd: int):
@@ -513,6 +526,13 @@ class Overlay(SourcesMixin, UpdatingMixin, ConfigMixin, LookMixin, QMainWindow):
     def closeEvent(self, e):
         if self.game_overlay is not None:
             self.game_overlay.close()
+        # Знімаємо Vulkan-шар з реєстру — щоб він не вантажився в чужі Vulkan-ігри
+        # після того, як Hominka закрито.
+        try:
+            from . import vklayer
+            vklayer.unregister()
+        except Exception:
+            pass
         self._stop_readers()
         # Завантажене, але не встановлене оновлення — 220 МБ у тимчасовій теці.
         # Якщо людина закриває програму, не поставивши його, тримати файл

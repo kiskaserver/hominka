@@ -52,6 +52,15 @@ build() {
     $CXX $COMMON -municode \
         "$SRC/injector/injector.cpp" \
         -o "$OUT/injector-$ARCH.exe" $EXE_LIBS
+
+    # Імпліцитний шар Vulkan — окрема DLL, яку завантажувач Vulkan вставляє в
+    # кожну Vulkan-гру ДО ініціалізації (лікує «пізній інжект»). Малює той самий
+    # чат (overlay_vk.h). Функції Vulkan вантажить у рантаймі, тож d3d-бібліотеки
+    # тут не потрібні.
+    echo ">> $ARCH: hominka-vklayer.dll"
+    $CXX $COMMON $DLL_INC -shared \
+        "$SRC/overlay/vklayer_main.cpp" \
+        -o "$OUT/hominka-vklayer-$ARCH.dll" -Wl,--kill-at
 }
 
 build x86_64-w64-mingw32-g++ x64

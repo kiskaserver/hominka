@@ -124,7 +124,8 @@ def build_native() -> str:
         run(["docker", "cp", "%s:/out/." % cid, out])
     finally:
         subprocess.run(["docker", "rm", cid], capture_output=True)
-    need = ["injector-x64.exe", "injector-x86.exe", "overlay-x64.dll", "overlay-x86.dll"]
+    need = ["injector-x64.exe", "injector-x86.exe", "overlay-x64.dll", "overlay-x86.dll",
+            "hominka-vklayer-x64.dll", "hominka-vklayer-x86.dll"]
     missing = [n for n in need if not os.path.isfile(os.path.join(out, n))]
     if missing:
         raise SystemExit("нативна збірка не дала: %s" % ", ".join(missing))
@@ -207,7 +208,8 @@ def pack(version: str, exe_path: str = "", suffix: str = "win64",
         z.write(exe_path, os.path.basename(exe_path))
         if native_dir:
             for name in ("injector-x64.exe", "injector-x86.exe",
-                         "overlay-x64.dll", "overlay-x86.dll"):
+                         "overlay-x64.dll", "overlay-x86.dll",
+                         "hominka-vklayer-x64.dll", "hominka-vklayer-x86.dll"):
                 p = os.path.join(native_dir, name)
                 if os.path.isfile(p):
                     z.write(p, "native/" + name)

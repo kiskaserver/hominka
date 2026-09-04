@@ -140,6 +140,7 @@ QueuePresentFn g_vk_present_orig = nullptr;
 hominka::OverlayVK g_overlayvk;
 volatile LONG g_vk_frames = 0;
 
+
 VkResult VKAPI_PTR hooked_vkCreateDevice(VkPhysicalDevice phys, const VkDeviceCreateInfo* ci,
                                          const VkAllocationCallbacks* al, VkDevice* dev) {
     VkResult r = g_vk_create_device_orig(phys, ci, al, dev);
@@ -874,6 +875,17 @@ static bool obs_capture_present() {
 }
 
 DWORD WINAPI init_thread(LPVOID) {
+    // Якщо в процесі вже активний наш Vulkan-шар (hominka-vklayer), то це
+    // Vulkan-гра, і чат у ній малює ШАР. Інжект-хуки тут не потрібні й НЕБЕЗПЕЧНІ:
+    // два оверлеї в одному процесі конфліктують і роняли гру. Тож нічого не
+    // чіпаємо — хай малює шар (Hominka все одно ввімкне продюсера й поставить
+    // target_pid при інжекті, а шар його підхопить).
+    if (GetModuleHandleW(L"hominka-vklayer-x64.dll") ||
+        GetModuleHandleW(L"hominka-vklayer-x86.dll")) {
+        log("overlay: у процесі активний Vulkan-шар Hominka — інжект-хуки НЕ ставлю "
+            "(малює шар; уникаємо конфлікту й краху)");
+        return 0;
+    }
     // Логгер краху ставимо ПЕРШИМ — щоб зловити навіть падіння під час установки
     // хуків. Він лише пише в лог і пропускає виняток далі.
     AddVectoredExceptionHandler(1, crash_logger);

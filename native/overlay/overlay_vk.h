@@ -65,6 +65,7 @@ public:
         VKL(vkCmdSetViewport); VKL(vkCmdSetScissor);
         VKL(vkCmdPushConstants); VKL(vkCmdDraw);
         VKL(vkCmdPipelineBarrier); VKL(vkCmdCopyBufferToImage);
+        VKL(vkCmdCopyImage);
         VKL(vkCreateSemaphore); VKL(vkDestroySemaphore);
         VKL(vkCreateFence); VKL(vkDestroyFence);
         VKL(vkWaitForFences); VKL(vkResetFences);
@@ -79,6 +80,12 @@ public:
 
     void on_device(VkPhysicalDevice phys, VkDevice dev) {
         phys_ = phys; dev_ = dev;
+    }
+    // У режимі ШАРУ фізичнодевайсні функції треба брати з dispatch-цепочки шару
+    // (через next-GIPA інстансу), а НЕ з експорту vulkan-1.dll — інакше виклик із
+    // нашим phys повисає. Викликати ПІСЛЯ load().
+    void set_phys_mem_fn(PFN_vkGetPhysicalDeviceMemoryProperties f) {
+        if (f) vkGetPhysicalDeviceMemoryProperties_ = f;
     }
     void on_queue(VkQueue q, uint32_t family) {
         queue_family_[q] = family;
@@ -137,25 +144,80 @@ public:
         dev_ = VK_NULL_HANDLE;
     }
 
+    // --- проба скрытия от OBS ---
+    // Чи це образ свопчейна (той, що копіює OBS у своєму захопленні)?
+    bool is_swap_image(VkImage img) const {
+        if (!img) return false;
+        for (auto& kv : swaps_)
+            for (VkImage i : kv.second.images)
+                if (i == img) return true;
+        return false;
+    }
+    // Справжня адреса vkCmdCopyImage для нашого пристрою — щоб інлайн-хукнути її
+    // й ловити копію, яку робить OBS (він кличе її зі своєї dispatch-таблиці,
+    // резолвленої НИЖЧЕ нас, тож через proc-addr її не перехопити).
+    void* copyimage_proc() {
+        if (!dev_ || !vkGetDeviceProcAddr_) return nullptr;
+        return (void*)vkGetDeviceProcAddr_(dev_, "vkCmdCopyImage");
+    }
+    bool device_ready() const { return dev_ != VK_NULL_HANDLE; }
+
+    // --- скрытие від OBS (source-swap на vkCmdCopyImage) ---
+    bool hiding() const { return hide_; }
+    // true поки МИ самі записуємо копію-знімок — хай хук vkCmdCopyImage не
+    // сплутає її з копією OBS і не підмінить джерело.
+    bool recording_snapshot() const { return recording_snapshot_; }
+    // (is_swap_image визначено вище, біля copyimage_proc)
+    // Чистий знімок, яким підмінити джерело копії OBS замість образу свопчейна.
+    // Повертає VK_NULL_HANDLE, якщо знімок ще не готовий (тоді не підміняємо).
+    VkImage clean_for(VkImage swap_img) const {
+        for (auto& kv : swaps_) {
+            const SwapData& s = kv.second;
+            for (VkImage i : s.images)
+                if (i == swap_img)
+                    return (s.clean_img && s.clean_inited) ? s.clean_img : VK_NULL_HANDLE;
+        }
+        return VK_NULL_HANDLE;
+    }
+
 private:
     struct SwapData {
         VkFormat format = VK_FORMAT_UNDEFINED;
         VkExtent2D extent = {0, 0};
         VkRenderPass rpass = VK_NULL_HANDLE;
+        std::vector<VkImage> images;   // образи свопчейна (для проби скрытия від OBS)
         std::vector<VkImageView> views;
         std::vector<VkFramebuffer> fbs;
         std::vector<VkCommandBuffer> cmds;
         std::vector<VkSemaphore> done;
         std::vector<VkFence> fences;
         bool ready = false;
+        // Приховування від OBS: чистий знімок кадру (без чату), яким підміняємо
+        // джерело в копії OBS. Формат/розмір як у свопчейна.
+        VkImage clean_img = VK_NULL_HANDLE;
+        VkDeviceMemory clean_mem = VK_NULL_HANDLE;
+        bool clean_inited = false;   // чи вже переведений у TRANSFER_SRC хоч раз
     };
 
     // --- читання кадру чату зі спільної памʼяті ---
     bool read_frame() {
-        if (!reader_.ensure_open()) return false;
+        if (!reader_.ensure_open()) {
+            static bool o = false;
+            if (!o) { o = true;
+                log("overlay(vk): спільна памʼять чату НЕ відкрита — продюсер не пише кадр "
+                    "(увімкни «Справжній чат у грі» в Hominka)"); }
+            return false;
+        }
         FrameView f;
         if (!reader_.read(&f)) return have_tex_ && enabled_;
-        if (f.target_pid && f.target_pid != GetCurrentProcessId()) return false;
+        if (f.target_pid && f.target_pid != GetCurrentProcessId()) {
+            static bool o = false;
+            if (!o) { o = true;
+                log("overlay(vk): кадр НЕ наш — target_pid=%u, а ми pid=%u "
+                    "(не інжекть у гру, тоді target=0=будь-хто; або перезапусти Hominka)",
+                    f.target_pid, (unsigned)GetCurrentProcessId()); }
+            return false;
+        }
         if (!logged_) { logged_ = true;
             log("overlay(vk): кадр — enabled=%u target=%u ми=%u розмір=%ux%u",
                 (unsigned)f.enabled, f.target_pid, (unsigned)GetCurrentProcessId(),
@@ -163,6 +225,7 @@ private:
         enabled_ = f.enabled != 0;
         if (!enabled_) return false;
         frame_ = f;
+        hide_ = f.hide_from_obs != 0;
         if (f.seq != tex_seq_ || f.width != tex_w_ || f.height != tex_h_ || !have_tex_)
             need_upload_ = true;
         return true;
@@ -343,6 +406,7 @@ private:
         if (vkGetSwapchainImagesKHR_(dev_, sc, &n, nullptr) != VK_SUCCESS || n == 0) return false;
         std::vector<VkImage> imgs(n);
         vkGetSwapchainImagesKHR_(dev_, sc, &n, imgs.data());
+        s.images = imgs;   // запам'ятовуємо для проби скрытия від OBS
 
         // Render pass: вантажимо наявний вміст (кадр гри) і домальовуємо поверх.
         VkAttachmentDescription at = {};
@@ -392,8 +456,39 @@ private:
         if (vkAllocateCommandBuffers_(dev_, &ca, s.cmds.data()) != VK_SUCCESS) {
             destroy_swap(s); return false; }
 
+        // Чистий знімок кадру (без чату) — джерело для копії OBS у режимі
+        // приховування. Формат/розмір як у свопчейна; TRANSFER_DST (пишемо
+        // знімок) + TRANSFER_SRC (OBS читає). Fail-safe: не вдалось — просто не
+        // ховаємо (clean_img лишиться null).
+        {
+            VkImageCreateInfo ci = {VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
+            ci.imageType = VK_IMAGE_TYPE_2D; ci.format = s.format;
+            ci.extent = {s.extent.width, s.extent.height, 1};
+            ci.mipLevels = 1; ci.arrayLayers = 1;
+            ci.samples = VK_SAMPLE_COUNT_1_BIT; ci.tiling = VK_IMAGE_TILING_OPTIMAL;
+            ci.usage = VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
+            ci.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+            ci.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+            if (vkCreateImage_(dev_, &ci, nullptr, &s.clean_img) == VK_SUCCESS) {
+                VkMemoryRequirements mr; vkGetImageMemoryRequirements_(dev_, s.clean_img, &mr);
+                VkMemoryAllocateInfo ma = {VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
+                ma.allocationSize = mr.size;
+                ma.memoryTypeIndex = mem_type(mr.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+                if (ma.memoryTypeIndex == UINT32_MAX ||
+                    vkAllocateMemory_(dev_, &ma, nullptr, &s.clean_mem) != VK_SUCCESS ||
+                    vkBindImageMemory_(dev_, s.clean_img, s.clean_mem, 0) != VK_SUCCESS) {
+                    if (s.clean_mem) { vkFreeMemory_(dev_, s.clean_mem, nullptr); s.clean_mem = VK_NULL_HANDLE; }
+                    vkDestroyImage_(dev_, s.clean_img, nullptr); s.clean_img = VK_NULL_HANDLE;
+                }
+            } else {
+                s.clean_img = VK_NULL_HANDLE;
+            }
+            s.clean_inited = false;
+        }
+
         s.ready = true;
-        log("overlay(vk): свопчейн готовий (образів=%u, %ux%u)", n, s.extent.width, s.extent.height);
+        log("overlay(vk): свопчейн готовий (образів=%u, %ux%u, приховування=%s)",
+            n, s.extent.width, s.extent.height, s.clean_img ? "так" : "ні");
         return ensure_pipeline(s.format, s.rpass);
     }
 
@@ -420,6 +515,58 @@ private:
         } else if (tex_layout_ != VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL) {
             barrier(cb, tex_layout_, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
             tex_layout_ = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        }
+
+        // Приховування від OBS: ДО малювання чату знімаємо ЧИСТИЙ кадр свопчейна
+        // у clean_img. У хуку vkCmdCopyImage (див. шар) джерело копії OBS
+        // підміняється на цей знімок — OBS зніме без чату, а на екрані чат лишиться.
+        if (hide_ && s.clean_img) {
+            VkImage bb = s.images[idx];
+            VkImageMemoryBarrier pre[2] = {};
+            pre[0].sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+            pre[0].srcAccessMask = VK_ACCESS_MEMORY_READ_BIT;
+            pre[0].dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+            pre[0].oldLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
+            pre[0].newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+            pre[0].srcQueueFamilyIndex = pre[0].dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+            pre[0].image = bb;
+            pre[0].subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+            pre[1] = pre[0];
+            pre[1].srcAccessMask = 0;
+            pre[1].dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+            pre[1].oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;   // вміст перезапишемо
+            pre[1].newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+            pre[1].image = s.clean_img;
+            vkCmdPipelineBarrier_(cb, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
+                VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0, nullptr, 2, pre);
+
+            VkImageCopy cpy = {};
+            cpy.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+            cpy.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+            cpy.extent = {s.extent.width, s.extent.height, 1};
+            recording_snapshot_ = true;   // хук копії OBS хай НЕ чіпає цей запис
+            vkCmdCopyImage_(cb, bb, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                            s.clean_img, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &cpy);
+            recording_snapshot_ = false;
+
+            VkImageMemoryBarrier post[2] = {};
+            post[0].sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+            post[0].srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+            post[0].dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+            post[0].oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+            post[0].newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;   // OBS читатиме
+            post[0].srcQueueFamilyIndex = post[0].dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+            post[0].image = s.clean_img;
+            post[0].subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+            post[1] = post[0];
+            post[1].srcAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+            post[1].dstAccessMask = VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+            post[1].oldLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+            post[1].newLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;   // назад для render pass
+            post[1].image = bb;
+            vkCmdPipelineBarrier_(cb, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, 0, 0, nullptr, 0, nullptr, 2, post);
+            s.clean_inited = true;
         }
 
         // Рамка чату всередині кадру — частки кадру, масштабуємо під гру.
@@ -509,6 +656,8 @@ private:
         for (auto fe : s.fences) if (fe) vkDestroyFence_(dev_, fe, nullptr);
         if (!s.cmds.empty()) vkFreeCommandBuffers_(dev_, pool_, (uint32_t)s.cmds.size(), s.cmds.data());
         if (s.rpass) vkDestroyRenderPass_(dev_, s.rpass, nullptr);
+        if (s.clean_img) vkDestroyImage_(dev_, s.clean_img, nullptr);
+        if (s.clean_mem) vkFreeMemory_(dev_, s.clean_mem, nullptr);
         s = SwapData{};
     }
 
@@ -557,6 +706,7 @@ private:
     VKF(vkCmdSetViewport); VKF(vkCmdSetScissor);
     VKF(vkCmdPushConstants); VKF(vkCmdDraw);
     VKF(vkCmdPipelineBarrier); VKF(vkCmdCopyBufferToImage);
+    VKF(vkCmdCopyImage);
     VKF(vkCreateSemaphore); VKF(vkDestroySemaphore);
     VKF(vkCreateFence); VKF(vkDestroyFence);
     VKF(vkWaitForFences); VKF(vkResetFences);
@@ -598,6 +748,8 @@ private:
     SharedFrameReader reader_;
     FrameView frame_;
     bool enabled_ = false, logged_ = false;
+    bool hide_ = false;   // ховати від OBS (frame_.hide_from_obs)
+    bool recording_snapshot_ = false;   // ми записуємо копію-знімок (не чіпати в хуку)
 };
 
 }  // namespace hominka
