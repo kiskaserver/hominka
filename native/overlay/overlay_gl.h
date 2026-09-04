@@ -84,6 +84,54 @@
 #ifndef GL_TEXTURE_BINDING_2D
 #define GL_TEXTURE_BINDING_2D 0x8069
 #endif
+#ifndef GL_FUNC_ADD
+#define GL_FUNC_ADD 0x8006
+#endif
+#ifndef GL_BLEND_EQUATION_RGB
+#define GL_BLEND_EQUATION_RGB 0x8009
+#endif
+#ifndef GL_BLEND_EQUATION_ALPHA
+#define GL_BLEND_EQUATION_ALPHA 0x883D
+#endif
+#ifndef GL_COLOR_WRITEMASK
+#define GL_COLOR_WRITEMASK 0x0C23
+#endif
+#ifndef GL_TEXTURE_ALPHA_SIZE
+#define GL_TEXTURE_ALPHA_SIZE 0x805F
+#endif
+#ifndef GL_SAMPLER_BINDING
+#define GL_SAMPLER_BINDING 0x8919
+#endif
+#ifndef GL_UNPACK_SWAP_BYTES
+#define GL_UNPACK_SWAP_BYTES 0x0CF0
+#endif
+#ifndef GL_UNPACK_LSB_FIRST
+#define GL_UNPACK_LSB_FIRST 0x0CF1
+#endif
+#ifndef GL_UNPACK_ROW_LENGTH
+#define GL_UNPACK_ROW_LENGTH 0x0CF2
+#endif
+#ifndef GL_UNPACK_SKIP_ROWS
+#define GL_UNPACK_SKIP_ROWS 0x0CF3
+#endif
+#ifndef GL_UNPACK_SKIP_PIXELS
+#define GL_UNPACK_SKIP_PIXELS 0x0CF4
+#endif
+#ifndef GL_UNPACK_IMAGE_HEIGHT
+#define GL_UNPACK_IMAGE_HEIGHT 0x806E
+#endif
+#ifndef GL_UNPACK_SKIP_IMAGES
+#define GL_UNPACK_SKIP_IMAGES 0x806D
+#endif
+#ifndef GL_PACK_ROW_LENGTH
+#define GL_PACK_ROW_LENGTH 0x0D02
+#endif
+#ifndef GL_PACK_SKIP_ROWS
+#define GL_PACK_SKIP_ROWS 0x0D03
+#endif
+#ifndef GL_PACK_SKIP_PIXELS
+#define GL_PACK_SKIP_PIXELS 0x0D04
+#endif
 
 #ifndef GLchar
 typedef char GLchar;
@@ -125,6 +173,8 @@ struct GL3 {
     void   (APIENTRY *VertexAttribPointer)(GLuint, GLint, GLenum, GLboolean, GLsizei, const void*) = nullptr;
     void   (APIENTRY *EnableVertexAttribArray)(GLuint) = nullptr;
     void   (APIENTRY *ActiveTexture)(GLenum) = nullptr;
+    void   (APIENTRY *BlendEquationSeparate)(GLenum, GLenum) = nullptr;
+    void   (APIENTRY *BindSampler)(GLuint, GLuint) = nullptr;
     // FBO
     void   (APIENTRY *GenFramebuffers)(GLsizei, GLuint*) = nullptr;
     void   (APIENTRY *BindFramebuffer)(GLenum, GLuint) = nullptr;
@@ -210,7 +260,23 @@ private:
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+        // Скидаємо ВСЕ стан розпакування пікселів: сучасні ігри (Minecraft для
+        // своїх атласів) лишають GL_UNPACK_ROW_LENGTH та skip-параметри
+        // ненульовими, і тоді glTexImage2D читає наші пікселі з чужим кроком —
+        // на екрані каша замість чату. Ставимо стандартні значення й повертаємо.
+        GLint uAlign = 4, uRow = 0, uSkipR = 0, uSkipP = 0, uSwap = 0, uLsb = 0;
+        glGetIntegerv(GL_UNPACK_ALIGNMENT, &uAlign);
+        glGetIntegerv(GL_UNPACK_ROW_LENGTH, &uRow);
+        glGetIntegerv(GL_UNPACK_SKIP_ROWS, &uSkipR);
+        glGetIntegerv(GL_UNPACK_SKIP_PIXELS, &uSkipP);
+        glGetIntegerv(GL_UNPACK_SWAP_BYTES, &uSwap);
+        glGetIntegerv(GL_UNPACK_LSB_FIRST, &uLsb);
         glPixelStorei(GL_UNPACK_ALIGNMENT, 4);
+        glPixelStorei(GL_UNPACK_ROW_LENGTH, 0);
+        glPixelStorei(GL_UNPACK_SKIP_ROWS, 0);
+        glPixelStorei(GL_UNPACK_SKIP_PIXELS, 0);
+        glPixelStorei(GL_UNPACK_SWAP_BYTES, 0);
+        glPixelStorei(GL_UNPACK_LSB_FIRST, 0);
         if (f.width != tex_w_ || f.height != tex_h_) {
             glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, f.width, f.height, 0,
                          GL_BGRA_EXT, GL_UNSIGNED_BYTE, f.pixels);
@@ -219,6 +285,14 @@ private:
             glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, f.width, f.height,
                             GL_BGRA_EXT, GL_UNSIGNED_BYTE, f.pixels);
         }
+        // Повертаємо стан розпакування, як був — щоб не зламати завантаження
+        // текстур самою грою після нас.
+        glPixelStorei(GL_UNPACK_ALIGNMENT, uAlign);
+        glPixelStorei(GL_UNPACK_ROW_LENGTH, uRow);
+        glPixelStorei(GL_UNPACK_SKIP_ROWS, uSkipR);
+        glPixelStorei(GL_UNPACK_SKIP_PIXELS, uSkipP);
+        glPixelStorei(GL_UNPACK_SWAP_BYTES, uSwap);
+        glPixelStorei(GL_UNPACK_LSB_FIRST, uLsb);
         tex_seq_ = f.seq;
     }
 
@@ -363,11 +437,29 @@ private:
         GLint sBlendS = GL_SRC_ALPHA, sBlendD = GL_ONE_MINUS_SRC_ALPHA;
         glGetIntegerv(GL_BLEND_SRC, &sBlendS);
         glGetIntegerv(GL_BLEND_DST, &sBlendD);
+        // Ігри лишають нестандартні стани, через які наше змішування «не діє» і
+        // напівпрозорий фон чату виходить чорним прямокутником: рівняння
+        // змішування ≠ FUNC_ADD (сучасний Minecraft ставить своє) або вимкнений
+        // запис якогось каналу маскою кольору. Зберігаємо й ставимо стандартні.
+        GLboolean sMask[4] = {1, 1, 1, 1};
+        glGetBooleanv(GL_COLOR_WRITEMASK, sMask);
+        GLint sEqRGB = GL_FUNC_ADD, sEqA = GL_FUNC_ADD;
+        glGetIntegerv(GL_BLEND_EQUATION_RGB, &sEqRGB);
+        glGetIntegerv(GL_BLEND_EQUATION_ALPHA, &sEqA);
 
         g3_.UseProgram(prog_);
         g3_.ActiveTexture(GL_TEXTURE0);
         glGetIntegerv(GL_TEXTURE_BINDING_2D, &sTex0);
         glBindTexture(GL_TEXTURE_2D, tex_);
+        // Сучасні ігри (Minecraft) тримають на блоці 0 ОБ'ЄКТ-СЕМПЛЕР (glBindSampler)
+        // із мінфільтром під міпмапи. Він ПЕРЕКРИВАЄ параметри нашої текстури, і та
+        // без міпмап стає «неповною» — семпл повертає (0,0,0,1), тобто чорний
+        // напівпрозорий прямокутник без вмісту. Знімаємо семплер на час малюнка.
+        GLint sSampler = 0;
+        if (g3_.BindSampler) {
+            glGetIntegerv(GL_SAMPLER_BINDING, &sSampler);
+            if (sSampler) g3_.BindSampler(0, 0);
+        }
         g3_.Uniform1i(u_tex_, 0);
         g3_.Uniform1f(u_opacity_, last_.opacity / 255.f);
 
@@ -380,12 +472,17 @@ private:
         glDisable(GL_SCISSOR_TEST);
         glEnable(GL_BLEND);
         glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+        glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+        if (g3_.BlendEquationSeparate) g3_.BlendEquationSeparate(GL_FUNC_ADD, GL_FUNC_ADD);
 
         glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
 
         // Повертаємо все як було.
         glBindTexture(GL_TEXTURE_2D, (GLuint)sTex0);
+        if (g3_.BindSampler && sSampler) g3_.BindSampler(0, (GLuint)sSampler);
         glBlendFunc((GLenum)sBlendS, (GLenum)sBlendD);
+        glColorMask(sMask[0], sMask[1], sMask[2], sMask[3]);
+        if (g3_.BlendEquationSeparate) g3_.BlendEquationSeparate((GLenum)sEqRGB, (GLenum)sEqA);
         set_enabled_gl(GL_BLEND, wasBlend);
         set_enabled_gl(GL_DEPTH_TEST, wasDepth);
         set_enabled_gl(GL_CULL_FACE, wasCull);
@@ -543,6 +640,8 @@ private:
         g3_.VertexAttribPointer = (void (APIENTRY*)(GLuint, GLint, GLenum, GLboolean, GLsizei, const void*))load_gl_proc("glVertexAttribPointer");
         g3_.EnableVertexAttribArray = (void (APIENTRY*)(GLuint))load_gl_proc("glEnableVertexAttribArray");
         g3_.ActiveTexture = (void (APIENTRY*)(GLenum))load_gl_proc("glActiveTexture");
+        g3_.BlendEquationSeparate = (void (APIENTRY*)(GLenum, GLenum))load_gl_proc("glBlendEquationSeparate");
+        g3_.BindSampler = (void (APIENTRY*)(GLuint, GLuint))load_gl_proc("glBindSampler");
         g3_.GenFramebuffers = (void (APIENTRY*)(GLsizei, GLuint*))load_gl_proc("glGenFramebuffers");
         g3_.BindFramebuffer = (void (APIENTRY*)(GLenum, GLuint))load_gl_proc("glBindFramebuffer");
         g3_.FramebufferTexture2D = (void (APIENTRY*)(GLenum, GLenum, GLenum, GLuint, GLint))load_gl_proc("glFramebufferTexture2D");
