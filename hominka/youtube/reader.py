@@ -50,9 +50,13 @@ class YouTubeChat(QObject):
             self._stop.wait(RETRY)
             return
         self.status.emit("")
+        # Для канальних сторонніх емоутів (7TV/BTTV) потрібен UC-id ведучого.
+        # Якщо канал задано саме ним — беремо як є; інакше канальних немає,
+        # лишаються загальні (їх додають і без id).
+        yt_id = self.channel if (self.channel.startswith("UC") and len(self.channel) == 24) else ""
         first = True
         while not self._stop.is_set() and cont:
-            events, cont, pause = poll(key, ver, cont)
+            events, cont, pause = poll(key, ver, cont, yt_id)
             # Перша пачка — це історія чату; сипати нею в стрічку ні до чого.
             if not first:
                 for e in events:

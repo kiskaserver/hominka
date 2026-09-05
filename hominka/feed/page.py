@@ -91,15 +91,41 @@ function esc(s) {
   return String(s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 }
 
+// Пунктуація, яку відриваємо від кінця слова: «Kappa!» — це емоут Kappa плюс «!».
+const PUNCT = '.,!?…:;)]}»';
+
+function textPart(s) {
+  return esc(s).replace(MENTION, m => '<span class="at">' + m + '</span>');
+}
+function emImg(url, code) {
+  return '<img class="em" src="' + esc(url) + '" alt="' + esc(code) + '">';
+}
+
 function body(text, emotes) {
-  let html = esc(text);
-  // Спершу емоути (їхні коди вже екрановані так само), потім звертання.
+  const url = {};
+  let any = false;
   for (const e of emotes || []) {
-    const code = esc(e.code);
-    if (!code) continue;
-    html = html.split(code).join('<img class="em" src="' + esc(e.url) + '" alt="' + code + '">');
+    if (e && e.code && !(e.code in url)) { url[e.code] = e.url; any = true; }
   }
-  return html.replace(MENTION, m => '<span class="at">' + m + '</span>');
+  if (!any) return textPart(text);
+
+  // Емоут — ОКРЕМЕ слово: пробіл ліворуч дає сам поділ, праворуч допускаємо
+  // хвіст пунктуації. Так «Kappa!» лишається емоутом, а короткий код більше не
+  // спалахує всередині довшого слова («cat» у «category», «o7» у «hello7»).
+  let out = '';
+  for (const t of text.split(/(\\s+)/)) {
+    if (!t) continue;
+    if (t in url) { out += emImg(url[t], t); continue; }
+    let b = t.length;
+    while (b > 0 && PUNCT.indexOf(t[b - 1]) >= 0) b--;
+    const core = t.slice(0, b);
+    if (b < t.length && core && (core in url)) {
+      out += emImg(url[core], core) + textPart(t.slice(b));
+    } else {
+      out += textPart(t);
+    }
+  }
+  return out;
 }
 
 function trim() { while (list.children.length > MAX) list.removeChild(list.firstChild); }

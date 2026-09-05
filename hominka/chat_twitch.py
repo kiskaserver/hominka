@@ -19,6 +19,7 @@ from PySide6.QtCore import QObject, QTimer, QUrl, Signal
 from PySide6.QtWebSockets import QWebSocket
 
 from . import chatsources as cs
+from .thirdparty import EMOTES
 
 
 IRC_URL = "wss://irc-ws.chat.twitch.tv:443"
@@ -184,11 +185,15 @@ class TwitchChat(QObject):
         amount = money(tags)
         if not text.strip() and not amount:
             return
+        # Рідні емоути Twitch (тег emotes) плюс сторонні 7TV/BTTV/FFZ, знайдені
+        # в тексті. room-id — числовий id каналу, за ним тягнуться набори.
+        emotes = parse_emotes(tags.get("emotes", ""), text)
+        emotes = EMOTES.append(emotes, "twitch", tags.get("room-id", ""), text)
         self.event.emit(cs.message(
             cs.TWITCH, login, tags.get("display-name") or login, text,
             id=tags.get("id", ""), color=tags.get("color", ""),
             badges=map_badges(tags.get("badges", "")),
-            emotes=parse_emotes(tags.get("emotes", ""), text),
+            emotes=emotes,
             reply=tags.get("reply-parent-display-name", ""),
             amount=amount,
             event="bits" if amount else "",

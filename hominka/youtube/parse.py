@@ -1,6 +1,7 @@
 """Розбір відповіді чату: повідомлення, значки, гроші, видалення."""
 
 from .. import chatsources as cs
+from ..thirdparty import EMOTES
 from .net import jget, runs_to_text
 
 def author_badges(items):
@@ -22,15 +23,16 @@ def author_badges(items):
     return out
 
 
-def parse_actions(actions):
-    """Дії чату → спільні події (див. chatsources)."""
+def parse_actions(actions, channel_id=""):
+    """Дії чату → спільні події (див. chatsources). channel_id — UC-id ведучого
+    для сторонніх канальних емоутів (може бути порожнім)."""
     out = []
     for a in actions:
         if not isinstance(a, dict):
             continue
         item = jget(a, "addChatItemAction", "item")
         if item:
-            ev = _item(item)
+            ev = _item(item, channel_id)
             if ev:
                 out.append(ev)
             continue
@@ -46,7 +48,7 @@ def parse_actions(actions):
     return out
 
 
-def _item(item):
+def _item(item, channel_id=""):
     for key, amount_path in (("liveChatTextMessageRenderer", None),
                              ("liveChatPaidMessageRenderer", ("purchaseAmountText", "simpleText")),
                              ("liveChatPaidStickerRenderer", ("purchaseAmountText", "simpleText"))):
@@ -59,6 +61,9 @@ def _item(item):
             return None
         name = (jget(r, "authorName", "simpleText") or "").lstrip("@")
         channel = r.get("authorExternalChannelId") or ""
+        # Рідні емодзі YouTube (runs) + сторонні 7TV/BTTV (загальні завжди,
+        # канальні — коли відомий UC-id ведучого).
+        emotes = EMOTES.append(emotes, "youtube", channel_id, text)
         return cs.message(
             cs.YOUTUBE, "yt:" + channel if channel else name.lower(), name, text,
             id=r.get("id", ""), badges=author_badges(r.get("authorBadges")),

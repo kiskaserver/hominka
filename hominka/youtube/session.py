@@ -74,8 +74,11 @@ def open_session(video_id: str):
     return key, ver, cont
 
 
-def poll(key: str, ver: str, cont: str):
-    """Один запит get_live_chat → (події, наступний continuation, пауза)."""
+def poll(key: str, ver: str, cont: str, channel_id: str = ""):
+    """Один запит get_live_chat → (події, наступний continuation, пауза).
+
+    channel_id — UC-id ведучого (для сторонніх канальних емоутів); може бути
+    порожнім, тоді діють лише загальні."""
     body = json.dumps({
         "context": {"client": {"clientName": "WEB", "clientVersion": ver, "hl": "en"}},
         "continuation": cont,
@@ -97,4 +100,4 @@ def poll(key: str, ver: str, cont: str):
             nxt = node["continuation"]
             timeout = node.get("timeoutMs", 0) / 1000.0
             break
-    return parse_actions(lc.get("actions") or []), nxt, max(timeout, POLL_MIN)
+    return parse_actions(lc.get("actions") or [], channel_id), nxt, max(timeout, POLL_MIN)

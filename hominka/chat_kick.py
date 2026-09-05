@@ -18,6 +18,7 @@ from PySide6.QtCore import QObject, QTimer, QUrl, Signal
 from PySide6.QtWebSockets import QWebSocket
 
 from . import chatsources as cs
+from .thirdparty import EMOTES
 
 # Публічний ключ Pusher у Kick (не секрет — зашитий у клієнті сайту).
 PUSHER_URL = ("wss://ws-us2.pusher.com/app/32cbd69e4b950bf97679"
@@ -89,6 +90,7 @@ class KickChat(QObject):
         super().__init__(parent)
         self.channel = (channel or "").strip().lower()
         self.chatroom = 0
+        self.kick_id = 0        # числовий id каналу — для сторонніх емоутів 7TV
         self.ws = QWebSocket()
         self.ws.connected.connect(self._on_open)
         self.ws.textMessageReceived.connect(self._on_text)
@@ -125,6 +127,8 @@ class KickChat(QObject):
                                          headers={"User-Agent": UA, "Accept": "application/json"})
             data = json.loads(urllib.request.urlopen(req, timeout=20).read())
             self.chatroom = int((data.get("chatroom") or {}).get("id") or 0)
+            # id каналу (не кімнати) — саме його чекає 7TV для набору Kick.
+            self.kick_id = int(data.get("id") or 0)
         except Exception as e:      # мережа, Cloudflare, немає такого каналу
             self.status.emit("Kick: не вдалося знайти канал (%s)" % e)
             self.chatroom = 0
@@ -214,6 +218,8 @@ class KickChat(QObject):
             return
         identity = sender.get("identity") or {}
         meta = data.get("metadata") or {}
+        # Сторонні емоути 7TV каналу (BTTV/FFZ каналів Kick не мають) + загальні.
+        emotes = EMOTES.append(emotes, "kick", self.kick_id or "", text)
         self.event.emit(cs.message(
             cs.KICK, nick_of(sender), name, text,
             id=data.get("id") or "",
