@@ -125,6 +125,12 @@ class Overlay(SourcesMixin, UpdatingMixin, ConfigMixin, LookMixin, QMainWindow):
         # змогу його вимкнути.
         self.keep_top = True
         self._topmost = fullscreen.TopMostKeeper(self)
+        # Форсування композиції над повноекранною грою (див. compositor.py):
+        # крихітне не-приховане вікно, що не дає DWM піти в незалежний flip, —
+        # інакше чат зникає у грі (Hunt: Showdown). Створюємо, показуємо лише
+        # коли попереду повноекранна гра.
+        from .compositor import CompositionKeeper
+        self._compositor = CompositionKeeper() if IS_WINDOWS else None
 
         # Справжній чат у грі через інжектор (native/). Створюємо лениво —
         # тільки коли вмикають, бо це друге приховане вікно з рушієм браузера.
@@ -231,6 +237,30 @@ class Overlay(SourcesMixin, UpdatingMixin, ConfigMixin, LookMixin, QMainWindow):
         self._capture_timer.timeout.connect(self._topmost.tick)
         self._capture_timer.timeout.connect(self._refresh_fullscreen_state)
         self._capture_timer.start()
+
+        # Швидкий таймер — тільки для повноекранної гри: часто пере-піднімаємо чат
+        # (FSO-гра сидить у вищому z-band, одноразового підняття мало) і тримаємо
+        # вікно-композитор-кипер, щоб DWM не йшов у незалежний flip і чат було
+        # видно. Раз на секунду тут замало — гра встигає накрити на пів секунди.
+        if IS_WINDOWS:
+            self._over_game_timer = QTimer(self)
+            self._over_game_timer.setInterval(350)
+            self._over_game_timer.timeout.connect(self._keep_over_game)
+            self._over_game_timer.start()
+
+    def _keep_over_game(self):
+        """Поки попереду повноекранна гра — тримаємо чат зверху й форсуємо
+        композицію кипером. Інакше кипер ховаємо (щоб не лишати цятку на столі)."""
+        if not IS_WINDOWS or self._compositor is None:
+            return
+        game = fullscreen.fullscreen_game() if self.keep_top else None
+        if game and self.isVisible():
+            _hwnd, mon = game
+            fullscreen.raise_topmost(self)                 # чат — на самий верх
+            self._compositor.place(mon.left, mon.top)      # кипер у кутку монітора гри
+            fullscreen.raise_topmost(self._compositor)     # і його теж зверху
+        else:
+            self._compositor.hide_keeper()
 
 
     def set_custom_css(self, css: str):
@@ -526,6 +556,12 @@ class Overlay(SourcesMixin, UpdatingMixin, ConfigMixin, LookMixin, QMainWindow):
     def closeEvent(self, e):
         if self.game_overlay is not None:
             self.game_overlay.close()
+        if getattr(self, "_compositor", None) is not None:
+            try:
+                self._compositor.close()
+                self._compositor.deleteLater()
+            except Exception:
+                pass
         # Знімаємо Vulkan-шар з реєстру — щоб він не вантажився в чужі Vulkan-ігри
         # після того, як Hominka закрито.
         try:

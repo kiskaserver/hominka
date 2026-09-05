@@ -236,19 +236,44 @@ def state() -> dict:
             "can_overlay": True, "hwnd": info["hwnd"]}
 
 
-class TopMostKeeper:
-    """Тримає наше вікно зверху.
+def raise_topmost(win):
+    """Пере-піднімає вікно на самий верх без активації/руху/розміру.
 
-    Тонкість: над ЕКСКЛЮЗИВНИМ повноекранним смикати SetWindowPos не можна —
-    будь-яка зміна z-порядку вибиває гру з повного екрана (те саме мерехтіння,
-    на яке скаржаться). Але там чат і так не видно, тож просто не чіпаємо.
-    А от у БЕЗРАМКОВОМУ повноекранному (композований DWM — сучасні ігри як Hunt:
-    Showdown) гра, входячи в режим, сама ставить собі HWND_TOPMOST і накриває
-    нас, НЕ міняючи вікна переднього плану. Тому реагувати «лише на зміну
-    переднього вікна» мало — там треба пере-піднімати щотакту (це безпечно:
-    вікно композоване, а SetWindowPos на вже-topmost без руху/розміру/активації
-    не мерехтить). У решті випадків (звичайне вікно, стіл) досить реакції на зміну.
-    """
+    Саме «поставити HWND_TOPMOST», а не перемикати TOPMOST↔NOTOPMOST: перемикання
+    якраз і мерехтить, а повторне встановлення того самого topmost — дешева
+    операція без видимого ефекту. Над повноекранною грою її треба робити часто:
+    гра сидить у вищому z-band (FSO), і одноразового підняття мало."""
+    if not available():
+        return
+    try:
+        user32.SetWindowPos(int(win.winId()), HWND_TOPMOST, 0, 0, 0, 0,
+                            SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE)
+    except Exception:
+        pass
+
+
+def fullscreen_game():
+    """Якщо попереду ПОВНОЕКРАННА гра — повертає (hwnd, монітор), інакше None.
+
+    І «безрамковий» (FSO/незалежний flip), і «повноекранний» (SHQuery каже
+    D3D-fullscreen) — усе це кейси, де гра сканується поверх композиції й накриває
+    оверлей. Для звичайного вікна/столу цього не робимо. Класифікація — у state();
+    тут просто зводимо два повноекранні різновиди в один сигнал."""
+    st = state()
+    if st.get("kind") in ("borderless", "exclusive"):
+        hwnd = st.get("hwnd")
+        if hwnd:
+            return hwnd, monitor_rect(hwnd)
+    return None
+
+
+class TopMostKeeper:
+    """Тримає наше вікно зверху, реагуючи на зміну вікна переднього плану.
+
+    Це м'який, загальний випадок (перемикання між звичайними вікнами й столом);
+    смикати щотакту тут ні до чого. Агресивне утримання над ПОВНОЕКРАННОЮ грою
+    (де гра постійно перебиває z-band) робить окремий швидкий таймер у overlay.py
+    разом із форсуванням композиції (compositor.py)."""
 
     def __init__(self, win):
         self.win = win
@@ -258,22 +283,11 @@ class TopMostKeeper:
     def tick(self):
         if not (self.enabled and available() and self.win.isVisible()):
             return
-        st = state()
-        current = st.get("hwnd", 0)
-        changed = current != self._last
-        self._last = current
-        kind = st.get("kind")
-        if kind == "exclusive":
-            return                      # там чата не видно, а підняття лише мерехтить
-        # Безрамковий повноекранний постійно перебиває z-порядок на себе —
-        # тримаємось зверху щотакту; інакше досить одного разу на зміну вікна.
-        if not (changed or kind == "borderless"):
+        current = user32.GetForegroundWindow()
+        if current == self._last:
             return
-        try:
-            user32.SetWindowPos(int(self.win.winId()), HWND_TOPMOST, 0, 0, 0, 0,
-                                SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE)
-        except Exception:
-            pass          # не вийшло — вікно просто лишиться там, де було
+        self._last = current
+        raise_topmost(self.win)
 
 
 def make_borderless(hwnd: int) -> bool:

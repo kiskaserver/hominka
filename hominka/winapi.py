@@ -142,6 +142,11 @@ class CaptureGuard(QObject):
 
     def eventFilter(self, obj, event):
         if event.type() == QEvent.Type.Show and isinstance(obj, QWidget) and obj.isWindow():
+            # Вікно-композитор-кипер (compositor.py) НАВМИСНО не ховаємо: воно має
+            # рахуватися DWM, інакше не змусить композицію. 4 майже-невидимі
+            # пікселі в кадрі OBS однаково непомітні.
+            if obj.objectName() == "hominkaCompositionKeeper":
+                return False
             exclude_from_capture(obj)
             # Windows 10: подія Show приходить ще ДО того, як вікно реально
             # показалося й склалося композитором, і застосоване лише в цю мить
@@ -173,6 +178,8 @@ def hide_new_windows_from_capture():
     for w in app.topLevelWidgets():
         if not w.isVisible():
             continue
+        if w.objectName() == "hominkaCompositionKeeper":
+            continue          # навмисно НЕ приховуємо (див. compositor.py)
         try:
             hwnd = int(w.winId())
         except Exception:
