@@ -140,6 +140,9 @@ class Overlay(SourcesMixin, UpdatingMixin, ConfigMixin, LookMixin, QMainWindow):
         from .dcomp import DCompOverlay
         self._dcomp = DCompOverlay() if IS_WINDOWS else None
         self.dcomp_on = False
+        # Продюсер кадру для dcomp — граблить ГОЛОВНЕ вікно чату (без другого
+        # веб-вью, який валив рушій під грою). Створюємо ліниво при вмиканні.
+        self._dcomp_producer = None
 
         # Справжній чат у грі через інжектор (native/). Створюємо лениво —
         # тільки коли вмикають, бо це друге приховане вікно з рушієм браузера.
@@ -267,8 +270,12 @@ class Overlay(SourcesMixin, UpdatingMixin, ConfigMixin, LookMixin, QMainWindow):
             return
         try:
             if self.isVisible():
-                g = self.frameGeometry()
-                self._dcomp.place(g.x(), g.y())
+                # Ставимо оверлей рівно там, де НА ЕКРАНІ лежить сам чат (view),
+                # а не все вікно: продюсер знімає саме view, тож пікселі й позиція
+                # збігаються (рамка/заголовок у кадр не входять).
+                v = self.view
+                tl = v.mapToGlobal(v.rect().topLeft())
+                self._dcomp.place(tl.x(), tl.y())
             else:
                 self._dcomp.hide()
         except Exception:
@@ -540,16 +547,19 @@ class Overlay(SourcesMixin, UpdatingMixin, ConfigMixin, LookMixin, QMainWindow):
         # необроблений виняток абортить процес). Логуємо й тихо вимикаємось.
         try:
             if self.dcomp_on:
-                ov = self._ensure_game_overlay()
-                ov.set_source(self.mode, self.url, self.is_yt)
-                ov.set_enabled(True)      # продюсер пише кадр у спільну памʼять
-                self._dcomp.start()       # нативне вікно показує його; позицію
+                # Кадр беремо з ГОЛОВНОГО вікна чату (MainViewProducer) — без
+                # другого QWebEngineView, який валив рушій браузера на view.load()
+                # під грою (див. faulthandler-трейс). Нічого не завантажуємо.
+                if self._dcomp_producer is None:
+                    from .gameoverlay import MainViewProducer
+                    self._dcomp_producer = MainViewProducer(self)
+                self._dcomp_producer.set_enabled(True)
+                self._dcomp.start()       # нативне вікно показує кадр; позицію
                                           # веде _keep_over_game (за вікном чату)
             else:
                 self._dcomp.stop()
-                # Продюсера гасимо, лише якщо його не тримає інжект-оверлей.
-                if not self.game_on and self.game_overlay is not None:
-                    self.game_overlay.set_enabled(False)
+                if self._dcomp_producer is not None:
+                    self._dcomp_producer.set_enabled(False)
         except Exception as e:
             self.dcomp_on = False
             try:
@@ -620,6 +630,11 @@ class Overlay(SourcesMixin, UpdatingMixin, ConfigMixin, LookMixin, QMainWindow):
         if getattr(self, "_dcomp", None) is not None:
             try:
                 self._dcomp.stop()
+            except Exception:
+                pass
+        if getattr(self, "_dcomp_producer", None) is not None:
+            try:
+                self._dcomp_producer.close()
             except Exception:
                 pass
         # Знімаємо Vulkan-шар з реєстру — щоб він не вантажився в чужі Vulkan-ігри

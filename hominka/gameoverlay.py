@@ -534,3 +534,68 @@ class GameOverlay(QObject):
 def _now() -> float:
     import time
     return time.monotonic()
+
+
+class MainViewProducer(QObject):
+    """Пише кадр чату у спільну памʼять, ГРАБлячи ГОЛОВНЕ вікно чату (win.view) —
+    БЕЗ другого QWebEngineView.
+
+    Навіщо окремо від GameOverlay: другий веб-вью валив рушій браузера на
+    view.load(), коли поруч уже працює гра (навантажений GPU) — faulthandler
+    вказав саме туди. Тут ми НІЧОГО не завантажуємо: головне вікно вже малює чат,
+    ми лише знімаємо його готовий кадр. grab() головного вікна працює (на цьому ж
+    тримався і старий продюсер, тільки він показував власне вікно за екраном).
+
+    Для dcomp-оверлея розкладку (позицію/розмір) веде overlay.py/dcomp.py за
+    вікном чату; сюди пишемо лише пікселі + прозорість, рамку лишаємо 0,0,1,1.
+    """
+
+    ACTIVE_MS = 120   # ~8 к/с — чат здебільшого статичний, знімок дешевий
+
+    def __init__(self, win):
+        super().__init__()
+        self.win = win
+        self.writer = SharedFrameWriter()
+        self._hb = 0
+        self._last_crc = 0
+        self._timer = QTimer(self)
+        self._timer.timeout.connect(self._tick)
+
+    def ok(self) -> bool:
+        return self.writer.ok()
+
+    def set_enabled(self, on: bool):
+        if on and self.writer.ok():
+            self._tick()
+            self._timer.start(self.ACTIVE_MS)
+        else:
+            self._timer.stop()
+            self.writer.set_enabled(False)
+
+    def close(self):
+        self._timer.stop()
+        self.writer.close()
+
+    def _tick(self):
+        if not self.writer.ok():
+            return
+        v = getattr(self.win, "view", None)
+        if v is None:
+            return
+        img = v.grab().toImage().convertToFormat(QImage.Format_ARGB32)
+        w, h = img.width(), img.height()
+        if w == 0 or h == 0:
+            return
+        if w > MAX_W or h > MAX_H:
+            img = img.scaled(min(w, MAX_W), min(h, MAX_H),
+                             Qt.KeepAspectRatio, Qt.SmoothTransformation)
+        try:
+            crc = zlib.crc32(bytes(memoryview(img.constBits())))
+        except Exception:
+            crc = self._last_crc + 1
+        if crc == self._last_crc:
+            return
+        self._last_crc = crc
+        self._hb += 1
+        op = int(max(0.0, min(1.0, self.win.windowOpacity())) * 255)
+        self.writer.write(img, 0.0, 0.0, 1.0, 1.0, op, self._hb)
