@@ -32,8 +32,31 @@ def _version_channel() -> str:
         return APP_VERSION
 
 
+def _install_crash_log():
+    """Записує НЕОБРОБЛЕНІ винятки у %TEMP%\\hominka-overlay.log (той самий журнал,
+    що й нативна частина) — інакше в зібраній програмі без консолі краш не лишає
+    жодного сліду. Не заважає стандартній поведінці (кличемо оригінальний хук)."""
+    import traceback, tempfile
+    from datetime import datetime
+    prev = sys.excepthook
+
+    def hook(exctype, value, tb):
+        try:
+            p = os.path.join(tempfile.gettempdir(), "hominka-overlay.log")
+            with open(p, "a", encoding="utf-8") as f:
+                f.write("[%s] НЕОБРОБЛЕНИЙ ВИНЯТОК:\n"
+                        % datetime.now().strftime("%H:%M:%S.%f")[:-3])
+                traceback.print_exception(exctype, value, tb, file=f)
+        except Exception:
+            pass
+        prev(exctype, value, tb)
+
+    sys.excepthook = hook
+
+
 def main():
     url = sys.argv[1] if len(sys.argv) > 1 else None
+    _install_crash_log()
     os.environ.setdefault("QTWEBENGINE_CHROMIUM_FLAGS", "--enable-features=TranslucentWindows")
     hide_internal_folder()
     badge = _version_channel()

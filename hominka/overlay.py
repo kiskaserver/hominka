@@ -258,18 +258,21 @@ class Overlay(SourcesMixin, UpdatingMixin, ConfigMixin, LookMixin, QMainWindow):
             self._over_game_timer.start()
 
     def _keep_over_game(self):
-        """Веде DirectComposition-оверлей: поки попереду повноекранна гра —
-        показуємо його рівно за вікном чату (позиція; розмір веде сам процес);
-        інакше ховаємо, щоб на робочому столі не дублювати вікно чату. Так само
-        воно «завершується» разом із виходом із гри (просто ховається)."""
+        """Тримає DirectComposition-оверлей рівно за вікном чату, поки тумблер
+        увімкнено й вікно чату видиме. БЕЗ завʼязки на «попереду гра»: та перевірка
+        була ненадійна (Alt-Tab — і спереду вже не гра, чат зникав). Оверлей
+        клік-скрізь, а вікно чату під ним на тому ж місці, тож на робочому столі
+        двоєння не видно, а взаємодія з вікном чату проходить крізь нього."""
         if not IS_WINDOWS or self._dcomp is None or not self.dcomp_on:
             return
-        game = fullscreen.fullscreen_game()
-        if game and self.isVisible():
-            g = self.frameGeometry()
-            self._dcomp.place(g.x(), g.y())
-        else:
-            self._dcomp.hide()
+        try:
+            if self.isVisible():
+                g = self.frameGeometry()
+                self._dcomp.place(g.x(), g.y())
+            else:
+                self._dcomp.hide()
+        except Exception:
+            pass
 
 
     def set_custom_css(self, css: str):
@@ -533,18 +536,27 @@ class Overlay(SourcesMixin, UpdatingMixin, ConfigMixin, LookMixin, QMainWindow):
         self.dcomp_on = bool(on)
         if self._dcomp is None:
             return
-        if self.dcomp_on:
-            ov = self._ensure_game_overlay()
-            ov.set_source(self.mode, self.url, self.is_yt)
-            ov.set_enabled(True)          # продюсер пише кадр у спільну памʼять
-            self._dcomp.start()           # нативне вікно показує його
-            # Позицію/показ веде _keep_over_game: над грою — показати за вікном
-            # чату, на робочому столі — сховати (щоб не дублювати вікно чату).
-        else:
-            self._dcomp.stop()
-            # Продюсера гасимо, лише якщо його не тримає інжект-оверлей.
-            if not self.game_on and self.game_overlay is not None:
-                self.game_overlay.set_enabled(False)
+        # Захищаємось: помилка тут НЕ має роняти всю програму (у слоті Qt
+        # необроблений виняток абортить процес). Логуємо й тихо вимикаємось.
+        try:
+            if self.dcomp_on:
+                ov = self._ensure_game_overlay()
+                ov.set_source(self.mode, self.url, self.is_yt)
+                ov.set_enabled(True)      # продюсер пише кадр у спільну памʼять
+                self._dcomp.start()       # нативне вікно показує його; позицію
+                                          # веде _keep_over_game (за вікном чату)
+            else:
+                self._dcomp.stop()
+                # Продюсера гасимо, лише якщо його не тримає інжект-оверлей.
+                if not self.game_on and self.game_overlay is not None:
+                    self.game_overlay.set_enabled(False)
+        except Exception as e:
+            self.dcomp_on = False
+            try:
+                from .gameoverlay import _diag
+                _diag("set_dcomp_overlay помилка: %r" % (e,))
+            except Exception:
+                pass
 
     def inject_game(self, hwnd: int):
         """Кладе overlay.dll у вікно hwnd і, якщо вдалося, вмикає продюсера."""
