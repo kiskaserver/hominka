@@ -19,6 +19,7 @@ from PySide6.QtCore import QObject, QTimer, QUrl, Signal
 from PySide6.QtWebSockets import QWebSocket
 
 from . import chatsources as cs
+from .badges import ICONS as BADGE_ICONS
 from .thirdparty import EMOTES
 
 
@@ -193,6 +194,7 @@ class TwitchChat(QObject):
             cs.TWITCH, login, tags.get("display-name") or login, text,
             id=tags.get("id", ""), color=tags.get("color", ""),
             badges=map_badges(tags.get("badges", "")),
+            badge_icons=BADGE_ICONS.twitch(tags.get("room-id", ""), tags.get("badges", "")),
             emotes=emotes,
             reply=tags.get("reply-parent-display-name", ""),
             amount=amount,

@@ -23,6 +23,21 @@ def author_badges(items):
     return out
 
 
+def author_badge_icons(items):
+    """Справжні картинки значків. У YouTube картинка є лише у значка учасника
+    (customThumbnail); власник/модератор/підтверджений приходять типом іконки
+    без URL — для них лишається текстова плашка."""
+    out = []
+    for b in items or []:
+        r = jget(b, "liveChatAuthorBadgeRenderer") or {}
+        thumbs = jget(r, "customThumbnail", "thumbnails") or []
+        if thumbs:
+            url = (thumbs[-1] or {}).get("url") or ""
+            if url:
+                out.append({"id": "member", "url": url})
+    return out
+
+
 def parse_actions(actions, channel_id=""):
     """Дії чату → спільні події (див. chatsources). channel_id — UC-id ведучого
     для сторонніх канальних емоутів (може бути порожнім)."""
@@ -67,6 +82,7 @@ def _item(item, channel_id=""):
         return cs.message(
             cs.YOUTUBE, "yt:" + channel if channel else name.lower(), name, text,
             id=r.get("id", ""), badges=author_badges(r.get("authorBadges")),
+            badge_icons=author_badge_icons(r.get("authorBadges")),
             emotes=emotes, amount=amount or "",
             event="superchat" if amount else "")
 

@@ -18,6 +18,7 @@ from PySide6.QtCore import QObject, QTimer, QUrl, Signal
 from PySide6.QtWebSockets import QWebSocket
 
 from . import chatsources as cs
+from .badges import ICONS as BADGE_ICONS
 from .thirdparty import EMOTES
 
 # Публічний ключ Pusher у Kick (не секрет — зашитий у клієнті сайту).
@@ -220,11 +221,13 @@ class KickChat(QObject):
         meta = data.get("metadata") or {}
         # Сторонні емоути 7TV каналу (BTTV/FFZ каналів Kick не мають) + загальні.
         emotes = EMOTES.append(emotes, "kick", self.kick_id or "", text)
+        norm = map_badges(identity)
         self.event.emit(cs.message(
             cs.KICK, nick_of(sender), name, text,
             id=data.get("id") or "",
             color=identity.get("color") or "",
-            badges=map_badges(identity),
+            badges=norm,
+            badge_icons=BADGE_ICONS.kick(norm),
             emotes=emotes,
             reply=((meta.get("original_sender") or {}).get("username") or ""),
         ))

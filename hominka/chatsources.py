@@ -113,6 +113,9 @@ def message(platform: str, nick: str, name: str, text: str, **extra) -> dict:
         "text": trim_reply_mention(text, reply),
         "color": extra.get("color", ""),
         "badges": [b for b in extra.get("badges", []) if b in BADGES],
+        # Справжні картинки значків [{id,url}] у пару до нормалізованих badges:
+        # де є іконка, сторінка малює її, де немає — прежню текстову плашку.
+        "badgeIcons": extra.get("badge_icons", []),
         "emotes": extra.get("emotes", []),
         "reply": reply,
         "amount": extra.get("amount", ""),

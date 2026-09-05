@@ -55,6 +55,8 @@ PAGE = """<!doctype html>
   .ico { width:1em; height:1em; vertical-align:-0.15em; margin-right:.3em; }
   .b { display:inline-block; padding:0 .35em; border-radius:.35em; margin-right:.25em;
        font:800 .55em/1.7 'Segoe UI'; vertical-align:.15em; text-shadow:none; }
+  /* Справжня іконка значка (Twitch/Kick/YouTube) на місці текстової плашки. */
+  .bi { height:1.2em; width:auto; vertical-align:-0.2em; margin-right:.25em; }
   .n { margin-right:.35em; }
   /* Двокрапка не всередині ніка, а після нього: коли нік переставляють у
      кінець рядка, «привіт усім Vasya:» виглядає безглуздо — а так її
@@ -138,11 +140,19 @@ const PARTS = {
   // У системної події (рейд, підписка) немає ні автора, ні плашок, ні
   // відповіді — весь її текст уже в частині text. Без цієї перевірки на місці
   // ніка малювалося «undefined:».
-  badges: e => e.kind === 'system' ? '' : (e.badges || []).map(b => {
-            const s = BADGES[b];
-            return s ? '<span class="b" style="background:' + s[1] + ';color:' + s[2] + '">'
-                       + s[0] + '</span>' : '';
-          }).join(''),
+  badges: e => {
+            if (e.kind === 'system') return '';
+            const icons = {};
+            for (const ic of e.badgeIcons || []) if (ic && ic.id) icons[ic.id] = ic.url;
+            return (e.badges || []).map(b => {
+              // Є справжня іконка — малюємо її; немає — прежню текстову плашку.
+              if (icons[b]) return '<img class="bi" src="' + esc(icons[b]) + '" alt="'
+                                    + esc(b) + '" title="' + esc(b) + '">';
+              const s = BADGES[b];
+              return s ? '<span class="b" style="background:' + s[1] + ';color:' + s[2] + '">'
+                         + s[0] + '</span>' : '';
+            }).join('');
+          },
   reply:  e => (e.kind === 'system' || !e.reply) ? '' : '<span class="re">↳ ' + esc(e.reply) + '</span>',
   name:   e => {
             if (e.kind === 'system') return '';
