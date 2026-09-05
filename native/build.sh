@@ -84,6 +84,13 @@ echo ">> x64: testhost-vk.exe (для перевірки Vulkan)"
 x86_64-w64-mingw32-g++ -O2 -s -static -municode -mwindows $DLL_INC \
     "$SRC/testhost/testhost_vk.cpp" -o "$OUT/testhost-vk-x64.exe"
 
+# DirectComposition-оверлей (крок 1: тестовий прямокутник) — окремий процес, що
+# видно поверх гри в незалежному flip і скрито від OBS. У гру нічого не вкладає.
+echo ">> x64: hominka-dcomp.exe (DirectComposition-оверлей)"
+x86_64-w64-mingw32-g++ -O2 -s -static -municode -mwindows \
+    "$SRC/dcomp/dcomp_overlay.cpp" -o "$OUT/hominka-dcomp-x64.exe" \
+    -ld3d11 -ldxgi -ldcomp
+
 echo ""
 echo "Готово. У $OUT:"
 ls -la "$OUT"
