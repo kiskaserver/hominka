@@ -133,6 +133,14 @@ class Overlay(SourcesMixin, UpdatingMixin, ConfigMixin, LookMixin, QMainWindow):
         from .compositor import CompositionKeeper
         self._compositor = CompositionKeeper() if IS_WINDOWS else None
 
+        # Чат поверх гри через DirectComposition (native/hominka-dcomp — див.
+        # dcomp.py): окремий процес, видимий над безрамковим повноекранним
+        # (Hunt), скритий від OBS, БЕЗ інжекту. Кадр бере зі спільної памʼяті
+        # (той самий продюсер, що й інжект-оверлей).
+        from .dcomp import DCompOverlay
+        self._dcomp = DCompOverlay() if IS_WINDOWS else None
+        self.dcomp_on = False
+
         # Справжній чат у грі через інжектор (native/). Створюємо лениво —
         # тільки коли вмикають, бо це друге приховане вікно з рушієм браузера.
         self.game_on = False
@@ -265,6 +273,13 @@ class Overlay(SourcesMixin, UpdatingMixin, ConfigMixin, LookMixin, QMainWindow):
             fullscreen.raise_topmost(self)
         else:
             self._compositor.hide_keeper()
+
+        # DirectComposition-оверлей: тримаємо його вікно там же, де вікно чату
+        # (розмір веде сам процес за кадром). Так чат над грою збігається з тим,
+        # де він на робочому столі.
+        if self.dcomp_on and self._dcomp is not None:
+            g = self.frameGeometry()
+            self._dcomp.place(g.x(), g.y())
 
 
     def set_custom_css(self, css: str):
@@ -520,6 +535,26 @@ class Overlay(SourcesMixin, UpdatingMixin, ConfigMixin, LookMixin, QMainWindow):
                 pass
         self.save_config()
 
+    def set_dcomp_overlay(self, on: bool):
+        """Чат поверх гри через DirectComposition (без інжекту) — працює навіть у
+        безрамковому повноекранному (Hunt), де звичайне вікно чату зникає, і
+        лишається схованим від OBS. Той самий продюсер кадру, що й для інжекту;
+        показує його окремий процес (dcomp.py). Позицію тримає _keep_over_game."""
+        self.dcomp_on = bool(on)
+        if self._dcomp is None:
+            return
+        if self.dcomp_on:
+            ov = self._ensure_game_overlay()
+            ov.set_source(self.mode, self.url, self.is_yt)
+            ov.set_enabled(True)          # продюсер пише кадр у спільну памʼять
+            self._dcomp.start()           # нативне вікно показує його
+            self._dcomp.place(self.x(), self.y())
+        else:
+            self._dcomp.stop()
+            # Продюсера гасимо, лише якщо його не тримає інжект-оверлей.
+            if not self.game_on and self.game_overlay is not None:
+                self.game_overlay.set_enabled(False)
+
     def inject_game(self, hwnd: int):
         """Кладе overlay.dll у вікно hwnd і, якщо вдалося, вмикає продюсера."""
         from . import inject
@@ -577,6 +612,11 @@ class Overlay(SourcesMixin, UpdatingMixin, ConfigMixin, LookMixin, QMainWindow):
             try:
                 self._compositor.close()
                 self._compositor.deleteLater()
+            except Exception:
+                pass
+        if getattr(self, "_dcomp", None) is not None:
+            try:
+                self._dcomp.stop()
             except Exception:
                 pass
         # Знімаємо Vulkan-шар з реєстру — щоб він не вантажився в чужі Vulkan-ігри

@@ -229,6 +229,18 @@ class CardsMixin:
         lay.addWidget(self.fso_hint)
         self.border_pick.currentIndexChanged.connect(self._sync_fso_button)
 
+        # Чат поверх гри БЕЗ інжекту (DirectComposition). Видно навіть у
+        # безрамковому повноекранному (Hunt), де звичайне вікно чату зникає, і
+        # схований від OBS. У гру нічого не вкладається — безпечно для античитів.
+        self.dcomp_box = QCheckBox("Показувати чат поверх гри (без інжекту)", self)
+        self.dcomp_box.setToolTip(
+            "Малює чат окремим шаром через DirectComposition — його видно поверх "
+            "гри навіть у безрамковому повноекранному (як Hunt: Showdown), а OBS "
+            "його не знімає. У гру нічого не вкладається (безпечно для античитів). "
+            "Позиція й розмір — як у вікна чату на робочому столі.")
+        self.dcomp_box.toggled.connect(self.win.set_dcomp_overlay)
+        lay.addWidget(self.dcomp_box)
+
 
         # --- справжній чат у грі (інжектор) ---------------------------------
         # Найпотужніше і найризикованіше: своя бібліотека всередині процесу гри
