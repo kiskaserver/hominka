@@ -289,7 +289,12 @@ class GameOverlay(QObject):
         profile = getattr(win, "profile", None)
         if profile is not None:
             self.view.setPage(QWebEnginePage(profile, self.view))
-        self.view.page().setBackgroundColor(Qt.transparent)
+        # Тло під чатом (як у головного вікна): у головному вікні його малює РАМКА,
+        # а не сторінка, тож у знятому кадрі його не було — і чат поверх гри
+        # виходив без підкладки. Тут задаємо базовий колір самій сторінці, щоб
+        # підкладка потрапила в кадр (і в dcomp-оверлей, і в інжект).
+        self.bg_alpha = float(getattr(win, "bg_alpha", 0.30) or 0.0)
+        self._apply_bg()
         self.view.resize(360, 560)
 
         self.feed = chatfeed.ChatFeed(self.view)
@@ -359,6 +364,21 @@ class GameOverlay(QObject):
     def set_opacity(self, opacity: int):
         self.opacity = max(0, min(255, int(opacity)))
         self._last_crc = 0
+
+    def _apply_bg(self):
+        """Ставить базовий колір сторінки = тло під чатом (rgba 12,12,15,alpha),
+        як у рамці головного вікна. alpha=0 → повністю прозоро (без підкладки)."""
+        from PySide6.QtGui import QColor
+        page = self.view.page()
+        if page is None:
+            return
+        a = int(max(0.0, min(1.0, self.bg_alpha)) * 255)
+        page.setBackgroundColor(QColor(12, 12, 15, a) if a > 0 else Qt.transparent)
+
+    def set_bg_alpha(self, alpha: float):
+        self.bg_alpha = max(0.0, min(1.0, float(alpha)))
+        self._apply_bg()
+        self._last_crc = 0    # змусити перезапис кадру з новим тлом
 
     def set_size(self, w: int, h: int):
         """Розмір прихованого вікна = розмір вікна чату: так пропорції картинки

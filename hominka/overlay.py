@@ -258,28 +258,18 @@ class Overlay(SourcesMixin, UpdatingMixin, ConfigMixin, LookMixin, QMainWindow):
             self._over_game_timer.start()
 
     def _keep_over_game(self):
-        """Поки попереду повноекранна гра — тримаємо чат зверху й форсуємо
-        композицію кипером. Інакше кипер ховаємо (щоб не лишати цятку на столі)."""
-        if not IS_WINDOWS or self._compositor is None:
+        """Веде DirectComposition-оверлей: поки попереду повноекранна гра —
+        показуємо його рівно за вікном чату (позиція; розмір веде сам процес);
+        інакше ховаємо, щоб на робочому столі не дублювати вікно чату. Так само
+        воно «завершується» разом із виходом із гри (просто ховається)."""
+        if not IS_WINDOWS or self._dcomp is None or not self.dcomp_on:
             return
-        game = fullscreen.fullscreen_game() if self.keep_top else None
+        game = fullscreen.fullscreen_game()
         if game and self.isVisible():
-            # Кипер накриваємо РІВНО вікном чату (не 4×4 в кутку): повноцінний
-            # невидимий шар над грою надійніше ламає незалежний flip. Порядок:
-            # спершу піднімаємо кипер, потім чат — щоб чат лишився над ним.
-            g = self.frameGeometry()
-            self._compositor.place(g.x(), g.y(), g.width(), g.height())
-            fullscreen.raise_topmost(self._compositor)
-            fullscreen.raise_topmost(self)
-        else:
-            self._compositor.hide_keeper()
-
-        # DirectComposition-оверлей: тримаємо його вікно там же, де вікно чату
-        # (розмір веде сам процес за кадром). Так чат над грою збігається з тим,
-        # де він на робочому столі.
-        if self.dcomp_on and self._dcomp is not None:
             g = self.frameGeometry()
             self._dcomp.place(g.x(), g.y())
+        else:
+            self._dcomp.hide()
 
 
     def set_custom_css(self, css: str):
@@ -548,7 +538,8 @@ class Overlay(SourcesMixin, UpdatingMixin, ConfigMixin, LookMixin, QMainWindow):
             ov.set_source(self.mode, self.url, self.is_yt)
             ov.set_enabled(True)          # продюсер пише кадр у спільну памʼять
             self._dcomp.start()           # нативне вікно показує його
-            self._dcomp.place(self.x(), self.y())
+            # Позицію/показ веде _keep_over_game: над грою — показати за вікном
+            # чату, на робочому столі — сховати (щоб не дублювати вікно чату).
         else:
             self._dcomp.stop()
             # Продюсера гасимо, лише якщо його не тримає інжект-оверлей.

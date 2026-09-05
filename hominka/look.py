@@ -40,6 +40,10 @@ class LookMixin:
     def set_bg_alpha(self, v: int):
         self.bg_alpha = max(0.0, min(1.0, v / 100))
         self._apply_chrome()
+        # Те саме тло — у чат поверх гри (dcomp/інжект): його малює продюсер у
+        # своєму кадрі, тож підкладку треба оновити й там.
+        if getattr(self, "game_overlay", None) is not None:
+            self.game_overlay.set_bg_alpha(self.bg_alpha)
         self.save_config()
 
     # --- рамка / чисті повідомлення ---

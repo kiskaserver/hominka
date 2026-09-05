@@ -158,7 +158,14 @@ static void render(HWND hwnd) {
     if (!g_shown) { ShowWindow(hwnd, SW_SHOWNA); g_shown = true; }
 }
 
-int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE, PWSTR, int) {
+int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE, PWSTR cmd, int) {
+    // Аргумент — PID Hominka. Стежимо за ним і виходимо, коли вона зникла (навіть
+    // якщо впала): щоб оверлей ніколи не лишався сиротою на екрані.
+    HANDLE parent = nullptr;
+    if (cmd && *cmd) {
+        DWORD ppid = (DWORD)_wtoi(cmd);
+        if (ppid) parent = OpenProcess(SYNCHRONIZE, FALSE, ppid);
+    }
     WNDCLASSEXW wc = {sizeof(wc)};
     wc.lpfnWndProc = WndProc;
     wc.hInstance = hInst;
@@ -182,6 +189,8 @@ int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE, PWSTR, int) {
             TranslateMessage(&msg);
             DispatchMessageW(&msg);
         }
+        if (parent && WaitForSingleObject(parent, 0) == WAIT_OBJECT_0)
+            return 0;   // Hominka зникла — виходимо
         render(hwnd);
         // FSO-гра сидить у вищому z-band — тримаємось зверху щокадру (позицію й
         // розмір не чіпаємо: позицію веде Python, розмір — кадр).
