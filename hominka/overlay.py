@@ -553,6 +553,19 @@ class Overlay(SourcesMixin, UpdatingMixin, ConfigMixin, LookMixin, QMainWindow):
     def restore_game_window(self):
         return fullscreen.restore(fullscreen.changed_window())
 
+    def toggle_fullscreen_opt(self, hwnd):
+        """Вмикає/вимикає «без повноекранної оптимізації» для гри цього вікна —
+        надійний спосіб повернути оверлей у безрамкових іграх, що ховають його в
+        3D (Independent Flip). Повертає новий стан (True = FSO вимкнено) або None,
+        якщо не вдалося (немає .exe чи доступу до реєстру)."""
+        path = fullscreen.game_exe_path(int(hwnd))
+        if not path:
+            return None
+        new_disabled = not fullscreen.fullscreen_opt_disabled(path)
+        if not fullscreen.set_fullscreen_opt_disabled(path, new_disabled):
+            return None
+        return new_disabled
+
     def closeEvent(self, e):
         if self.game_overlay is not None:
             self.game_overlay.close()

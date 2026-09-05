@@ -192,6 +192,31 @@ class CardsMixin:
         row.addWidget(self.restore_btn)
         lay.addLayout(row)
 
+        # Найнадійніший шлях для БЕЗРАМКОВИХ ігор, у яких чат видно в меню, а в
+        # бою він зникає (Hunt: Showdown): вимкнути для гри «оптимізацію на весь
+        # екран». Тоді Windows не гонить її в Independent Flip, і оверлей видно
+        # завжди. Діє з наступного запуску гри; у саму гру нічого не вкладаємо
+        # (безпечно для античитів). Кнопка-перемикач: назва залежить від стану
+        # вибраної гри.
+        self.fso_btn = QPushButton("Прибрати повноекранну оптимізацію гри", self)
+        self.fso_btn.setObjectName("ghost")
+        self.fso_btn.setFixedHeight(28)
+        self.fso_btn.setToolTip(
+            "Якщо чат зникає в грі в безрамковому повноекранному (як Hunt: "
+            "Showdown) — вимкніть для неї «оптимізацію на весь екран». Windows "
+            "перестане ховати оверлей у 3D. Діє з наступного запуску гри; у саму "
+            "гру нічого не вкладається.")
+        self.fso_btn.clicked.connect(self._toggle_fso)
+        self.fso_btn.setEnabled(False)
+        lay.addWidget(self.fso_btn)
+        self.fso_hint = QLabel(
+            "Допомагає, коли чат видно в меню, а в бою він зникає. Після вмикання "
+            "перезапустіть гру.", self)
+        self.fso_hint.setObjectName("dim")
+        self.fso_hint.setWordWrap(True)
+        lay.addWidget(self.fso_hint)
+        self.border_pick.currentIndexChanged.connect(self._sync_fso_button)
+
 
         # --- справжній чат у грі (інжектор) ---------------------------------
         # Найпотужніше і найризикованіше: своя бібліотека всередині процесу гри
@@ -437,6 +462,38 @@ class CardsMixin:
         for hwnd, pid, exe, title in wins:
             self.border_pick.addItem("%s — %s" % (title[:40], exe), hwnd)
         self.borderless_btn.setEnabled(True)
+        self._sync_fso_button()
+
+    def _sync_fso_button(self):
+        """Вмикає кнопку FSO для вибраної гри й підписує її під поточний стан
+        (прибрати / повернути оптимізацію)."""
+        hwnd = self.border_pick.currentData()
+        if not hwnd:
+            self.fso_btn.setEnabled(False)
+            self.fso_btn.setText("Прибрати повноекранну оптимізацію гри")
+            return
+        self.fso_btn.setEnabled(True)
+        path = fs_mod.game_exe_path(int(hwnd))
+        off = fs_mod.fullscreen_opt_disabled(path) if path else False
+        self.fso_btn.setText("Повернути повноекранну оптимізацію гри" if off
+                             else "Прибрати повноекранну оптимізацію гри")
+
+    def _toggle_fso(self):
+        hwnd = self.border_pick.currentData()
+        if not hwnd:
+            self.top_status.setText("Спершу оберіть вікно гри зі списку (⟳ оновлює).")
+            return
+        res = self.win.toggle_fullscreen_opt(int(hwnd))
+        if res is None:
+            self.top_status.setText("Не вдалося змінити налаштування гри "
+                                    "(не знайшов .exe або немає доступу).")
+            return
+        if res:
+            self.top_status.setText("Готово: повноекранну оптимізацію вимкнено. "
+                                    "Перезапустіть гру — і чат буде видно в бою.")
+        else:
+            self.top_status.setText("Повноекранну оптимізацію повернено як було.")
+        self._sync_fso_button()
 
     def _make_borderless(self):
         hwnd = self.border_pick.currentData()

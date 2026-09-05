@@ -104,8 +104,8 @@ def foreground() -> dict:
     return {"hwnd": hwnd, "title": buf.value, "exe": _exe_of(hwnd), "rect": rect}
 
 
-def _exe_of(hwnd: int) -> str:
-    """Імʼя .exe вікна. Потрібне, щоб не чіпати ні себе, ні робочий стіл."""
+def _full_exe_path(hwnd: int) -> str:
+    """Повний шлях до .exe вікна (порожній рядок, якщо не вдалося)."""
     pid = wintypes.DWORD()
     user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
     if not pid.value:
@@ -118,10 +118,88 @@ def _exe_of(hwnd: int) -> str:
         size = wintypes.DWORD(512)
         buf = ctypes.create_unicode_buffer(size.value)
         if kernel32.QueryFullProcessImageNameW(handle, 0, buf, ctypes.byref(size)):
-            return os.path.basename(buf.value)
+            return buf.value
     finally:
         kernel32.CloseHandle(handle)
     return ""
+
+
+def _exe_of(hwnd: int) -> str:
+    """Імʼя .exe вікна. Потрібне, щоб не чіпати ні себе, ні робочий стіл."""
+    full = _full_exe_path(hwnd)
+    return os.path.basename(full) if full else ""
+
+
+def game_exe_path(hwnd: int) -> str:
+    """Повний шлях до .exe гри у цьому вікні — для реєстру AppCompatFlags."""
+    return _full_exe_path(int(hwnd)) if available() and hwnd else ""
+
+
+# --- Fullscreen Optimizations (FSO) для конкретної гри ----------------------
+# Безрамковий повноекранний під FSO Windows переводить у Independent Flip: кадр
+# гри сканується повз композитор, і наш оверлей (та й будь-яке звичайне вікно
+# зверху) зникає в 3D. Найнадійніше — вимкнути FSO саме для цієї гри: те саме, що
+# галочка «Вимкнути оптимізацію на весь екран» у властивостях .exe. Технічно це
+# рядок-прапорець DISABLEDXMAXIMIZEDWINDOWEDMODE у гілці сумісності HKCU. Діє з
+# наступного запуску гри й нічого в саму гру не вкладає (безпечно для античитів).
+_LAYERS_KEY = r"Software\Microsoft\Windows NT\CurrentVersion\AppCompatFlags\Layers"
+_FSO_FLAG = "DISABLEDXMAXIMIZEDWINDOWEDMODE"
+
+
+def _layers_tokens(exe_path: str):
+    """Поточні прапорці сумісності для .exe як список токенів (напр. ['~',
+    'HIGHDPIAWARE']). Порожній список, якщо запису нема."""
+    import winreg
+    try:
+        key = winreg.OpenKeyEx(winreg.HKEY_CURRENT_USER, _LAYERS_KEY, 0, winreg.KEY_READ)
+    except OSError:
+        return []
+    try:
+        val, _ = winreg.QueryValueEx(key, exe_path)
+        return str(val).split()
+    except OSError:
+        return []
+    finally:
+        winreg.CloseKey(key)
+
+
+def fullscreen_opt_disabled(exe_path: str) -> bool:
+    """Чи вимкнено FSO для цієї гри зараз."""
+    if not IS_WINDOWS or not exe_path:
+        return False
+    return _FSO_FLAG in _layers_tokens(exe_path)
+
+
+def set_fullscreen_opt_disabled(exe_path: str, disabled: bool) -> bool:
+    """Вмикає/вимикає прапорець «без FSO» для гри, зберігаючи інші прапорці
+    сумісності. Повертає True, якщо вдалося записати."""
+    if not IS_WINDOWS or not exe_path:
+        return False
+    import winreg
+    tokens = _layers_tokens(exe_path)
+    # «~» — обов'язковий маркер шару на початку; без нього прапорці ігноруються.
+    tokens = [t for t in tokens if t not in ("~", _FSO_FLAG)]
+    if disabled:
+        tokens = ["~", _FSO_FLAG] + tokens
+    elif tokens:
+        tokens = ["~"] + tokens          # лишилися інші прапорці — тримаємо маркер
+    try:
+        key = winreg.CreateKeyEx(winreg.HKEY_CURRENT_USER, _LAYERS_KEY, 0, winreg.KEY_SET_VALUE)
+    except OSError:
+        return False
+    try:
+        if tokens:
+            winreg.SetValueEx(key, exe_path, 0, winreg.REG_SZ, " ".join(tokens))
+        else:
+            try:
+                winreg.DeleteValue(key, exe_path)   # нічого не лишилось — прибираємо запис
+            except OSError:
+                pass
+        return True
+    except OSError:
+        return False
+    finally:
+        winreg.CloseKey(key)
 
 
 WS_EX_TOOLWINDOW = 0x00000080
