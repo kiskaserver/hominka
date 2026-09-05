@@ -68,6 +68,7 @@ class Overlay(SourcesMixin, UpdatingMixin, ConfigMixin, LookMixin, QMainWindow):
     def _reset_state(self, url: str | None):
         """Поля, з якими вікно народжується. Мережі й віджетів тут ще немає."""
         self.click_through = False
+        self.frameless = False     # «без рамки»: лише повідомлення (див. look._apply_chrome)
         self.zoom = 1.0            # масштаб тексту чату
         self.bg_alpha = 0.30       # затемнення підкладки під чатом
         self.accent = ACCENT_ACTIVE

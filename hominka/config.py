@@ -37,6 +37,7 @@ class ConfigMixin:
         self.setWindowOpacity(op)
         self.zoom = float(cfg.get("zoom", 1.0))
         self.bg_alpha = float(cfg.get("bg_alpha", 0.30))
+        self.frameless = bool(cfg.get("frameless", False))
         # Чат сайту — те, що людина вписала в ⚙. Аргумент командного рядка
         # сильніший: ним відкривають чужий чат для налагодження.
         self.site_url = (cfg.get("siteChatUrl") or "").strip()
@@ -105,9 +106,13 @@ class ConfigMixin:
         # синхронізуємо панель з завантаженими значеннями
         self.panel.opacity.setValue(int(op * 100))
         self.panel.bg.setValue(int(self.bg_alpha * 100))
+        if hasattr(self.panel, "frameless"):
+            self.panel.frameless.blockSignals(True)
+            self.panel.frameless.setChecked(self.frameless)
+            self.panel.frameless.blockSignals(False)
         self.panel.sync_zoom()
         self.bar.title.setText(self._title_for())
-        self._apply_border(self.accent)
+        self._apply_chrome()
 
     def save_config(self):
         # дебаунс: реальний запис — через таймер (не на кожен resize-евент)
@@ -121,6 +126,7 @@ class ConfigMixin:
                     "opacity": round(self.windowOpacity(), 2),
                     "zoom": self.zoom,
                     "bg_alpha": round(self.bg_alpha, 2),
+                    "frameless": self.frameless,
                     "youtubeChannelId": self.yt_channel_id,
                     "myChannel": self.my_channel,
                     "siteChatUrl": self.site_url,

@@ -99,6 +99,18 @@ class CardsMixin:
         self.bg, self.bg_pct = self._slider_row(
             lay, 0, 100, int(self.win.bg_alpha * 100), self._on_bg)
 
+        # «Без рамки»: лише повідомлення, без бордюра й підкладки. Керування
+        # (заголовок, кнопки) повертається, коли зняти замок — див. look._apply_chrome.
+        self.frameless = QCheckBox("Без рамки (лише повідомлення)", self)
+        self.frameless.setChecked(bool(getattr(self.win, "frameless", False)))
+        self.frameless.setToolTip(
+            "Прибирає рамку й підкладку — видно самі повідомлення. Коли замок "
+            "увімкнено (миша провалюється крізь вікно), хром зникає повністю; щоб "
+            "посунути чи налаштувати — зніміть замок (Ctrl+Alt+Space або кнопка "
+            "замка), і заголовок з рамкою повернуться.")
+        self.frameless.toggled.connect(self.win.set_frameless)
+        lay.addWidget(self.frameless)
+
         lay.addWidget(self._label("Розмір тексту"))
         row = QHBoxLayout()
         row.setSpacing(6)

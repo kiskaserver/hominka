@@ -39,14 +39,42 @@ class LookMixin:
     # --- тло ---
     def set_bg_alpha(self, v: int):
         self.bg_alpha = max(0.0, min(1.0, v / 100))
-        self._apply_border(self.accent)
+        self._apply_chrome()
+        self.save_config()
+
+    # --- рамка / чисті повідомлення ---
+    def _apply_chrome(self):
+        """Показ рамки, заголовка й куточка залежно від режиму «без рамки» та
+        замка (клік-крізь).
+
+        Задум (узгоджено): без рамки + замок УВІМКНЕНО (клік провалюється крізь,
+        стрімер дивиться ефір) → лише повідомлення, жодного хрому. Без рамки +
+        РОЗБЛОКОВАНО → повертаємо заголовок, тонку рамку й куточок, щоб було за що
+        взятися: посунути, відкрити налаштування, замкнути. Зі звичайною рамкою
+        (frameless=False) хром показуємо завжди. Клік-крізь і так означає «я це
+        вікно не чіпаю», тож ховати хром саме тоді — природно."""
+        chrome = (not getattr(self, "frameless", False)) or (not self.click_through)
+        self.bar.setVisible(chrome)
+        if hasattr(self, "grip"):
+            self.grip.setVisible(chrome)
+        if chrome:
+            self._apply_border(self.accent)            # фіолетова рамка + підкладка
+        else:
+            self.frame.setStyleSheet(                   # чисті повідомлення
+                "#frame { background: transparent; border: none; border-radius: 0; }")
+
+    def set_frameless(self, on: bool):
+        """Увімкнути/вимкнути режим «без рамки» (чисті повідомлення)."""
+        self.frameless = bool(on)
+        self._apply_chrome()
         self.save_config()
 
     def toggle_click_through(self):
         self.click_through = not self.click_through
         set_click_through(self, self.click_through)
-        # Статус блокування показуємо ЛИШЕ кружечком біля назви: зелений — миша
+        # Статус блокування показуємо кружечком біля назви: зелений — миша
         # провалюється крізь вікно (замок увімкнено), фіолетовий — вікно ловить
-        # мишу. Рамку (і панель, і куточок) у зелений більше НЕ фарбуємо: зелена
-        # рамка надто впадала в око й заважала. Усе лишається фіолетовим.
+        # мишу. Рамку в зелений більше НЕ фарбуємо (заважала) — усе фіолетове.
         self.bar.set_locked(self.click_through)
+        # У режимі «без рамки» замок ще й ховає/повертає хром (див. _apply_chrome).
+        self._apply_chrome()
