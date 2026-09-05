@@ -77,6 +77,8 @@ static IDCompositionVisual*  g_visual = nullptr;
 
 static int g_w = 0, g_h = 0;       // поточний розмір свопчейна/вікна
 static bool g_shown = false;
+static uint32_t g_last_seq = 0xFFFFFFFFu;  // seq останнього НАМАЛЬОВАНОГО кадру
+static bool g_blanked = false;             // прозорий кадр уже показано (не мигаємо)
 static hominka::SharedFrameReader g_reader;
 static std::vector<uint8_t> g_buf; // буфер під премножені пікселі
 
@@ -158,17 +160,28 @@ static void present_transparent() {
 }
 
 static void render(HWND hwnd) {
-    if (!g_reader.ensure_open()) { present_transparent(); return; }
+    // Немає продюсера / чат вимкнено / кадру ще нема: чистимо ОДИН раз і далі
+    // GPU не чіпаємо. Раніше тут щокадру (60 к/с) йшов Present — і навіть без
+    // чату оверлей молотив відеокарту.
+    if (!g_reader.ensure_open()) { return; }
     hominka::FrameView f;
     if (!g_reader.read(&f) || !f.enabled || f.width == 0 || f.height == 0) {
-        present_transparent();
+        if (g_shown && !g_blanked) { present_transparent(); g_blanked = true; }
+        g_last_seq = 0xFFFFFFFFu;
         return;
     }
-    if ((int)f.width > 0 && !ensure_size(hwnd, (int)f.width, (int)f.height)) {
+    g_blanked = false;
+    const bool resized = ((int)f.width != g_w || (int)f.height != g_h);
+    if (!ensure_size(hwnd, (int)f.width, (int)f.height)) {
         dlog("ensure_size %ux%u НЕ вдалося", f.width, f.height);
         return;
     }
     if (!g_upload) return;
+    // Кадр не змінився (той самий seq) і вже показаний — DirectComposition сама
+    // тримає попередній на екрані, копіювати й презентувати НЕМАЄ ЧОГО. Саме
+    // безумовний Present щокадру відбирав GPU в гри й давав лаги/розростання.
+    if (!resized && f.seq == g_last_seq && g_shown) return;
+    g_last_seq = f.seq;
     static bool first = false;
     if (!first) { first = true; dlog("перший кадр %ux%u — малюю", f.width, f.height); }
 
@@ -226,6 +239,7 @@ int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE, PWSTR cmd, int) {
     dlog("init_gfx ок");
 
     MSG msg;
+    unsigned tick = 0;
     for (;;) {
         while (PeekMessageW(&msg, nullptr, 0, 0, PM_REMOVE)) {
             if (msg.message == WM_QUIT) return 0;
@@ -235,10 +249,12 @@ int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE, PWSTR cmd, int) {
         if (parent && WaitForSingleObject(parent, 0) == WAIT_OBJECT_0)
             return 0;   // Hominka зникла — виходимо
         render(hwnd);
-        // FSO-гра сидить у вищому z-band — тримаємось зверху щокадру (позицію й
+        // FSO-гра сидить у вищому z-band — тримаємось зверху, але НЕ щокадру: раз
+        // на ~250 мс досить, а 60 разів/с лише засмічувало чергу вікон (позицію й
         // розмір не чіпаємо: позицію веде Python, розмір — кадр).
-        SetWindowPos(hwnd, HWND_TOPMOST, 0, 0, 0, 0,
-                     SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+        if ((tick++ % 16) == 0 && g_shown)
+            SetWindowPos(hwnd, HWND_TOPMOST, 0, 0, 0, 0,
+                         SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
         Sleep(16);
     }
 }
