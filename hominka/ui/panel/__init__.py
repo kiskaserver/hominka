@@ -66,7 +66,11 @@ class SettingsPanel(CardsMixin, WidgetsMixin, QWidget):
     def __init__(self, win: "Overlay"):
         super().__init__(None)
         self.win = win
-        self.setWindowFlags(Qt.Tool | Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint)
+        # Qt.Window разом із Qt.Tool — щоб вікно було таким самим top-level, як
+        # головне вікно чату (воно ховається від захоплення надійно, а панель на
+        # деяких Windows 10 — ні; єдина відмінність у прапорцях була саме Qt.Window).
+        self.setWindowFlags(Qt.Window | Qt.Tool | Qt.FramelessWindowHint
+                            | Qt.WindowStaysOnTopHint)
         self.setAttribute(Qt.WA_TranslucentBackground, True)
         self.setFixedWidth(self.WIDTH + self.SHADOW * 2)
 
@@ -220,3 +224,9 @@ class SettingsPanel(CardsMixin, WidgetsMixin, QWidget):
     def showEvent(self, e):
         super().showEvent(e)
         exclude_from_capture(self)  # OBS не бачить і вікно налаштувань
+        # На деяких Windows 10 приховування «не прилипає», якщо застосувати його
+        # лише в мить показу (вікно ще не склалося композитором). Повторюємо кілька
+        # разів після появи — дешево і надійно. На інших системах — нешкідливо.
+        from PySide6.QtCore import QTimer
+        for delay in (0, 60, 250):
+            QTimer.singleShot(delay, lambda: exclude_from_capture(self))
