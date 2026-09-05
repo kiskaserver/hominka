@@ -32,18 +32,25 @@ def _version_channel() -> str:
         return APP_VERSION
 
 
+_fault_file = None  # тримаємо файл відкритим, поки faulthandler ним користується
+
+
 def _install_crash_log():
-    """Записує НЕОБРОБЛЕНІ винятки у %TEMP%\\hominka-overlay.log (той самий журнал,
-    що й нативна частина) — інакше в зібраній програмі без консолі краш не лишає
-    жодного сліду. Не заважає стандартній поведінці (кличемо оригінальний хук)."""
-    import traceback, tempfile
+    """Пише сліди збоїв у %TEMP%\\hominka-overlay.log (той самий журнал, що й
+    нативна частина) — інакше в зібраній програмі без консолі краш не лишає нічого.
+    Два хуки: (1) sys.excepthook — необроблені ПІТОНІВСЬКІ винятки; (2) faulthandler
+    — навіть НАТИВНІ падіння (segfault у Qt/Chromium): він скине пітонівський стек
+    усіх потоків на момент краху, тож видно, ЗВІДКИ саме впало."""
+    global _fault_file
+    import traceback, tempfile, faulthandler
     from datetime import datetime
+    path = os.path.join(tempfile.gettempdir(), "hominka-overlay.log")
+
     prev = sys.excepthook
 
     def hook(exctype, value, tb):
         try:
-            p = os.path.join(tempfile.gettempdir(), "hominka-overlay.log")
-            with open(p, "a", encoding="utf-8") as f:
+            with open(path, "a", encoding="utf-8") as f:
                 f.write("[%s] НЕОБРОБЛЕНИЙ ВИНЯТОК:\n"
                         % datetime.now().strftime("%H:%M:%S.%f")[:-3])
                 traceback.print_exception(exctype, value, tb, file=f)
@@ -52,6 +59,14 @@ def _install_crash_log():
         prev(exctype, value, tb)
 
     sys.excepthook = hook
+    try:
+        _fault_file = open(path, "a", encoding="utf-8")
+        _fault_file.write("[%s] faulthandler увімкнено\n"
+                          % datetime.now().strftime("%H:%M:%S"))
+        _fault_file.flush()
+        faulthandler.enable(_fault_file)
+    except Exception:
+        pass
 
 
 def main():
