@@ -5,7 +5,6 @@
 джерелами чату, ні з оновленнями.
 """
 
-from .styles import ACCENT_ACTIVE, ACCENT_LOCKED
 from .winapi import set_click_through
 
 
@@ -46,6 +45,8 @@ class LookMixin:
     def toggle_click_through(self):
         self.click_through = not self.click_through
         set_click_through(self, self.click_through)
+        # Статус блокування показуємо ЛИШЕ кружечком біля назви: зелений — миша
+        # провалюється крізь вікно (замок увімкнено), фіолетовий — вікно ловить
+        # мишу. Рамку (і панель, і куточок) у зелений більше НЕ фарбуємо: зелена
+        # рамка надто впадала в око й заважала. Усе лишається фіолетовим.
         self.bar.set_locked(self.click_through)
-        self.panel.set_accent(ACCENT_LOCKED if self.click_through else ACCENT_ACTIVE)
-        self._apply_border(ACCENT_LOCKED if self.click_through else ACCENT_ACTIVE)
