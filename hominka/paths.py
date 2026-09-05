@@ -66,7 +66,32 @@ def _migrate_old_config():
             pass
 
 
+def _cleanup_old_data():
+    """Після переїзду в AppData прибираємо старі дані ПОРУЧ із .exe, щоб не
+    засмічували теку програми. Обережно: config видаляємо ЛИШЕ коли новий (у
+    AppData) уже на місці, і шляхи справді різні (у dev вони збігаються — там
+    нічого не чіпаємо, бо _migrate/_cleanup працюють лише в зібраній програмі).
+    Стара тека profile — то лише кеш браузера; новий будується в AppData, тож
+    стару прибираємо цілком (помилки ігноруємо, якщо щось зайняте)."""
+    if not getattr(sys, "frozen", False):
+        return
+    import shutil
+    old_cfg = os.path.join(BASE_DIR, "config.json")
+    if (os.path.isfile(old_cfg) and os.path.isfile(CONFIG_PATH)
+            and os.path.abspath(old_cfg) != os.path.abspath(CONFIG_PATH)):
+        try:
+            os.remove(old_cfg)
+        except OSError:
+            pass
+    old_profile = os.path.join(BASE_DIR, "profile")
+    new_profile = os.path.join(DATA_DIR, "profile")
+    if (os.path.isdir(old_profile)
+            and os.path.abspath(old_profile) != os.path.abspath(new_profile)):
+        shutil.rmtree(old_profile, ignore_errors=True)
+
+
 _migrate_old_config()
+_cleanup_old_data()
 
 
 def profile_dir() -> str:

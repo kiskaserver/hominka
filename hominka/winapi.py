@@ -82,18 +82,13 @@ def hide_internal_folder():
     if not getattr(sys, "frozen", False) or not IS_WINDOWS:
         return
     here = os.path.dirname(sys.executable)
+    # Дані (config.json + profile) переїхали в AppData, а стару теку profile
+    # поруч із .exe прибирає paths._cleanup_old_data(). Лишилася хіба стара тека
+    # _internal від колишньої збірки текою — її ховаємо, щоб не плуталася.
     legacy = os.path.join(here, "_internal")
     if os.path.isdir(legacy):
         try:
             ctypes.windll.kernel32.SetFileAttributesW(legacy, FILE_ATTRIBUTE_HIDDEN)
-        except Exception:
-            pass
-    # Стара тека profile поруч із .exe — знімаємо приховування (FILE_ATTRIBUTE_NORMAL),
-    # хай користувач її бачить і за бажання прибере.
-    old_profile = os.path.join(here, "profile")
-    if os.path.isdir(old_profile):
-        try:
-            ctypes.windll.kernel32.SetFileAttributesW(old_profile, 0x80)  # FILE_ATTRIBUTE_NORMAL
         except Exception:
             pass
 
