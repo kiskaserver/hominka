@@ -60,8 +60,15 @@ class LookMixin:
         if chrome:
             self._apply_border(self.accent)            # фіолетова рамка + підкладка
         else:
-            self.frame.setStyleSheet(                   # чисті повідомлення
-                "#frame { background: transparent; border: none; border-radius: 0; }")
+            # «Без рамки»: прибираємо БОРДЮР і заголовок, але ПІДКЛАДКУ лишаємо —
+            # нею керує повзунок «Тло під чатом» (bg_alpha). Хоче зовсім без тла —
+            # виставить повзунок на 0. Тобто «рамка» ≠ «фон».
+            self.frame.setStyleSheet(
+                "#frame {"
+                f" background: rgba(12,12,15,{self.bg_alpha:.2f});"
+                " border: none;"
+                " border-radius: 11px;"
+                " }")
 
     def set_frameless(self, on: bool):
         """Увімкнути/вимкнути режим «без рамки» (чисті повідомлення)."""
