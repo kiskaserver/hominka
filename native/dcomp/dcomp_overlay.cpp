@@ -20,8 +20,43 @@
 #include <dxgi1_2.h>
 #include <dcomp.h>
 #include <vector>
+#include <stdio.h>
+#include <stdarg.h>
 
 #include "../overlay/shared_frame_reader.h"
+
+// --- журнал (той самий файл, що й у решти оверлея) --------------------------
+static void dlog(const char* fmt, ...) {
+    char msg[512];
+    va_list ap; va_start(ap, fmt); vsnprintf(msg, sizeof msg, fmt, ap); va_end(ap);
+    char path[MAX_PATH];
+    DWORD n = GetTempPathA(MAX_PATH, path);
+    if (!n || n > MAX_PATH - 24) return;
+    lstrcatA(path, "hominka-overlay.log");
+    FILE* f = fopen(path, "a");
+    if (!f) return;
+    SYSTEMTIME st; GetLocalTime(&st);
+    fprintf(f, "[%02d:%02d:%02d.%03d] dcomp: %s\n",
+            st.wHour, st.wMinute, st.wSecond, st.wMilliseconds, msg);
+    fclose(f);
+}
+
+// Ловимо збої (AV тощо) і пишемо модуль+адресу — інакше окремий процес падав би
+// без жодного сліду. Не перехоплюємо (CONTINUE_SEARCH) — лише лишаємо запис.
+static LONG CALLBACK dcomp_veh(EXCEPTION_POINTERS* ep) {
+    DWORD code = ep->ExceptionRecord->ExceptionCode;
+    if (code == 0xC0000005 || code == 0xC0000409) {
+        void* addr = ep->ExceptionRecord->ExceptionAddress;
+        char name[MAX_PATH] = "?";
+        HMODULE mod = nullptr;
+        if (GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS
+                | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                (LPCSTR)addr, &mod) && mod)
+            GetModuleFileNameA(mod, name, sizeof name);
+        dlog("КРАШ code=0x%lX addr=%p модуль=%s", code, addr, name);
+    }
+    return EXCEPTION_CONTINUE_SEARCH;
+}
 
 #ifndef WDA_EXCLUDEFROMCAPTURE
 #define WDA_EXCLUDEFROMCAPTURE 0x11
@@ -129,8 +164,13 @@ static void render(HWND hwnd) {
         present_transparent();
         return;
     }
-    if ((int)f.width > 0 && !ensure_size(hwnd, (int)f.width, (int)f.height)) return;
+    if ((int)f.width > 0 && !ensure_size(hwnd, (int)f.width, (int)f.height)) {
+        dlog("ensure_size %ux%u НЕ вдалося", f.width, f.height);
+        return;
+    }
     if (!g_upload) return;
+    static bool first = false;
+    if (!first) { first = true; dlog("перший кадр %ux%u — малюю", f.width, f.height); }
 
     // Свопчейн premultiplied — премножуємо RGB на альфу (і на загальну opacity).
     const size_t n = (size_t)f.width * f.height;
@@ -159,6 +199,8 @@ static void render(HWND hwnd) {
 }
 
 int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE, PWSTR cmd, int) {
+    AddVectoredExceptionHandler(1, dcomp_veh);
+    dlog("старт");
     // Аргумент — PID Hominka. Стежимо за ним і виходимо, коли вона зникла (навіть
     // якщо впала): щоб оверлей ніколи не лишався сиротою на екрані.
     HANDLE parent = nullptr;
@@ -180,7 +222,8 @@ int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE, PWSTR cmd, int) {
     if (!hwnd) return 1;
 
     SetWindowDisplayAffinity(hwnd, WDA_EXCLUDEFROMCAPTURE);   // OBS не бачить
-    if (!init_gfx(hwnd)) return 2;
+    if (!init_gfx(hwnd)) { dlog("init_gfx НЕ вдалося — вихід"); return 2; }
+    dlog("init_gfx ок");
 
     MSG msg;
     for (;;) {
