@@ -289,10 +289,9 @@ class CardsMixin:
         self.game_hide_obs.toggled.connect(self.win.set_game_hide_obs)
         lay.addWidget(self.game_hide_obs)
         self.game_hide_obs_hint = QLabel(
-            "Працює на DirectX 12 і DirectX 9: чат лягає в кадр так, що OBS знімає "
-            "його чистим — у грі видно, в ефір не потрапляє. На DirectX 11, OpenGL "
-            "і Vulkan чат поки видно і в OBS — для «лише мені» там безрамковий "
-            "режим вище.", self)
+            "Працює на всіх підтримуваних API — DirectX 9, 11 і 12, OpenGL та "
+            "Vulkan: чат лягає в кадр так, що OBS знімає його чистим — у грі видно, "
+            "а в ефір не потрапляє.", self)
         self.game_hide_obs_hint.setObjectName("dim")
         self.game_hide_obs_hint.setWordWrap(True)
         lay.addWidget(self.game_hide_obs_hint)
