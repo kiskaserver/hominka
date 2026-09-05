@@ -315,7 +315,12 @@ class GameOverlay(QObject):
         if self.enabled:
             self.view.move(-4000, -4000)
             self.view.show()
-            self._load_current()
+            # Завантаження URL — НЕ в цьому ж такті одразу після show(): виклик
+            # view.load() синхронно всередині слоту, поки движок ще обробляє show,
+            # інколи валив Chromium (CHECK → 0x80000003), особливо коли поруч уже
+            # працює гра (навантажений GPU). Відкладаємо на наступний такт циклу
+            # подій — show встигає завершитись, і load уже безпечний.
+            QTimer.singleShot(0, self._load_current)
             self._busy_until = _now() + self.BUSY_WINDOW
             self._timer.start(self.BUSY_MS)
             _diag("увімкнено, режим=%s url=%s розмір вікна %dx%d"
@@ -340,7 +345,7 @@ class GameOverlay(QObject):
         self.web_url = url or ""
         self.is_yt = bool(is_yt)
         if self.enabled and changed:
-            self._load_current()
+            QTimer.singleShot(0, self._load_current)   # не синхронно (див. set_enabled)
 
     def _load_current(self):
         """Завантажує в приховане вікно поточне джерело."""
