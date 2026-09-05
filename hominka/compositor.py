@@ -49,9 +49,12 @@ class CompositionKeeper(QWidget):
         self.setWindowOpacity(1.0 / 255.0)
         self.resize(4, 4)
 
-    def place(self, left: int, top: int):
-        """Ставить вікно в куток монітора гри й показує (без активації)."""
-        self.move(int(left), int(top))
+    def place(self, left: int, top: int, w: int, h: int):
+        """Накриває прямокутник (зазвичай — рівно вікно чату) і показує без
+        активації. Розмір із вікно чату, а не 4×4 у кутку: маленьке вікно DWM
+        може проігнорувати й лишитися в незалежному flip; повноцінний шар над
+        грою (як звичайне вікно конкурента) надійно повертає композицію."""
+        self.setGeometry(int(left), int(top), max(8, int(w)), max(8, int(h)))
         if not self.isVisible():
             self.show()
 

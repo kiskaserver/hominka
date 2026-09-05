@@ -256,10 +256,13 @@ class Overlay(SourcesMixin, UpdatingMixin, ConfigMixin, LookMixin, QMainWindow):
             return
         game = fullscreen.fullscreen_game() if self.keep_top else None
         if game and self.isVisible():
-            _hwnd, mon = game
-            fullscreen.raise_topmost(self)                 # чат — на самий верх
-            self._compositor.place(mon.left, mon.top)      # кипер у кутку монітора гри
-            fullscreen.raise_topmost(self._compositor)     # і його теж зверху
+            # Кипер накриваємо РІВНО вікном чату (не 4×4 в кутку): повноцінний
+            # невидимий шар над грою надійніше ламає незалежний flip. Порядок:
+            # спершу піднімаємо кипер, потім чат — щоб чат лишився над ним.
+            g = self.frameGeometry()
+            self._compositor.place(g.x(), g.y(), g.width(), g.height())
+            fullscreen.raise_topmost(self._compositor)
+            fullscreen.raise_topmost(self)
         else:
             self._compositor.hide_keeper()
 
