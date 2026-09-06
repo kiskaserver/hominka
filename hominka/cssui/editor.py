@@ -113,6 +113,11 @@ class CssEditor(QMainWindow):
     def mouseMoveEvent(self, e):
         if self._drag_from is not None and e.buttons() & Qt.LeftButton:
             self.move(e.globalPosition().toPoint() - self._drag_from)
+            # Тягнемо вікно редактора — притримуємо грабер головного вікна: він на
+            # тому ж GUI-потоці, і його grab() смикав би це перетягування теж.
+            pause = getattr(self.win, "pause_producer", None)
+            if pause:
+                pause()
         super().mouseMoveEvent(e)
 
     def mouseReleaseEvent(self, e):

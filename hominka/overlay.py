@@ -143,6 +143,10 @@ class Overlay(SourcesMixin, UpdatingMixin, ConfigMixin, LookMixin, QMainWindow):
         # Продюсер кадру для dcomp — граблить ГОЛОВНЕ вікно чату (без другого
         # веб-вью, який валив рушій під грою). Створюємо ліниво при вмиканні.
         self._dcomp_producer = None
+        # До цього моменту (monotonic) грабер кадру не чіпаємо: поки користувач
+        # тягне/розтягує вікно, синхронний grab() головного вікна на GUI-потоці
+        # смикав би перетягування (див. pause_producer / MainViewProducer).
+        self._producer_hold_until = 0.0
 
         # Справжній чат у грі через інжектор (native/). Створюємо лениво —
         # тільки коли вмикають, бо це друге приховане вікно з рушієм браузера.
@@ -281,6 +285,18 @@ class Overlay(SourcesMixin, UpdatingMixin, ConfigMixin, LookMixin, QMainWindow):
         except Exception:
             pass
 
+    def pause_producer(self, sec: float = 0.4):
+        """Притримати грабер кадру на sec секунд — на час перетягування чи зміни
+        розміру вікна (головного або редактора CSS).
+
+        grab() головного вікна виконується на GUI-потоці й на реальному GPU
+        блокується на зчитуванні кадру, поки відеокарта зайнята композицією руху
+        вікна — саме це смикало перетягування, коли ввімкнено чат поверх гри.
+        Кадр у грі під час руху й так не змінюється (той самий чат), тож пауза
+        нічого не коштує візуально; щойно рух спиняється — грабер оживає сам."""
+        import time
+        self._producer_hold_until = time.monotonic() + max(0.0, sec)
+
 
     def set_custom_css(self, css: str):
         """Свій CSS — у вікно чату негайно і в config.json.
@@ -395,6 +411,12 @@ class Overlay(SourcesMixin, UpdatingMixin, ConfigMixin, LookMixin, QMainWindow):
         if hasattr(self, "panel") and self.panel.isVisible():
             self._place_panel()
         self._sync_game_rect()   # пересунув вікно — чат у грі їде слідом
+        # Тягнемо вікно — притримуємо грабер (щоб рух не смикався) і рухаємо
+        # dcomp-оверлей слідом ЩЕ під час руху, а не раз на 350 мс, щоб він не
+        # відставав від вікна.
+        if getattr(self, "dcomp_on", False):
+            self.pause_producer()
+            self._keep_over_game()
 
 
     def resizeEvent(self, e):
@@ -405,6 +427,9 @@ class Overlay(SourcesMixin, UpdatingMixin, ConfigMixin, LookMixin, QMainWindow):
         if self.panel.isVisible():
             self._place_panel()
         self._sync_game_rect()   # розтягнув вікно — чат у грі росте так само
+        if getattr(self, "dcomp_on", False):
+            self.pause_producer()
+            self._keep_over_game()
         self.save_config()
 
     def showEvent(self, e):

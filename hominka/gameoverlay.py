@@ -579,6 +579,11 @@ class MainViewProducer(QObject):
     def _tick(self):
         if not self.writer.ok():
             return
+        # Поки користувач тягне/розтягує вікно — не грабимо: grab() блокує
+        # GUI-потік на зчитуванні з GPU й смикав би перетягування. Кадр не
+        # змінюється (той самий чат), тож нічого не втрачаємо.
+        if _now() < getattr(self.win, "_producer_hold_until", 0.0):
+            return
         v = getattr(self.win, "view", None)
         if v is None:
             return
