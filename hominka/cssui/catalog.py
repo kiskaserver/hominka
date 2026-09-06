@@ -165,12 +165,30 @@ RECIPES = [
 
 # --- приклади для перегляду -------------------------------------------------
 #
-# Навмисно різні: із значками, з емоутом, з грошима, відповідь, системне,
-# звертання. Стилі підбирають саме на такому наборі, а не на одному рядку.
+# Навмисно різні: із значками (текстовими й іконками), з емоутами, з грошима,
+# відповіді, системні події, звертання, довгі рядки. Стилі підбирають саме на
+# такому наборі, а не на одному рядку. Перегляд крутить їх нескінченно, як живий
+# чат: нові рядки виїжджають знизу і йдуть угору.
 _EMOTE = ("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='28' height='28'>"
           "<circle cx='14' cy='14' r='13' fill='%23fbbf24'/><circle cx='9' cy='11' r='2' fill='%23111'/>"
           "<circle cx='19' cy='11' r='2' fill='%23111'/><path d='M8 18q6 5 12 0' stroke='%23111' "
           "stroke-width='2' fill='none' stroke-linecap='round'/></svg>")
+_HEART = ("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='28' height='28'>"
+          "<path d='M14 24C4 17 2 11 6 7q4-3 8 2 4-5 8-2c4 4 2 10-8 17z' fill='%23f472b6'/></svg>")
+_FIRE = ("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='28' height='28'>"
+         "<path d='M14 2c1 5-4 6-4 11a4 4 0 008 0c0-2-1-3-1-3 3 1 4 4 4 7a7 7 0 11-14 0c0-6 5-8 7-15z' "
+         "fill='%23fb923c'/></svg>")
+
+# Справжні іконки значків — той самий вбудований набір, що йде в чат (Kick),
+# щоб у прикладі було видно й новий клас .bi, а не лише текстові плашки .b.
+try:
+    from ..badges import _KICK_BADGE_SVG as _KI
+except Exception:                       # довідник має відкриватися завжди
+    _KI = {}
+
+
+def _icons(*ids):
+    return [{"id": i, "url": _KI[i]} for i in ids if i in _KI]
 
 
 SAMPLES = [
@@ -181,9 +199,10 @@ SAMPLES = [
     # дублювати його в рядку — той самий баг, який ми прибрали в самому чаті
     # (chatsources.trim_reply_mention). Приклад мусить показувати правильне.
     {"platform": "kick", "name": "xQc_fan", "nick": "xqc_fan", "color": "#53fc18",
-     "badges": ["vip"], "text": "не забудь про рейд", "reply": "lazar1n"},
+     "badges": ["vip"], "badgeIcons": _icons("vip"), "text": "не забудь про рейд", "reply": "lazar1n"},
     {"platform": "youtube", "name": "Оксана", "nick": "oksana", "color": "#ff6b81",
-     "badges": ["member"], "text": "дякую за стрім!", "amount": "200 UAH"},
+     "badges": ["member"], "text": "дякую за стрім! love", "amount": "200 UAH",
+     "emotes": [{"code": "love", "url": _HEART}]},
     {"platform": "twitch", "kind": "system", "event": "raid",
      "text": "GoodTheme рейдить вас — 42 глядачі"},
     {"platform": "kick", "kind": "system", "event": "sub",
@@ -192,6 +211,56 @@ SAMPLES = [
      "text": "Оксана подарувала 5 спонсорств"},
     {"platform": "site", "name": "lazar1n", "nick": "lazar1n", "color": "#a855f7",
      "badges": ["broadcaster"], "text": "вітаю всіх, поїхали"},
+    {"platform": "twitch", "name": "Nightbot", "nick": "nightbot", "color": "#2dd4bf",
+     "badges": ["mod"], "text": "!розклад — стріми пн/ср/пт о 19:00"},
+    {"platform": "kick", "name": "BigDonator", "nick": "bigdonator", "color": "#fbbf24",
+     "badges": ["og", "sub"], "badgeIcons": _icons("og", "sub"),
+     "text": "тримай на каву fire", "amount": "500 UAH",
+     "emotes": [{"code": "fire", "url": _FIRE}]},
+    {"platform": "twitch", "name": "PogChampion", "nick": "pogchampion", "color": "#60a5fa",
+     "text": "цей момент був неймовірний Kappa Kappa Kappa",
+     "emotes": [{"code": "Kappa", "url": _EMOTE}]},
+    {"platform": "youtube", "name": "Ivan", "nick": "ivan", "color": "#f87171",
+     "text": "@lazar1n а коли наступний турнір?"},
+    {"platform": "twitch", "kind": "system", "event": "announce",
+     "text": "Оголошення: розіграш ключів за 10 хвилин!"},
+    {"platform": "kick", "name": "ShyViewer", "nick": "shyviewer", "color": "#c084fc",
+     "text": "перший раз на стрімі, дуже подобається"},
+    {"platform": "twitch", "name": "SubGifter", "nick": "subgifter", "color": "#34d399",
+     "badges": ["vip", "sub"], "text": "погнали love love", "amount": "300 bits",
+     "emotes": [{"code": "love", "url": _HEART}]},
+    {"platform": "youtube", "kind": "system", "event": "superchat",
+     "text": "Марія — Super Chat 150 UAH: удачі на турнірі!"},
+    {"platform": "site", "name": "Гість", "nick": "guest42", "color": "#94a3b8",
+     "text": "а де знайти твій діскорд?"},
+    {"platform": "twitch", "name": "ClipMaster", "nick": "clipmaster", "color": "#fb7185",
+     "badges": ["mod"], "text": "кліп зроблено, зараз кину"},
+    {"platform": "kick", "kind": "system", "event": "raid",
+     "text": "SomeStreamer рейдить вас — 128 глядачів"},
+    {"platform": "youtube", "name": "Олег", "nick": "oleg", "color": "#fcd34d",
+     "badges": ["member"], "text": "3 місяці з тобою вже!"},
+    {"platform": "twitch", "name": "HypeTrain", "nick": "hypetrain", "color": "#a78bfa",
+     "text": "GG команда, красивий раунд fire Kappa",
+     "emotes": [{"code": "fire", "url": _FIRE}, {"code": "Kappa", "url": _EMOTE}]},
+    {"platform": "kick", "name": "LongMessage", "nick": "longmsg", "color": "#38bdf8",
+     "badges": ["sub"], "text": "довге повідомлення, щоб перевірити, як стиль тримає "
+     "перенос рядка й відступи, коли текст не вміщається в один рядок"},
+    {"platform": "twitch", "kind": "system", "event": "sub",
+     "text": "PogChampion продовжив підписку — 12 місяців поспіль!"},
+    {"platform": "youtube", "name": "Katya", "nick": "katya", "color": "#f472b6",
+     "text": "love стрім супер, дякую! love", "emotes": [{"code": "love", "url": _HEART}]},
+    {"platform": "kick", "name": "Verified", "nick": "verified_guy", "color": "#22d3ee",
+     "badges": ["verified"], "badgeIcons": _icons("verified"), "text": "офіційно підтверджую: топ"},
+    {"platform": "site", "name": "lazar1n", "nick": "lazar1n", "color": "#a855f7",
+     "badges": ["broadcaster"], "text": "дякую всім хто задонатив сьогодні"},
+    {"platform": "twitch", "kind": "system", "event": "points",
+     "text": "GoodTheme витратив бали каналу: Вибір гри"},
+    {"platform": "kick", "kind": "system", "event": "pin",
+     "text": "Закріплено (lazar1n): правила чату в описі"},
+    {"platform": "youtube", "name": "NewMember", "nick": "newmember", "color": "#4ade80",
+     "kind": "system", "event": "sub", "text": "NewMember став учасником каналу"},
+    {"platform": "twitch", "name": "BitCheer", "nick": "bitcheer", "color": "#c4b5fd",
+     "text": "тримай бітсів на розвиток каналу", "amount": "1000 bits"},
 ]
 
 # --- перевірка синтаксису ---------------------------------------------------

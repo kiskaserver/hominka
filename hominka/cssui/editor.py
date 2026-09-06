@@ -1,14 +1,16 @@
 """Вікно «свій CSS»: редактор, живий приклад і довідник в одному місці."""
 
 import json
+import os
+import random
 import re
 
 from PySide6.QtCore import Qt, QTimer, QUrl
 from PySide6.QtGui import QColor, QIcon, QTextCursor
 from PySide6.QtWidgets import (
-    QAbstractItemView, QHBoxLayout, QLabel, QListWidget, QListWidgetItem,
-    QMainWindow, QPushButton, QSizeGrip, QSplitter, QTabWidget, QTreeWidget,
-    QTreeWidgetItem, QVBoxLayout, QWidget,
+    QAbstractItemView, QFileDialog, QHBoxLayout, QLabel, QListWidget,
+    QListWidgetItem, QMainWindow, QPushButton, QSizeGrip, QSplitter, QTabWidget,
+    QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget,
 )
 from PySide6.QtWebEngineWidgets import QWebEngineView
 
@@ -65,6 +67,20 @@ class CssEditor(QMainWindow):
         self._debounce.setInterval(350)
         self._debounce.timeout.connect(self.apply_preview)
         self.editor.textChanged.connect(self._debounce.start)
+
+        # Живий перегляд: нові приклади виїжджають знизу і йдуть угору, як у
+        # справжньому чаті, і крутяться по колу (порядок щоразу тасуємо, щоб не
+        # приїдалось). Свій CSS діє на них у реальному часі.
+        self._stream = QTimer(self)
+        self._stream.setInterval(1100)
+        self._stream.timeout.connect(self._stream_tick)
+        self._stream_pool = []
+        self._stream_i = 0
+        self._stream_paused = False
+        # Повідомлення «збережено / скинуто» гасне саме, повертаючи звичайний стан.
+        self._status_revert = QTimer(self)
+        self._status_revert.setSingleShot(True)
+        self._status_revert.timeout.connect(self.validate)
 
         self.editor.setPlainText(win.custom_css or "")
         self._preview_ready = False
@@ -133,6 +149,12 @@ class CssEditor(QMainWindow):
         self.status.setObjectName("status")
         row.addWidget(self.status)
         row.addStretch(1)
+
+        export = QPushButton("Експорт шаблону…", self)
+        export.setToolTip("Зберегти .css-файл з типовим оформленням і всіма "
+                          "класами-гачками (як довідка й основа для свого стилю).")
+        export.clicked.connect(self.export_template)
+        row.addWidget(export)
 
         reset = QPushButton("Скинути до типових", self)
         reset.setObjectName("danger")
@@ -316,7 +338,7 @@ class CssEditor(QMainWindow):
         lay.setContentsMargins(0, 0, 0, 0)
         lay.setSpacing(6)
 
-        cap = QLabel("Перегляд — так це виглядатиме в чаті", box)
+        cap = QLabel("Живий перегляд — приклади йдуть, як у справжньому чаті", box)
         cap.setObjectName("hint")
         lay.addWidget(cap)
 
@@ -339,7 +361,12 @@ class CssEditor(QMainWindow):
         lay.addWidget(holder, 1)
 
         row = QHBoxLayout()
-        again = QPushButton("Показати приклади ще раз", box)
+        self._pause_btn = QPushButton("⏸ Пауза", box)
+        self._pause_btn.setToolTip("Зупинити / продовжити потік прикладів.")
+        self._pause_btn.clicked.connect(self._toggle_stream)
+        row.addWidget(self._pause_btn)
+        again = QPushButton("↻ Спочатку", box)
+        again.setToolTip("Очистити перегляд і пустити приклади заново.")
         again.clicked.connect(self.fill_preview)
         row.addWidget(again)
         row.addStretch(1)
@@ -397,33 +424,82 @@ class CssEditor(QMainWindow):
             self.preview.page().runJavaScript(chatfeed.apply_css_js(self.css()))
 
     def fill_preview(self):
+        """Очистити перегляд і пустити потік прикладів спочатку."""
         if not self._preview_ready:
             return
         self.preview.page().runJavaScript("window.fts&&fts.clear()")
-        for event in SAMPLES:
-            self.preview.page().runJavaScript(
-                "window.fts&&fts.add(%s)" % json.dumps(event, ensure_ascii=False))
+        self._stream_pool = list(SAMPLES)
+        random.shuffle(self._stream_pool)
+        self._stream_i = 0
+        # Кілька рядків одразу, щоб перегляд не починався з порожнечі, далі —
+        # по одному в такт.
+        for _ in range(4):
+            self._stream_tick()
+        if not self._stream_paused:
+            self._stream.start()
+
+    def _stream_tick(self):
+        """Додає наступний приклад; дійшовши до кінця — тасує й починає по колу."""
+        if not self._preview_ready:
+            return
+        if self._stream_i >= len(self._stream_pool):
+            self._stream_pool = list(SAMPLES)
+            random.shuffle(self._stream_pool)
+            self._stream_i = 0
+        event = self._stream_pool[self._stream_i]
+        self._stream_i += 1
+        self.preview.page().runJavaScript(
+            "window.fts&&fts.add(%s)" % json.dumps(event, ensure_ascii=False))
+
+    def _toggle_stream(self):
+        self._stream_paused = not self._stream_paused
+        if self._stream_paused:
+            self._stream.stop()
+            self._pause_btn.setText("▶ Далі")
+        else:
+            self._stream.start()
+            self._pause_btn.setText("⏸ Пауза")
+
+    def showEvent(self, e):
+        super().showEvent(e)
+        # Потік крутимо лише поки вікно відкрите — закрите не має молоти вхолосту.
+        if self._preview_ready and not self._stream_paused:
+            self._stream.start()
+
+    def hideEvent(self, e):
+        super().hideEvent(e)
+        self._stream.stop()
 
     def _on_preview_loaded(self, ok: bool):
         self._preview_ready = bool(ok)
         if ok:
             self.preview.page().runJavaScript(
                 chatfeed.apply_layout_js(self.layout_parts()))
-            self.fill_preview()
             self.apply_preview()
+            self.fill_preview()
+
+    def _flash(self, text: str, bg: str, fg: str, ms: int = 2600):
+        """Показати повідомлення в смужці стану й за ms повернути звичайний вигляд."""
+        self.status.setText(text)
+        self.status.setStyleSheet("background:%s; color:%s;" % (bg, fg))
+        self._status_revert.start(ms)
 
     def save(self):
         # Порядок частин зберігаємо завжди: помилок у ньому не буває, а
         # прив'язувати його до правильності CSS означало б не зберегти те, що
         # людина щойно переставила, через чужу помилку в іншій вкладці.
         self.win.set_chat_layout(self.layout_parts())
-        if not self.validate():
-            # Не забороняємо зберегти зламане: людина може дописати завтра, а
-            # браузер однаково викине лише зіпсоване правило. Але мовчати не
-            # можна — інакше «чому не працює?» лишиться без відповіді.
-            self.status.setText("збережено, але є помилки")
-            self.status.setStyleSheet("background:#78350f; color:#fff;")
+        ok = self.validate()
+        # Застосовуємо й запам'ятовуємо: set_custom_css розводить стиль по ВСІХ
+        # режимах — вікно чату, «поверх гри» (dcomp бере кадр із цього ж вікна),
+        # справжній чат у грі (інжект) і сторінка сайту/YouTube.
         self.win.set_custom_css(self.css())
+        if ok:
+            self._flash("✓ Збережено — стиль застосовано в усіх режимах", "#14532d", "#dcfce7")
+        else:
+            # Не забороняємо зберегти зламане: браузер викине лише зіпсоване
+            # правило, а решта працює. Але мовчати не можна.
+            self._flash("Збережено, але є помилки — діє все, крім зіпсованого", "#78350f", "#fff")
 
     def reset(self):
         self.editor.setPlainText("")
@@ -431,6 +507,22 @@ class CssEditor(QMainWindow):
         self.apply_preview()
         self.win.set_custom_css("")
         self.win.set_chat_layout(chatfeed.DEFAULT_LAYOUT)
+        self._flash("↺ Скинуто до типового оформлення", "rgba(255,255,255,0.10)", "#e7e2df")
+
+    def export_template(self):
+        """Зберігає .css з типовим оформленням і всіма класами-гачками — основа
+        для свого стилю (те саме, що на вкладках «Типовий CSS» і «Класи»)."""
+        path, _ = QFileDialog.getSaveFileName(
+            self, "Експортувати шаблон CSS", "hominka_css_template.css", "CSS (*.css)")
+        if not path:
+            return
+        try:
+            with open(path, "w", encoding="utf-8", newline="\n") as f:
+                f.write(_export_text())
+        except OSError as e:
+            self._flash("Не вдалося зберегти: %s" % e, "#7f1d1d", "#fff")
+            return
+        self._flash("✓ Шаблон збережено: %s" % os.path.basename(path), "#14532d", "#dcfce7")
 
     def resizeEvent(self, e):
         super().resizeEvent(e)
@@ -459,6 +551,36 @@ def _tip(title: str, desc: str, example: str) -> str:
     return ("<b>%s</b><br>%s<br><br><code style='color:#c9a4ff'>%s</code>"
             "<br><br><i>подвійний клік — вставити</i>"
             % (title, desc, code))
+
+
+def _export_text() -> str:
+    """Готовий .css: типове оформлення (діюче, можна правити) + усі класи-гачки
+    з прикладами (закоментовані — розкоментуй потрібне). Стільки ж, скільки на
+    вкладках «Типовий CSS» і «Класи», але одним файлом і з поясненнями."""
+    out = [
+        "/* Hominka — шаблон свого CSS для чату.",
+        " *",
+        " * Нижче дві частини:",
+        " *   1) ТИПОВЕ оформлення — те, що працює без свого CSS. Діюче, можна",
+        " *      редагувати; твої правила лягають поверх нього.",
+        " *   2) КЛАСИ-ГАЧКИ з прикладами — закоментовані. Розкоментуй і зміни те,",
+        " *      що хочеш. Повний перелік — на вкладці «Класи» в редакторі.",
+        " */",
+        "",
+        "/* ================= 1. ТИПОВЕ ОФОРМЛЕННЯ (можна редагувати) ============= */",
+        _base_css(),
+        "",
+        "/* ================= 2. КЛАСИ-ГАЧКИ (розкоментуй потрібне) =============== */",
+    ]
+    for selector, short, desc, example in SELECTORS:
+        out.append("")
+        out.append("/* %s — %s */" % (selector, short))
+        if desc:
+            out.append("/* %s */" % desc)
+        for ln in example.splitlines():
+            out.append("/* " + ln + " */")
+    out.append("")
+    return "\n".join(out)
 
 
 def _base_css() -> str:
