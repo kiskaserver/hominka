@@ -686,7 +686,14 @@ int run_overlay(DWORD parent_pid, bool standalone) {
     MSG msg;
     for (;;) {
         while (PeekMessageW(&msg, nullptr, 0, 0, PM_REMOVE)) {
-            if (msg.message == WM_QUIT) { rlog("WM_QUIT"); chrome.shutdown(); return 0; }
+            if (msg.message == WM_QUIT) {
+                rlog("WM_QUIT");
+                // Шар Vulkan лишати зареєстрованим після виходу ні до чого: він
+                // вантажився б у чужі Vulkan-програми, яким до нас байдуже.
+                if (standalone) vklayer_unregister();
+                chrome.shutdown();
+                return 0;
+            }
             if (standalone && msg.message == WM_HOTKEY) {
                 look.locked = !look.locked;
                 cfg.look.locked = look.locked;
@@ -926,6 +933,10 @@ int run_overlay(DWORD parent_pid, bool standalone) {
                                        ? "Повернули вікну гри те, що в нього було."
                                        : "Нема чого повертати.";
                 if (sev.inject && target) {
+                    // Шар Vulkan реєструємо ПЕРЕД вкладенням: Vulkan-гру не
+                    // можна доповнити після старту, тож шар має бути на місці
+                    // ще до її наступного запуску.
+                    vklayer_register();
                     const InjectResult r = inject_into(target->hwnd);
                     games.status = r.message;
                     games.injected = r.ok;
@@ -936,6 +947,7 @@ int run_overlay(DWORD parent_pid, bool standalone) {
                 if (sev.stop_inject) {
                     games.injected = false;
                     inject.on = false;
+                    vklayer_unregister();
                     games.status = "Чат у грі вимкнено.";
                 }
                 inject.opacity = (uint32_t)cfg.game_opacity;
@@ -1014,6 +1026,7 @@ int run_overlay(DWORD parent_pid, bool standalone) {
                 if (!css_win.visible()) css_win.show_beside(win.screen_rect());
             }
             if (shot_prefix && shot_settings && css_shots >= 2) {
+                if (games.injected) vklayer_unregister();
                 chrome.shutdown();
                 return 0;
             }

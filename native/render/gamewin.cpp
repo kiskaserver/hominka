@@ -6,6 +6,7 @@
 #include <psapi.h>
 
 #include <algorithm>
+#include <cstdio>
 #include <map>
 #include <set>
 
@@ -154,6 +155,8 @@ bool target_is_64(unsigned pid) {
     return ok ? !wow : true;
 }
 
+}  // namespace
+
 // Де лежать нативні частини: поруч із нами або в dist під час розробки.
 std::string native_dir() {
     wchar_t path[MAX_PATH] = {0};
@@ -171,6 +174,8 @@ std::string native_dir() {
             return c;
     return here;
 }
+
+namespace {
 
 RECT monitor_rect(HWND hwnd) {
     MONITORINFO mi = {sizeof(mi)};
