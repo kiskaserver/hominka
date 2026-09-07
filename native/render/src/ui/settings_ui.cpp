@@ -5,6 +5,7 @@
 
 #include "core/version.h"
 #include "imgui/imgui.h"
+#include "ui/uibits.h"
 
 namespace hominka {
 
@@ -118,15 +119,6 @@ bool disclosure(const char* label, bool open, float width) {
     else
         dl->AddTriangleFilled(ImVec2(x - 2, cy - 4), ImVec2(x + 4, cy),
                               ImVec2(x - 2, cy + 4), ACCENT_DIM);
-    return r;
-}
-
-bool ghost(const char* label, float width = 0.0f) {
-    ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(1, 1, 1, 0.06f));
-    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(1, 1, 1, 0.16f));
-    ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(1, 1, 1, 0.24f));
-    const bool r = ImGui::Button(label, ImVec2(width, 0));
-    ImGui::PopStyleColor(3);
     return r;
 }
 
@@ -774,11 +766,10 @@ SettingsEvents draw_settings(SettingsState* st, Config* cfg,
     text_col(TEXT_DIM, HOMINKA_VERSION);
 
     ImGui::SetCursorPos(ImVec2(0, 0));
-    ImGui::InvisibleButton("##title", ImVec2((float)w - 44.0f, TITLE_H));
+    ImGui::InvisibleButton("##title", ImVec2((float)w - 48.0f, TITLE_H));
     ev.title_active = ImGui::IsItemActive();
 
-    ImGui::SetCursorPos(ImVec2((float)w - 36.0f, 9));
-    if (ghost("×", 24.0f)) ev.close = true;
+    if (close_button((float)w - 38.0f, (TITLE_H - 30.0f) * 0.5f, 30.0f)) ev.close = true;
 
     // --- рейка розділів ------------------------------------------------------
     dl->AddRectFilled(ImVec2(org.x, org.y + TITLE_H),

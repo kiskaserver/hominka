@@ -6,6 +6,7 @@
 #include "ui/csslint.h"
 #include "ui/cssref.h"
 #include "imgui/imgui.h"
+#include "ui/uibits.h"
 #include "ui/uifont.h"
 
 namespace hominka {
@@ -31,15 +32,6 @@ void dim(const char* s) {
     ImGui::PushStyleColor(ImGuiCol_Text, col(TEXT_DIM));
     ImGui::TextWrapped("%s", s);
     ImGui::PopStyleColor();
-}
-
-bool ghost(const char* label, float width = 0.0f) {
-    ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(1, 1, 1, 0.06f));
-    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(1, 1, 1, 0.16f));
-    ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(1, 1, 1, 0.24f));
-    const bool r = ImGui::Button(label, ImVec2(width, 0));
-    ImGui::PopStyleColor(3);
-    return r;
 }
 
 // ImGui працює з голим буфером, а нам зручніше зі std::string. Зворотний
@@ -178,20 +170,18 @@ CssEditEvents draw_css_editor(CssEditState* st, int w, int h, int64_t now_ms) {
         ImGui::TextUnformatted("Свій CSS для чату");
 
         ImGui::SetCursorPos(ImVec2(0, 0));
-        ImGui::InvisibleButton("##title", ImVec2((float)w - 250.0f, TITLE_H));
+        ImGui::InvisibleButton("##title", ImVec2((float)w - 316.0f, TITLE_H));
         ev.title_active = ImGui::IsItemActive();
 
-        ImGui::SetCursorPos(ImVec2((float)w - 244.0f, 7));
+        ImGui::SetCursorPos(ImVec2((float)w - 308.0f, 7));
         if (ghost("Показати зразки", 150.0f)) ev.samples = true;
         if (ImGui::IsItemHovered())
             ImGui::SetTooltip("Кілька прикладів повідомлень у самій стрічці —\n"
                               "щоб бачити тему, коли чат мовчить.");
         ImGui::SameLine(0, 6);
         ImGui::SetCursorPosY(7);
-        if (ghost("Застосувати", 78.0f)) { ev.apply = true; st->pending = false; }
-        ImGui::SameLine(0, 6);
-        ImGui::SetCursorPosY(7);
-        if (ghost("×", 24.0f)) ev.close = true;
+        if (ghost("Застосувати", 104.0f)) { ev.apply = true; st->pending = false; }
+        if (close_button((float)w - 38.0f, (TITLE_H - 30.0f) * 0.5f, 30.0f)) ev.close = true;
         ImGui::SetCursorPos(ImVec2(0, TITLE_H + 6));
     }
 

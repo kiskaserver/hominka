@@ -146,6 +146,7 @@ RENDER_SRC="
     $SRC/render/src/ui/gui_win.cpp
     $SRC/render/src/ui/samples.cpp
     $SRC/render/src/ui/settings_ui.cpp
+    $SRC/render/src/ui/uibits.cpp
     $SRC/render/src/ui/uifont.cpp
 
     $SRC/render/src/update/release.cpp

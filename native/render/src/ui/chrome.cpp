@@ -1,6 +1,7 @@
 #include "ui/chrome.h"
 
 #include <cmath>
+#include <cstdio>
 
 #include "imgui/imgui.h"
 #include "imgui/imgui_impl_dx11.h"
@@ -22,8 +23,12 @@ const ImU32 ACCENT       = IM_COL32(168, 85, 247, 255);   // #a855f7
 const ImU32 ACCENT_LOCK  = IM_COL32(34, 197, 94, 255);    // #22c55e
 const ImU32 TEXT_DIM     = IM_COL32(190, 190, 200, 255);
 
-// Висота смужки згори. Та сама, що в DragBar.
-const float BAR_H = 22.0f;
+// Смужка згори. 28 пікселів замість колишніх 22: у 22 не вміщалися ані кнопка
+// з підписом, ані повзунок — усе доводилося тиснути, і ряд виглядав кривим.
+const float BAR_H = 28.0f;
+const float BTN_W = 26.0f;
+const float BTN_H = 22.0f;
+const float BTN_Y = (BAR_H - BTN_H) * 0.5f;
 // Куточок для розтягування.
 const float GRIP = 16.0f;
 
@@ -63,7 +68,7 @@ bool Chrome::init(HWND hwnd, ID3D11Device* dev, ID3D11DeviceContext* ctx) {
     // замовчуванням посеред фіолетового робив із них дві.
     settings_style();
     ImGuiStyle& st = ImGui::GetStyle();
-    st.FramePadding = ImVec2(6, 3);          // смужка заввишки 22 пікселі
+    st.FramePadding = ImVec2(6, 3);          // під смужку заввишки 28 пікселів
     st.Colors[ImGuiCol_WindowBg] = ImVec4(0, 0, 0, 0);   // тло малює Direct2D
 
     if (!ImGui_ImplWin32_Init(hwnd)) return false;
@@ -146,8 +151,92 @@ bool Chrome::poll_hover(HWND hwnd) {
     return hovered_;
 }
 
+void Chrome::begin_intro(int ms) { intro_until_ = GetTickCount64() + (unsigned long long)ms; }
+
+bool Chrome::visible(bool locked) const {
+    if (locked) return false;          // замкнене вікно керування не показує
+    return hovered_ || intro_active();
+}
+
+bool Chrome::intro_active() const { return GetTickCount64() < intro_until_; }
+
+namespace {
+
+// Одна кнопка смужки: підкладка при наведенні і місце, у якому малювати
+// значок. Раніше кожна кнопка робила це по-своєму — звідси й ряд, у якому
+// замок висів вище за «A−», а той не збігався з шестернею.
+struct Slot {
+    ImVec2 a, b;          // кути кнопки на екрані
+    ImVec2 c;             // середина — по ній центрують значок
+    bool hot = false;
+    bool pressed = false;
+};
+
+Slot slot(const char* id, float x, float y, float w, float h, ImU32 hot_bg) {
+    Slot s;
+    ImGui::SetCursorPos(ImVec2(x, y));
+    s.a = ImGui::GetCursorScreenPos();
+    s.pressed = ImGui::InvisibleButton(id, ImVec2(w, h));
+    s.hot = ImGui::IsItemHovered();
+    s.b = ImVec2(s.a.x + w, s.a.y + h);
+    s.c = ImVec2(s.a.x + w * 0.5f, s.a.y + h * 0.5f);
+    if (s.hot)
+        ImGui::GetWindowDrawList()->AddRectFilled(s.a, s.b, hot_bg, 5.0f);
+    return s;
+}
+
+// Підпис усередині кнопки — рівно посередині, а не «як ляже».
+void slot_text(const Slot& s, const char* text, ImU32 color) {
+    const ImVec2 sz = ImGui::CalcTextSize(text);
+    ImGui::GetWindowDrawList()->AddText(
+        ImVec2(s.c.x - sz.x * 0.5f, s.c.y - sz.y * 0.5f), color, text);
+}
+
+// Повзунок смужки — свій, а не ImGui::SliderFloat.
+//
+// Стандартний малює доріжку на всю висоту рядка: у смужці виходила порожня
+// коробка з фіолетовою пігулкою всередині, і на повзунок це схоже не було.
+// Тут доріжка — риска в три пікселі, пройдена частина підсвічена, ручка —
+// кружечок, який більшає під курсором.
+bool bar_slider(const char* id, float x, float y, float w, float h, float* v,
+                float lo, float hi) {
+    ImGui::SetCursorPos(ImVec2(x, y));
+    const ImVec2 p = ImGui::GetCursorScreenPos();
+    ImGui::InvisibleButton(id, ImVec2(w, h));
+    const bool active = ImGui::IsItemActive();
+    const bool hot = ImGui::IsItemHovered() || active;
+
+    const float r = 5.5f;
+    const float x0 = p.x + r, x1 = p.x + w - r;
+    bool changed = false;
+    if (active && x1 > x0) {
+        float t = (ImGui::GetIO().MousePos.x - x0) / (x1 - x0);
+        t = t < 0.0f ? 0.0f : (t > 1.0f ? 1.0f : t);
+        const float nv = lo + t * (hi - lo);
+        if (nv != *v) {
+            *v = nv;
+            changed = true;
+        }
+    }
+    const float t = hi > lo ? (*v - lo) / (hi - lo) : 0.0f;
+    const float cy = p.y + h * 0.5f;
+    const float kx = x0 + t * (x1 - x0);
+
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    dl->AddLine(ImVec2(x0, cy), ImVec2(x1, cy), IM_COL32(255, 255, 255, hot ? 64 : 44), 3.0f);
+    if (kx > x0) dl->AddLine(ImVec2(x0, cy), ImVec2(kx, cy), ACCENT, 3.0f);
+    dl->AddCircleFilled(ImVec2(kx, cy), hot ? r : r - 1.0f, IM_COL32(242, 238, 255, 255));
+    return changed;
+}
+
+void separator(ImDrawList* dl, float x, float y, float h) {
+    dl->AddLine(ImVec2(x, y), ImVec2(x, y + h), IM_COL32(255, 255, 255, 26));
+}
+
+}  // namespace
+
 ChromeEvents Chrome::draw_controls(int w, int h, Look* look, HWND hwnd,
-                                   const std::string& viewers) {
+                                   const std::string& viewers, bool can_close, bool empty) {
     ChromeEvents ev;
     if (!ready_) return ev;
 
@@ -159,9 +248,11 @@ ChromeEvents Chrome::draw_controls(int w, int h, Look* look, HWND hwnd,
     ImGui::GetIO().AddMousePosEvent((float)mouse_.x, (float)mouse_.y);
     ImGui::NewFrame();
 
-    // Поки вікно замкнене (клік-крізь) або миші немає — керувати нічим:
-    // постійна смужка поверх гри це шум, а не зручність.
-    const bool show = hovered_ && !look->locked;
+    const bool show = visible(look->locked);
+    // Замкнене вікно кнопок не показує — але в перші секунди після запуску воно
+    // все одно має сказати, що воно тут. Інакше замкнена й порожня Hominka на
+    // вигляд нічим не відрізняється від незапущеної.
+    const bool intro_note = !show && empty && look->locked && intro_active();
 
     ImGui::SetNextWindowPos(ImVec2(0, 0));
     ImGui::SetNextWindowSize(ImVec2((float)w, (float)h));
@@ -173,171 +264,266 @@ ChromeEvents Chrome::draw_controls(int w, int h, Look* look, HWND hwnd,
 
     if (show) {
         ImDrawList* dl = ImGui::GetWindowDrawList();
+        const ImU32 HOT = IM_COL32(255, 255, 255, 30);
+
         // Смужка згори — і фон під неї, щоб кнопки читалися поверх чату.
         dl->AddRectFilled(ImVec2(2, 2), ImVec2((float)w - 2, BAR_H),
-                          IM_COL32(18, 18, 24, 230), 9.0f, ImDrawFlags_RoundCornersTop);
+                          IM_COL32(16, 16, 22, 238), 9.0f, ImDrawFlags_RoundCornersTop);
+        dl->AddLine(ImVec2(2, BAR_H), ImVec2((float)w - 2, BAR_H),
+                    IM_COL32(255, 255, 255, 20));
 
-        ImGui::SetCursorPos(ImVec2(6, 3));
-        ImGui::PushStyleColor(ImGuiCol_Button, IM_COL32(0, 0, 0, 0));
-        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, IM_COL32(255, 255, 255, 40));
-        ImGui::PushStyleColor(ImGuiCol_ButtonActive, IM_COL32(255, 255, 255, 70));
+        // Розкладка ведеться числами, а не ланцюжком SameLine: у ланцюжку
+        // висота кожного елемента своя, і ряд «їде» — саме це й було видно.
+        // А правий край рахуємо ПЕРШИМ, ще до лівого.
+        //
+        // Вікно чату буває вузьким — 300 пікселів завширшки цілком звична річ.
+        // Доки ряд просто ріс ліворуч, у такому вікні «60%» налізало на
+        // шестерню. Тепер спершу відомо, де починається правий край, і ліві
+        // елементи додаються, лише поки до нього лишається місце; що не
+        // вмістилося — того просто немає, а не намальовано одне поверх одного.
+        const ImVec2 vsz = viewers.empty() ? ImVec2(0, 0) : ImGui::CalcTextSize(viewers.c_str());
+        float right_w = 6.0f + BTN_W;                       // шестерня
+        if (can_close) right_w += BTN_W + 2.0f;
+        const bool show_viewers = !viewers.empty() && (float)w > right_w + vsz.x + 150.0f;
+        if (show_viewers) right_w += vsz.x + 24.0f;
+        const float right_x = (float)w - right_w;
+
+        float x = 6.0f;
+        // Скільки ще влізе ліворуч, лишивши місце під смужку перетягування.
+        auto fits = [&](float need) { return x + need <= right_x - 24.0f; };
 
         // Замок: вимикає й вмикає клік-крізь. Малюємо колодку, а не пишемо
-        // «[o]»: на смужці в двадцять два пікселі підпис прочитати нема коли,
-        // а замкнену колодку видно з першого погляду.
+        // «[o]»: на смужці підпис прочитати нема коли, а замкнену колодку
+        // видно з першого погляду.
         {
-            const ImVec2 p0 = ImGui::GetCursorScreenPos();
-            const bool pressed = ImGui::InvisibleButton("##lock", ImVec2(26, BAR_H - 6));
-            const bool hot = ImGui::IsItemHovered();
-            if (pressed) {
+            const Slot s = slot("##lock", x, BTN_Y, BTN_W, BTN_H, HOT);
+            if (s.pressed) {
                 look->locked = !look->locked;
                 ev.lock_changed = true;
             }
-            if (hot)
+            if (s.hot)
                 ImGui::SetTooltip(look->locked ? "Розімкнути (миша знову діє)"
                                                : "Замкнути (миша проходить крізь)");
-            if (hot)
-                dl->AddRectFilled(p0, ImVec2(p0.x + 26, p0.y + BAR_H - 6),
-                                  IM_COL32(255, 255, 255, 40), 4.0f);
             const ImU32 tint = look->locked ? ACCENT_LOCK
-                                            : (hot ? IM_COL32(255, 255, 255, 255) : TEXT_DIM);
-            const float cx = p0.x + 13.0f, cy = p0.y + (BAR_H - 6) * 0.5f;
-            // Корпус і дужка. Розімкнена — дужка зсунута вбік і не замикається.
-            dl->AddRectFilled(ImVec2(cx - 4.5f, cy - 1.0f), ImVec2(cx + 4.5f, cy + 5.5f),
-                              tint, 1.5f);
-            dl->PathArcTo(ImVec2(look->locked ? cx : cx + 3.0f, cy - 1.0f), 3.2f,
-                          3.14159265f, 6.2831853f, 12);
-            dl->PathStroke(tint, 0, 1.6f);
+                                            : (s.hot ? IM_COL32(255, 255, 255, 255) : TEXT_DIM);
+            // Корпус і дужка. Замкнена — дужка стоїть над корпусом рівно;
+            // розімкнена — зсунута вбік і не доходить до нього, тобто відкрита
+            // саме з одного боку, як у справжньої колодки.
+            const float cx = s.c.x, cy = s.c.y + 2.0f;
+            dl->AddRectFilled(ImVec2(cx - 5.0f, cy - 1.5f), ImVec2(cx + 5.0f, cy + 5.0f),
+                              tint, 1.8f);
+            if (look->locked)
+                dl->PathArcTo(ImVec2(cx, cy - 1.5f), 3.4f, 3.14159265f, 6.2831853f, 14);
+            else
+                dl->PathArcTo(ImVec2(cx + 2.6f, cy - 1.5f), 3.4f, 3.14159265f,
+                              5.4977871f, 12);
+            dl->PathStroke(tint, 0, 1.8f);
+            x += BTN_W;
         }
 
-        ImGui::SameLine(0, 2);
-        if (ImGui::Button("A−", ImVec2(26, BAR_H - 6))) {
-            look->zoom = look->zoom - 0.1f < 0.5f ? 0.5f : look->zoom - 0.1f;
-            ev.look_changed = true;
+        // Кегль. Підпис малюємо самі й по центру кнопки: ImGui::Button ставив
+        // текст за своїм відступом, і «A−» з «A+» стояли не на одній лінії з
+        // рештою ряду.
+        if (fits(11.0f + BTN_W * 2.0f + 2.0f)) {
+            x += 5.0f;
+            separator(dl, x, BTN_Y + 3.0f, BTN_H - 6.0f);
+            x += 6.0f;
+
+            const Slot a = slot("##smaller", x, BTN_Y, BTN_W, BTN_H, HOT);
+            if (a.pressed) {
+                look->zoom = look->zoom - 0.1f < 0.5f ? 0.5f : look->zoom - 0.1f;
+                ev.look_changed = true;
+            }
+            if (a.hot) ImGui::SetTooltip("Дрібніший текст");
+            slot_text(a, "A-", a.hot ? IM_COL32(255, 255, 255, 255) : TEXT_DIM);
+            x += BTN_W + 2.0f;
+
+            const Slot b = slot("##bigger", x, BTN_Y, BTN_W, BTN_H, HOT);
+            if (b.pressed) {
+                look->zoom = look->zoom + 0.1f > 3.0f ? 3.0f : look->zoom + 0.1f;
+                ev.look_changed = true;
+            }
+            if (b.hot) ImGui::SetTooltip("Більший текст");
+            slot_text(b, "A+", b.hot ? IM_COL32(255, 255, 255, 255) : TEXT_DIM);
+            x += BTN_W;
         }
-        if (ImGui::IsItemHovered()) ImGui::SetTooltip("Дрібніший текст");
-        ImGui::SameLine(0, 2);
-        if (ImGui::Button("A+", ImVec2(26, BAR_H - 6))) {
-            look->zoom = look->zoom + 0.1f > 3.0f ? 3.0f : look->zoom + 0.1f;
-            ev.look_changed = true;
-        }
-        if (ImGui::IsItemHovered()) ImGui::SetTooltip("Більший текст");
 
         // Повзунки прозорості — найчастіше крутять саме їх, тож вони під рукою,
-        // а не в налаштуваннях. У відсотках: «0.60» ні про що не каже.
-        ImGui::SameLine(0, 8);
-        ImGui::PushStyleColor(ImGuiCol_FrameBg, IM_COL32(255, 255, 255, 25));
-        ImGui::PushStyleColor(ImGuiCol_SliderGrab, ACCENT);
-        ImGui::PushStyleColor(ImGuiCol_SliderGrabActive, IM_COL32(192, 132, 252, 255));
+        // а не в налаштуваннях. Число поруч показуємо, лише коли для нього є
+        // місце; у підказці воно є завжди.
         {
-            float op = look->opacity * 100.0f;
-            ImGui::SetNextItemWidth(66);
-            if (ImGui::SliderFloat("##op", &op, 20.0f, 100.0f, "%.0f%%")) {
-                look->opacity = op / 100.0f;
-                ev.look_changed = true;
-            }
-            if (ImGui::IsItemHovered()) ImGui::SetTooltip("Прозорість вікна");
+            const float SLIDER_W = 58.0f;
+            const bool values = (float)w >= 470.0f;
+            const float one = SLIDER_W + (values ? 6.0f + 34.0f : 0.0f) + 10.0f;
+            if (fits(11.0f + one * 2.0f)) {
+                x += 5.0f;
+                separator(dl, x, BTN_Y + 3.0f, BTN_H - 6.0f);
+                x += 8.0f;
 
-            ImGui::SameLine(0, 4);
-            float bg = look->bg_alpha * 100.0f;
-            ImGui::SetNextItemWidth(66);
-            if (ImGui::SliderFloat("##bg", &bg, 0.0f, 100.0f, "%.0f%%")) {
+                struct Bar { const char* id; float* v; float lo, hi; const char* tip; };
+                float op = look->opacity * 100.0f, bg = look->bg_alpha * 100.0f;
+                const Bar bars[2] = {{"##op", &op, 20.0f, 100.0f, "Прозорість вікна"},
+                                     {"##bg", &bg, 0.0f, 100.0f, "Тло під чатом"}};
+                for (int i = 0; i < 2; ++i) {
+                    if (bar_slider(bars[i].id, x, BTN_Y, SLIDER_W, BTN_H, bars[i].v,
+                                   bars[i].lo, bars[i].hi))
+                        ev.look_changed = true;
+                    if (ImGui::IsItemHovered())
+                        ImGui::SetTooltip("%s — %.0f%%", bars[i].tip, *bars[i].v);
+                    x += SLIDER_W;
+
+                    if (values) {
+                        x += 6.0f;
+                        char buf[16];
+                        snprintf(buf, sizeof buf, "%.0f%%", *bars[i].v);
+                        const ImVec2 sz = ImGui::CalcTextSize(buf);
+                        dl->AddText(
+                            ImVec2(ImGui::GetWindowPos().x + x,
+                                   ImGui::GetWindowPos().y + BTN_Y + (BTN_H - sz.y) * 0.5f),
+                            IM_COL32(216, 194, 255, 255), buf);
+                        x += 34.0f;
+                    }
+                    x += 10.0f;
+                }
+                look->opacity = op / 100.0f;
                 look->bg_alpha = bg / 100.0f;
-                ev.look_changed = true;
             }
-            if (ImGui::IsItemHovered()) ImGui::SetTooltip("Тло під чатом");
         }
-        ImGui::PopStyleColor(3);
+
+        const float left_end = x;
+
+        // Правий край: хрестик скраю, поруч шестерня, перед ними глядачі.
+        float rx = (float)w - 6.0f;
+
+        if (can_close) {
+            rx -= BTN_W;
+            const Slot s = slot("##close", rx, BTN_Y, BTN_W, BTN_H,
+                                IM_COL32(239, 68, 68, 190));
+            if (s.pressed) ev.close = true;
+            if (s.hot) ImGui::SetTooltip("Закрити Hominka");
+            const ImU32 tint = s.hot ? IM_COL32(255, 255, 255, 255) : TEXT_DIM;
+            const float r = 4.0f;
+            dl->AddLine(ImVec2(s.c.x - r, s.c.y - r), ImVec2(s.c.x + r, s.c.y + r), tint, 1.6f);
+            dl->AddLine(ImVec2(s.c.x + r, s.c.y - r), ImVec2(s.c.x - r, s.c.y + r), tint, 1.6f);
+            rx -= 2.0f;
+        }
 
         // Шестерня — вхід у налаштування. Малюємо її самі: гліфа шестерні в
         // Segoe UI немає, а «*» на її місці нічого не означає — на нього просто
         // не натискали.
-        ImGui::SameLine(0, 8);
         {
-            const ImVec2 p0 = ImGui::GetCursorScreenPos();
-            const bool pressed = ImGui::InvisibleButton("##gear", ImVec2(24, BAR_H - 6));
-            const bool hot = ImGui::IsItemHovered();
-            if (pressed) ev.open_settings = true;
-            if (hot) ImGui::SetTooltip("Налаштування");
-            if (hot)
-                dl->AddRectFilled(p0, ImVec2(p0.x + 24, p0.y + BAR_H - 6),
-                                  IM_COL32(255, 255, 255, 40), 4.0f);
-
-            const ImVec2 c(p0.x + 12.0f, p0.y + (BAR_H - 6) * 0.5f);
-            const ImU32 tint = hot ? IM_COL32(255, 255, 255, 255) : TEXT_DIM;
+            rx -= BTN_W;
+            const Slot s = slot("##gear", rx, BTN_Y, BTN_W, BTN_H, HOT);
+            if (s.pressed) ev.open_settings = true;
+            if (s.hot) ImGui::SetTooltip("Налаштування");
+            const ImU32 tint = s.hot ? IM_COL32(255, 255, 255, 255) : TEXT_DIM;
             // Шість зубців по колу плюс кільце: дрібно, але впізнавано.
             for (int i = 0; i < 6; ++i) {
                 const float a = (float)i * 3.14159265f / 3.0f;
                 const float cs = cosf(a), sn = sinf(a);
-                dl->AddLine(ImVec2(c.x + cs * 3.0f, c.y + sn * 3.0f),
-                            ImVec2(c.x + cs * 6.5f, c.y + sn * 6.5f), tint, 2.0f);
+                dl->AddLine(ImVec2(s.c.x + cs * 3.0f, s.c.y + sn * 3.0f),
+                            ImVec2(s.c.x + cs * 6.5f, s.c.y + sn * 6.5f), tint, 2.0f);
             }
-            dl->AddCircle(c, 4.0f, tint, 12, 2.0f);
+            dl->AddCircle(s.c, 4.0f, tint, 12, 2.0f);
         }
 
-        ImGui::PopStyleColor(3);
-
-        // Глядачі — праворуч від шестерні. Саме тут, а не в налаштуваннях:
+        // Глядачі — ліворуч від шестерні. Саме тут, а не в налаштуваннях:
         // дивитися на це число хочуть під час ефіру, а не тоді, коли щось
         // налаштовують.
-        if (!viewers.empty()) {
-            ImGui::SameLine(0, 10);
-            ImGui::AlignTextToFramePadding();
-            ImGui::PushStyleColor(ImGuiCol_Text, ImGui::ColorConvertU32ToFloat4(TEXT_DIM));
-            ImGui::TextUnformatted(viewers.c_str());
-            ImGui::PopStyleColor();
+        if (show_viewers) {
+            rx -= vsz.x + 18.0f;
+            ImGui::SetCursorPos(ImVec2(rx, BTN_Y));
+            const ImVec2 p = ImGui::GetCursorScreenPos();
+            ImGui::InvisibleButton("##viewers", ImVec2(vsz.x + 14.0f, BTN_H));
+            dl->AddCircleFilled(ImVec2(p.x + 3.0f, p.y + BTN_H * 0.5f), 3.0f,
+                                IM_COL32(239, 68, 68, 255));
+            dl->AddText(ImVec2(p.x + 12.0f, p.y + (BTN_H - vsz.y) * 0.5f), TEXT_DIM,
+                        viewers.c_str());
             if (ImGui::IsItemHovered()) ImGui::SetTooltip("Глядачів зараз");
+            rx -= 6.0f;
         }
 
-        // Смужка перетягування — уся вільна частина зверху.
-        const float used = ImGui::GetCursorPosX();
-        ImGui::SetCursorPos(ImVec2(used + 4, 3));
-        ImGui::InvisibleButton("##drag",
-                               ImVec2((float)w - used - 10 > 8 ? (float)w - used - 10 : 8,
-                                      BAR_H - 6));
-        if (ImGui::IsItemActive()) {
-            if (!dragging_) {
-                dragging_ = true;
-                GetCursorPos(&drag_anchor_);
-                GetWindowRect(hwnd, &drag_origin_);
+        // Смужка перетягування — уся вільна частина посередині.
+        const float drag_w = rx - left_end - 8.0f;
+        if (drag_w > 8.0f) {
+            ImGui::SetCursorPos(ImVec2(left_end + 4.0f, BTN_Y));
+            ImGui::InvisibleButton("##drag", ImVec2(drag_w, BTN_H));
+            if (ImGui::IsItemActive()) {
+                if (!dragging_) {
+                    dragging_ = true;
+                    GetCursorPos(&drag_anchor_);
+                    GetWindowRect(hwnd, &drag_origin_);
+                }
+                POINT now;
+                GetCursorPos(&now);
+                SetWindowPos(hwnd, nullptr,
+                             drag_origin_.left + (now.x - drag_anchor_.x),
+                             drag_origin_.top + (now.y - drag_anchor_.y),
+                             0, 0, SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
+            } else if (dragging_) {
+                dragging_ = false;
+                ev.geometry_changed = true;
             }
-            POINT now;
-            GetCursorPos(&now);
-            SetWindowPos(hwnd, nullptr,
-                         drag_origin_.left + (now.x - drag_anchor_.x),
-                         drag_origin_.top + (now.y - drag_anchor_.y),
-                         0, 0, SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
-        } else if (dragging_) {
-            dragging_ = false;
-            ev.geometry_changed = true;
+            if (ImGui::IsItemHovered()) ImGui::SetTooltip("Перетягнути вікно");
         }
-        if (ImGui::IsItemHovered()) ImGui::SetTooltip("Перетягнути вікно");
 
         // Куточок для розтягування. Розмір вікна веде Python (він же його й
         // зберігає), тож тут ми лише повідомляємо новий — а застосує його
         // наступний «config».
-        dl->AddTriangleFilled(ImVec2((float)w - 3, (float)h - 3),
-                              ImVec2((float)w - GRIP, (float)h - 3),
-                              ImVec2((float)w - 3, (float)h - GRIP),
-                              look->locked ? ACCENT_LOCK : ACCENT);
-        ImGui::SetCursorPos(ImVec2((float)w - GRIP - 2, (float)h - GRIP - 2));
-        ImGui::InvisibleButton("##grip", ImVec2(GRIP, GRIP));
-        if (ImGui::IsItemActive()) {
-            if (!resizing_) {
-                resizing_ = true;
-                GetCursorPos(&resize_anchor_);
-                resize_w_ = w;
-                resize_h_ = h;
+        {
+            ImGui::SetCursorPos(ImVec2((float)w - GRIP - 2, (float)h - GRIP - 2));
+            const ImVec2 p = ImGui::GetCursorScreenPos();
+            ImGui::InvisibleButton("##grip", ImVec2(GRIP, GRIP));
+            const bool hot = ImGui::IsItemHovered() || resizing_;
+            // Дві риски замість суцільного трикутника: суцільний фіолетовий кут
+            // перетягував на себе увагу з чату, заради якого вікно й відкрите.
+            const ImU32 tint = look->locked ? ACCENT_LOCK : ACCENT;
+            const ImU32 c = hot ? tint : (tint & 0x00FFFFFF) | 0x70000000;
+            for (int i = 0; i < 2; ++i) {
+                const float o = 4.0f + (float)i * 5.0f;
+                dl->AddLine(ImVec2(p.x + GRIP - 2.0f, p.y + GRIP - o),
+                            ImVec2(p.x + GRIP - o, p.y + GRIP - 2.0f), c, 2.0f);
             }
-            POINT now;
-            GetCursorPos(&now);
-            const int nw = resize_w_ + (now.x - resize_anchor_.x);
-            const int nh = resize_h_ + (now.y - resize_anchor_.y);
-            SetWindowPos(hwnd, nullptr, 0, 0, nw < 180 ? 180 : nw, nh < 120 ? 120 : nh,
-                         SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE);
-        } else if (resizing_) {
-            resizing_ = false;
-            ev.geometry_changed = true;
+            if (ImGui::IsItemActive()) {
+                if (!resizing_) {
+                    resizing_ = true;
+                    GetCursorPos(&resize_anchor_);
+                    resize_w_ = w;
+                    resize_h_ = h;
+                }
+                POINT now;
+                GetCursorPos(&now);
+                const int nw = resize_w_ + (now.x - resize_anchor_.x);
+                const int nh = resize_h_ + (now.y - resize_anchor_.y);
+                SetWindowPos(hwnd, nullptr, 0, 0, nw < 180 ? 180 : nw, nh < 120 ? 120 : nh,
+                             SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE);
+            } else if (resizing_) {
+                resizing_ = false;
+                ev.geometry_changed = true;
+            }
+            if (ImGui::IsItemHovered()) ImGui::SetTooltip("Розтягнути вікно");
+        }
+    }
+
+    // Порожня стрічка — не привід показувати порожнє вікно. Поки нічого не
+    // приїхало, пишемо просто, що це і куди натиснути. Замкненому вікну
+    // натискати нема куди, тож йому кажемо, як розімкнутися.
+    if ((show && empty) || intro_note) {
+        const char* lines[3] = {
+            "Hominka працює",
+            intro_note ? "Вікно замкнене — миша проходить крізь нього."
+                       : "Тут з'являтимуться повідомлення чату.",
+            intro_note ? "Ctrl+Alt+Space — розімкнути."
+                       : "Канали — у налаштуваннях, кнопка згори праворуч."};
+        const ImU32 cols[3] = {IM_COL32(228, 228, 231, 255), TEXT_DIM, TEXT_DIM};
+        ImDrawList* dl = ImGui::GetWindowDrawList();
+        float y = (float)h * 0.5f - 30.0f;
+        for (int i = 0; i < 3; ++i) {
+            const ImVec2 sz = ImGui::CalcTextSize(lines[i]);
+            dl->AddText(ImVec2(ImGui::GetWindowPos().x + ((float)w - sz.x) * 0.5f,
+                               ImGui::GetWindowPos().y + y),
+                        cols[i], lines[i]);
+            y += sz.y + (i == 0 ? 10.0f : 4.0f);
         }
     }
 

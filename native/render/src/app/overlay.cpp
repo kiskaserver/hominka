@@ -289,6 +289,10 @@ int run_overlay(DWORD parent_pid, bool standalone) {
         rlog("ImGui не піднявся — вихід");
         return 5;
     }
+    // Перші секунди рамку видно без наведення: інакше запущена програма — це
+    // темний прямокутник, який нічим себе не виказує, і людина возить мишею по
+    // екрану, доки випадково на нього не натрапить.
+    if (standalone) chrome.begin_intro(7000);
     Look look;
 
     IpcServer ipc;
@@ -440,7 +444,10 @@ int run_overlay(DWORD parent_pid, bool standalone) {
 
         // Рамку показуємо, лише коли миша над вікном і воно не замкнене. Поки
         // її не видно — і перемальовувати нема чого, тож кадр не рухається.
-        const bool chrome_visible = chrome.hovered() && !look.locked;
+        // «Малювати рамку» і «є що перемальовувати» — не одне й те саме: у
+        // перші секунди замкнене вікно кнопок не показує, але напис «я тут»
+        // показує, і той напис теж треба колись стерти.
+        const bool chrome_visible = chrome.visible(look.locked) || chrome.intro_active();
         const bool chrome_dirty = chrome_visible || chrome_was_visible;
 
         if (changed || resized || blanked || chrome_dirty || feed.dirty(t)) {
@@ -476,7 +483,8 @@ int run_overlay(DWORD parent_pid, bool standalone) {
             if (rtv) win.d3d_ctx()->OMSetRenderTargets(1, &rtv, nullptr);
             const ChromeEvents cev =
                 chrome.draw_controls(win.width(), win.height(), &look, win.hwnd(),
-                                     standalone ? viewers_line(viewers, cfg) : std::string());
+                                     standalone ? viewers_line(viewers, cfg) : std::string(),
+                                     /*can_close=*/standalone, feed.size() == 0);
             // Поки тягнуть — розмір веде рука; відпустили (geometry_changed) —
             // знову веде Python.
             if (chrome.wants_mouse()) user_sizing = true;
@@ -489,6 +497,15 @@ int run_overlay(DWORD parent_pid, bool standalone) {
                     cfg.save();
                 }
                 if (cev.geometry_changed) user_sizing = false;
+                // Хрестик у смужці. Досі закрити програму можна було лише
+                // через диспетчер задач: вікно чату фокусу не бере, тож ані
+                // Alt+F4, ані системного меню в нього немає.
+                if (cev.close) {
+                    rlog("закрито з рамки");
+                    vklayer_unregister();
+                    chrome.shutdown();
+                    return 0;
+                }
                 if (cev.open_settings) {
                     if (!gui.created() &&
                         !gui.create(L"HominkaSettings", L"Hominka — налаштування", 720, 520))
