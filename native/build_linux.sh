@@ -17,6 +17,7 @@ mkdir -p "$OUT"
 # litehtml і Blend2D, і серед них не видно наших.
 INC="-isystem $TPL/include $(pkg-config --cflags freetype2 fontconfig)"
 LIBS="-L$TPL/lib -llitehtml -lgumbo -lblend2d -lwebpdemux -lwebp -lsharpyuv \
+      -lixwebsocket -lmbedtls -lmbedx509 -lmbedcrypto \
       $(pkg-config --libs freetype2 fontconfig x11 xext) -lpthread -lrt -lm -ldl"
 
 COMMON="-O2 -std=c++17 -Wall -Wextra -Wno-unused-parameter"
@@ -27,6 +28,7 @@ g++ $COMMON $INC \
     "$SRC/render/container_bl.cpp" \
     "$SRC/render/fontstore.cpp" \
     "$SRC/render/cssbits.cpp" \
+    "$SRC/render/net_probe.cpp" \
     "$SRC/render/chat_doc.cpp" \
     "$SRC/render/imgcache.cpp" \
     "$SRC/render/feed.cpp" \

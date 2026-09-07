@@ -101,13 +101,15 @@ x86_64-w64-mingw32-g++-posix $COMMON -municode -std=c++17 \
     "$SRC/render/main.cpp" "$SRC/render/container_d2d.cpp" \
     "$SRC/render/chat_doc.cpp" "$SRC/render/imgcache.cpp" \
     "$SRC/render/cssbits.cpp" \
+    "$SRC/render/net_probe.cpp" \
     "$SRC/render/feedgfx.cpp" \
     "$SRC/render/feed.cpp" "$SRC/render/ipc.cpp" \
     "$SRC/render/chrome.cpp" \
     -o "$OUT/hominka-render-x64.exe" \
     -L"$TP/lib" -limgui -llitehtml -lgumbo -lwebpdemux -lwebp -lsharpyuv \
+    -lixwebsocket -lmbedtls -lmbedx509 -lmbedcrypto \
     -ld2d1 -ldwrite -lwindowscodecs -ld3d11 -ldxgi -ldcomp \
-    -ld3dcompiler_47 -lgdi32 -ldwmapi -lole32 -luuid
+    -ld3dcompiler_47 -lgdi32 -ldwmapi -lole32 -luuid -lws2_32 -lcrypt32 -lshlwapi -lbcrypt
 
 # Та сама програма, але з символами й без -s: коли рендер падає, VEH друкує
 # зсув від початку модуля, а addr2line по ЦЬОМУ файлу перетворює його на
@@ -118,13 +120,15 @@ x86_64-w64-mingw32-g++-posix -O1 -g -static -static-libgcc -static-libstdc++ \
     "$SRC/render/main.cpp" "$SRC/render/container_d2d.cpp" \
     "$SRC/render/chat_doc.cpp" "$SRC/render/imgcache.cpp" \
     "$SRC/render/cssbits.cpp" \
+    "$SRC/render/net_probe.cpp" \
     "$SRC/render/feedgfx.cpp" \
     "$SRC/render/feed.cpp" "$SRC/render/ipc.cpp" \
     "$SRC/render/chrome.cpp" \
     -o "$OUT/hominka-render.debug.exe" \
     -L"$TP/lib" -limgui -llitehtml -lgumbo -lwebpdemux -lwebp -lsharpyuv \
+    -lixwebsocket -lmbedtls -lmbedx509 -lmbedcrypto \
     -ld2d1 -ldwrite -lwindowscodecs -ld3d11 -ldxgi -ldcomp \
-    -ld3dcompiler_47 -lgdi32 -ldwmapi -lole32 -luuid
+    -ld3dcompiler_47 -lgdi32 -ldwmapi -lole32 -luuid -lws2_32 -lcrypt32 -lshlwapi -lbcrypt
 
 echo ""
 echo "Готово. У $OUT:"

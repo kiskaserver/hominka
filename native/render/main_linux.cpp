@@ -33,6 +33,7 @@
 #include "imgcache.h"
 #include "chrome_bl.h"
 #include "ipc.h"
+#include "net_probe.h"
 #include "look.h"
 #include "x11_window.h"
 
@@ -544,12 +545,27 @@ int preview(pid_t parent_pid) {
     return 0;
 }
 
+// Перша перевірка мережі в C++ — див. net_probe.h.
+int nettest(const std::string& channel, int seconds) {
+    printf("під'єднуюся до #%s на %d с…\n", channel.c_str(), seconds);
+    const int n = net_probe_twitch(channel, seconds, [](const ProbeMessage& m) {
+        printf("  %-20s %s\n", m.name.c_str(), m.text.c_str());
+    });
+    if (n < 0) {
+        fprintf(stderr, "не під'єдналося\n");
+        return 1;
+    }
+    printf("прочитано повідомлень: %d\n", n);
+    return 0;
+}
+
 void usage() {
     fprintf(stderr,
             "hominka-render-linux — нативний рендер чату\n"
             "  --selftest <вхід.json> <вихід.png>   намалювати зразки\n"
             "  --run <pid Hominka>                  вікно оверлея й канал\n"
             "  --preview <pid Hominka>              кадр у редактор CSS\n"
+            "  --nettest <канал> [секунд]           прочитати чат Twitch\n"
             "  --probe                              перевірити зв'язку\n"
             "  --verbose                            докладний журнал\n");
 }
@@ -565,6 +581,10 @@ int main(int argc, char** argv) {
     if (args.empty()) { usage(); return 1; }
 
     if (!strcmp(args[0], "--probe")) return probe();
+    if (!strcmp(args[0], "--nettest")) {
+        if (args.size() < 2) { usage(); return 1; }
+        return nettest(args[1], args.size() > 2 ? atoi(args[2]) : 20);
+    }
     if (!strcmp(args[0], "--run")) {
         if (args.size() < 2) { usage(); return 1; }
         return run((pid_t)atoi(args[1]));

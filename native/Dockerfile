@@ -40,6 +40,9 @@ ENV LIBWEBP_REF=v1.5.0
 ENV NANOSVG_REF=239e102ec2c691f2902e20ace2ed36ee4a35cfe6
 ENV IMGUI_REF=v1.92.9b
 ENV JSON_REF=v3.11.3
+# TLS і WebSocket: чат ходить лише по захищених з'єднаннях.
+ENV MBEDTLS_REF=mbedtls-3.6.7
+ENV IXWS_REF=v12.0.1
 ENV TP=/tp
 COPY thirdparty.sh /tmp/thirdparty.sh
 COPY patches /tmp/patches

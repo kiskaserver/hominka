@@ -12,6 +12,13 @@
 #   libwebp   — 7TV і BTTV віддають емоути у WebP; WIC його не вміє.
 #   nanosvg   — значки площадок і плашки Kick — це SVG; WIC його теж не вміє.
 #   nlohmann  — розбір JSON, який шле Python (той самий dict, що й у чаті).
+#   mbedtls   — TLS. Чат ходить лише по захищених з'єднаннях (wss://, https://),
+#               а свого TLS ні в mingw, ні в нас немає. Узято 3.6 (лінія з
+#               довгою підтримкою), а не 4.x: у четвірці змінили API, і
+#               IXWebSocket на нього ще не розрахований.
+#   ixwebsocket— WebSocket і HTTP в одному. Twitch IRC і Kick (Pusher) — це
+#               саме WebSocket, а решта (значки, емоути, YouTube) — звичайні
+#               запити; тягти дві бібліотеки заради цього ні до чого.
 #   imgui     — рамка вікна: смужка перетягування, куточок, замок, повзунки.
 #               Саме те, заради чого на C++ узагалі варто братися за інтерфейс:
 #               кнопка тут — один рядок, а не клас на сто.
@@ -124,6 +131,45 @@ for f in imgui_impl_win32 imgui_impl_dx11; do
 done
 x86_64-w64-mingw32-ar rcs "$TP/lib/libimgui.a" "$IMGUI_OBJ"/*.o
 rm -rf "$IMGUI_OBJ"
+
+# --- mbedTLS --------------------------------------------------------------
+#
+# Підмодулі обов'язкові: у 3.6 частина заголовків генерується з файлів, які
+# лежать саме там. Без --recurse-submodules збірка падає не одразу, а на
+# середині — з незрозумілою помилкою про відсутній framework.
+echo ">> mbedtls $MBEDTLS_REF"
+git clone -q --depth 1 --recurse-submodules -b "$MBEDTLS_REF" \
+    https://github.com/Mbed-TLS/mbedtls.git
+cmake -S mbedtls -B mbedtls/build $TC \
+      -DCMAKE_BUILD_TYPE=Release \
+      -DCMAKE_INSTALL_PREFIX="$TP" \
+      -DENABLE_TESTING=OFF -DENABLE_PROGRAMS=OFF \
+      -DUSE_SHARED_MBEDTLS_LIBRARY=OFF -DUSE_STATIC_MBEDTLS_LIBRARY=ON >/dev/null
+cmake --build mbedtls/build -j"$(nproc)" >/dev/null
+cmake --install mbedtls/build >/dev/null
+
+# --- IXWebSocket ----------------------------------------------------------
+# Шляхи до mbedTLS передаємо ЯВНО. Файл тулчейна mingw каже CMake шукати
+# бібліотеки лише всередині свого кореня (FIND_ROOT_PATH_MODE_LIBRARY ONLY),
+# а наш /tp туди не входить — тож find_package його не бачить, хоч він і
+# поруч. Під Linux тулчейна немає, але шлях однаково не системний.
+# Стиснення кадрів (permessage-deflate) вимикаємо: ані Twitch IRC, ані
+# Pusher його не просять, а вмикання тягло б ще й zlib. Трафік чату —
+# це текстові рядки, там нема чого стискати.
+echo ">> ixwebsocket $IXWS_REF"
+git clone -q --depth 1 -b "$IXWS_REF" https://github.com/machinezone/IXWebSocket.git ixws
+cmake -S ixws -B ixws/build $TC \
+      -DCMAKE_BUILD_TYPE=Release \
+      -DCMAKE_INSTALL_PREFIX="$TP" \
+      -DCMAKE_PREFIX_PATH="$TP" \
+      -DUSE_TLS=ON -DUSE_MBED_TLS=ON -DUSE_ZLIB=OFF \
+      -DMBEDTLS_INCLUDE_DIRS="$TP/include" \
+      -DMBEDTLS_LIBRARY="$TP/lib/libmbedtls.a" \
+      -DMBEDX509_LIBRARY="$TP/lib/libmbedx509.a" \
+      -DMBEDCRYPTO_LIBRARY="$TP/lib/libmbedcrypto.a" \
+      -DIXWEBSOCKET_INSTALL=ON >/dev/null
+cmake --build ixws/build -j"$(nproc)" >/dev/null
+cmake --install ixws/build >/dev/null
 
 echo ">> nlohmann/json $JSON_REF"
 git clone -q --depth 1 -b "$JSON_REF" https://github.com/nlohmann/json.git
