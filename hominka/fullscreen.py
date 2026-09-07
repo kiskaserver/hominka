@@ -28,7 +28,14 @@ Discord і Steam. Це окрема тема, окремою мовою і з о
 
 import ctypes
 import os
-from ctypes import wintypes
+import sys
+# wintypes існує лише на Windows: там, де його немає, сам імпорт кидає помилку,
+# і модуль не завантажився б узагалі. Усе, що ним користується, і так під
+# «if IS_WINDOWS».
+if sys.platform == "win32":
+    from ctypes import wintypes
+else:
+    wintypes = None
 
 from .winapi import IS_WINDOWS, user32
 
@@ -70,11 +77,16 @@ QUNS_RUNNING_D3D_FULL_SCREEN = 3
 QUNS_PRESENTATION_MODE = 4
 
 
-class _MONITORINFO(ctypes.Structure):
-    _fields_ = [("cbSize", wintypes.DWORD),
-                ("rcMonitor", wintypes.RECT),
-                ("rcWork", wintypes.RECT),
-                ("dwFlags", wintypes.DWORD)]
+# Тіло класу виконується ПРИ ІМПОРТІ, тож поза Windows його не має бути
+# взагалі: там wintypes немає, і модуль не завантажився б. Решта тутешнього —
+# функції, а їхні тіла виконуються лише при виклику, і кличуть їх тільки під
+# Windows (available() каже «ні»).
+if IS_WINDOWS:
+    class _MONITORINFO(ctypes.Structure):
+        _fields_ = [("cbSize", wintypes.DWORD),
+                    ("rcMonitor", wintypes.RECT),
+                    ("rcWork", wintypes.RECT),
+                    ("dwFlags", wintypes.DWORD)]
 
 
 # Що ми змінили в чужих вікнах: hwnd → (style, exstyle, rect).

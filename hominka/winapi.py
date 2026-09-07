@@ -8,7 +8,13 @@
 import ctypes
 import os
 import sys
-from ctypes import wintypes
+# wintypes існує лише на Windows: там, де його немає, сам імпорт кидає помилку,
+# і модуль не завантажився б узагалі. Усе, що ним користується, і так під
+# «if IS_WINDOWS».
+if sys.platform == "win32":
+    from ctypes import wintypes
+else:
+    wintypes = None
 
 from PySide6.QtCore import QEvent, QObject, Qt, QTimer
 from PySide6.QtWidgets import QApplication, QWidget

@@ -10,7 +10,13 @@ import ctypes
 import os
 import subprocess
 import sys
-from ctypes import wintypes
+# wintypes існує лише на Windows: там, де його немає, сам імпорт кидає
+# помилку, і модуль не завантажився б узагалі. Усе, що ним користується, і так
+# під «if IS_WINDOWS».
+if sys.platform == "win32":
+    from ctypes import wintypes
+else:
+    wintypes = None
 
 from .paths import BASE_DIR, resource_path
 
@@ -29,11 +35,17 @@ EX_BITNESS = 4
 EX_INJECT = 5
 
 
-def native_dir() -> str:
-    """Де лежать injector-*.exe та overlay-*.dll.
+# За яким файлом упізнаємо теку з нативними частинами. Під Windows це
+# інжектор, поза ним — сам рендер: ані injector.exe, ані overlay.dll на Linux
+# не існує, і шукати їх там означало б не знайти теку взагалі.
+_MARKER = "injector-x64.exe" if sys.platform == "win32" else "hominka-render-linux"
 
-    У зібраній програмі — поруч з .exe (їх кладе туди release), у dev — у
-    native/dist. Беремо перший каталог, де реально лежить injector-x64.exe, а
+
+def native_dir() -> str:
+    """Де лежать нативні частини.
+
+    У зібраній програмі — поруч з виконуваним файлом (їх кладе туди release),
+    у dev — у native/dist. Беремо перший каталог, де маркер реально лежить, а
     не просто той, що існує: інакше в dev ми б спинилися на порожньому native/.
     """
     cands = (os.path.join(BASE_DIR, "native"),
@@ -41,7 +53,7 @@ def native_dir() -> str:
              os.path.join(BASE_DIR, "native", "dist"),
              os.path.join(os.path.dirname(BASE_DIR), "native", "dist"))
     for cand in cands:
-        if cand and os.path.isfile(os.path.join(cand, "injector-x64.exe")):
+        if cand and os.path.isfile(os.path.join(cand, _MARKER)):
             return cand
     return os.path.join(BASE_DIR, "native")
 

@@ -35,8 +35,15 @@ def _data_dir() -> str:
     У dev-режимі — поруч зі скриптом, щоб не смітити в системі під час розробки.
     """
     if getattr(sys, "frozen", False):
-        base = os.environ.get("LOCALAPPDATA") or os.path.expanduser("~")
-        d = os.path.join(base, "Hominka")
+        if sys.platform == "win32":
+            base = os.environ.get("LOCALAPPDATA") or os.path.expanduser("~")
+            d = os.path.join(base, "Hominka")
+        else:
+            # Поза Windows LOCALAPPDATA не існує, і «~/Hominka» там виглядало б
+            # чужорідно: домовленість інша — XDG_CONFIG_HOME, а без нього
+            # ~/.config. Тека саме там, де людина шукатиме налаштування.
+            base = os.environ.get("XDG_CONFIG_HOME") or                 os.path.join(os.path.expanduser("~"), ".config")
+            d = os.path.join(base, "hominka")
     else:
         d = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     try:

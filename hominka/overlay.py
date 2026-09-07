@@ -15,7 +15,13 @@ sources, поміняти канал оновлень — updating, а рамк�
 
 import os
 import sys
-from ctypes import wintypes
+# wintypes існує лише на Windows: там, де його немає, сам імпорт кидає помилку,
+# і модуль не завантажився б узагалі. Усе, що ним користується, і так під
+# «if IS_WINDOWS».
+if sys.platform == "win32":
+    from ctypes import wintypes
+else:
+    wintypes = None
 
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QColor, QIcon
@@ -319,7 +325,10 @@ class Overlay(SourcesMixin, UpdatingMixin, ConfigMixin, LookMixin, QMainWindow):
         Не запускає процес: він піднімається разом із «чатом поверх гри», бо на
         робочому столі чат і далі малює вікно. Тут лише зв'язки — щоб той самий
         потік подій, що йде на сторінку, йшов і в рендер."""
-        if self.renderer != "native" or not IS_WINDOWS:
+        # Раніше тут стояла ще й перевірка на Windows: рендера під Linux просто
+        # не існувало. Тепер існує (native/render/main_linux.cpp), і єдине, що
+        # лишилося важливим, — чи просив користувач нативний шлях.
+        if self.renderer != "native":
             return
         from .imagefetch import ImageFetcher
         from .nativerender import NativeRenderer
