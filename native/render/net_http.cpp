@@ -4,6 +4,8 @@
 #include <ixwebsocket/IXNetSystem.h>
 
 #include <cstdio>
+#include <map>
+#include <mutex>
 
 #ifdef _WIN32
 #include <windows.h>
@@ -21,6 +23,15 @@ namespace {
 const char* kUserAgent =
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
     "(KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36";
+
+// Під Windows сокети треба підняти явно (WSAStartup), інакше будь-який запит
+// падає з «Cannot connect». Робимо це тут, а не покладаємося на джерела чату:
+// значки й емоути тягнуться й тоді, коли жодного сокета ще не відкривали, і
+// саме на цьому YouTube мовчки лишався без сторінки.
+void ensure_net() {
+    static std::once_flag once;
+    std::call_once(once, [] { ix::initNetSystem(); });
+}
 
 }  // namespace
 
@@ -80,7 +91,13 @@ std::string ca_bundle_path() {
 }
 
 HttpResult http_get(const std::string& url, int timeout_sec) {
+    return http_get(url, {}, timeout_sec);
+}
+
+HttpResult http_get(const std::string& url,
+                    const std::map<std::string, std::string>& headers, int timeout_sec) {
     HttpResult out;
+    ensure_net();
 
     ix::HttpClient client(/*async=*/false);
     ix::SocketTLSOptions tls;
@@ -94,6 +111,7 @@ HttpResult http_get(const std::string& url, int timeout_sec) {
     args->maxRedirects = 5;
     args->extraHeaders["User-Agent"] = kUserAgent;
     args->extraHeaders["Accept"] = "application/json";
+    for (const auto& kv : headers) args->extraHeaders[kv.first] = kv.second;
 
     auto resp = client.get(url, args);
     if (!resp) {
@@ -109,6 +127,7 @@ HttpResult http_get(const std::string& url, int timeout_sec) {
 HttpResult http_post(const std::string& url, const std::string& body,
                      const std::map<std::string, std::string>& headers, int timeout_sec) {
     HttpResult out;
+    ensure_net();
 
     ix::HttpClient client(/*async=*/false);
     ix::SocketTLSOptions tls;

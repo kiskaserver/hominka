@@ -102,6 +102,7 @@ x86_64-w64-mingw32-g++-posix $COMMON -municode -std=c++17 \
     "$SRC/render/chat_doc.cpp" "$SRC/render/imgcache.cpp" \
     "$SRC/render/cssbits.cpp" \
     "$SRC/render/src_twitch.cpp" \
+    "$SRC/render/src_youtube.cpp" \
     "$SRC/render/badges.cpp" \
     "$SRC/render/nettest.cpp" \
     "$SRC/render/src_kick.cpp" \
@@ -126,6 +127,7 @@ x86_64-w64-mingw32-g++-posix -O1 -g -static -static-libgcc -static-libstdc++ \
     "$SRC/render/chat_doc.cpp" "$SRC/render/imgcache.cpp" \
     "$SRC/render/cssbits.cpp" \
     "$SRC/render/src_twitch.cpp" \
+    "$SRC/render/src_youtube.cpp" \
     "$SRC/render/badges.cpp" \
     "$SRC/render/nettest.cpp" \
     "$SRC/render/src_kick.cpp" \

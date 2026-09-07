@@ -8,6 +8,7 @@
 
 #include "src_kick.h"
 #include "src_twitch.h"
+#include "src_youtube.h"
 
 namespace hominka {
 
@@ -88,7 +89,14 @@ int nettest(const std::string& platform, const std::string& channel, int seconds
         return rc;
     }
 
-    fprintf(stderr, "невідома площадка: %s (треба twitch або kick)\n", platform.c_str());
+    if (platform == "youtube") {
+        YouTubeSource src;
+        return watch([&](ChatSink s) { return src.start(channel, std::move(s)); },
+                     [&] { src.stop(); }, [&] { return src.error(); }, seconds, &count);
+    }
+
+    fprintf(stderr, "невідома площадка: %s (треба twitch, kick або youtube)\n",
+            platform.c_str());
     return 1;
 }
 

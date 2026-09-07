@@ -29,6 +29,7 @@ g++ $COMMON $INC \
     "$SRC/render/fontstore.cpp" \
     "$SRC/render/cssbits.cpp" \
     "$SRC/render/src_twitch.cpp" \
+    "$SRC/render/src_youtube.cpp" \
     "$SRC/render/badges.cpp" \
     "$SRC/render/nettest.cpp" \
     "$SRC/render/src_kick.cpp" \

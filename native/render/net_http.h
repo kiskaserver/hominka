@@ -30,6 +30,12 @@ struct HttpResult {
 // нього Kick і частина CDN відповідають 403 — вони фільтрують за ним.
 HttpResult http_get(const std::string& url, int timeout_sec = 15);
 
+// Те саме, але з власними заголовками. Потрібне YouTube: без «Accept-Language»
+// і згоди на куки він віддає сторінку іншою мовою й з іншою розміткою.
+HttpResult http_get(const std::string& url,
+                    const std::map<std::string, std::string>& headers,
+                    int timeout_sec = 15);
+
 // Те саме, але одразу розібране як JSON. Порожній об'єкт, якщо не вийшло, —
 // виклик має право не перевіряти помилку окремо, бо реакція однакова:
 // лишитися без емоутів, а не впасти.
