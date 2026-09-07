@@ -1,0 +1,202 @@
+Підтримка CSS opacity у litehtml v0.10.
+
+Навіщо. opacity — найходовіше з того, чого рушій не вміє: нею притлумлюють
+системні події, роблять блідішими старі рядки, і саме її радив наш власний
+довідник, доки не з'ясувалося, що вона не діє.
+
+Чому шаром, а не множенням альфи в кольорах. Спокуса зробити дешево —
+домножити альфу в кожному кольорі, який іде в контейнер, — дає ІНШИЙ результат:
+там, де діти елемента перекривають одне одного, накладення подвоїться і вийде
+темніше, ніж просив CSS. Прозорість у CSS групова: спершу малюється все
+піддерево, потім готовий шар змішується один раз.
+
+Головна тонкість. Елемент малюється НЕ за один раз: його фон іде проходом
+draw_block (або draw_inlines), а вміст — наступним проходом того самого
+батька. Тому напівпрозорий елемент малюється ЦІЛКОМ в одному місці
+(draw_opacity_group), а решті проходів вхід до нього закритий — інакше другий
+малюнок ліг би поверх першого вже без шару, і прозорості не було б видно
+взагалі. На цьому й спіймалася перша версія латки.
+
+Контейнеру додано push_opacity/pop_opacity. Вони НЕ чисто віртуальні: кому
+прозорість не потрібна — нічого не робить, і старий код лишається робочим.
+
+Латку варто надіслати нагору, але поки що вона живе тут: збірка й так
+закріплена на конкретному коміті (native/thirdparty.sh).
+
+diff --git a/include/litehtml/css_properties.h b/include/litehtml/css_properties.h
+index 0c88887..b8af00a 100644
+--- a/include/litehtml/css_properties.h
++++ b/include/litehtml/css_properties.h
+@@ -38,6 +38,9 @@ namespace litehtml
+ 		appearance				m_appearance;
+ 		box_sizing				m_box_sizing;
+ 		css_length				m_z_index;
++		// CSS opacity: 0..1. Значення < 1 робить елемент групою — він
++		// малюється в окремий шар, і вже шар змішується (див. render_item).
++		float					m_opacity;
+ 		vertical_align			m_vertical_align;
+ 		element_float			m_float;
+ 		element_clear			m_clear;
+@@ -112,6 +115,7 @@ namespace litehtml
+ 				m_appearance(appearance_none),
+ 				m_box_sizing(box_sizing_content_box),
+ 				m_z_index(0),
++				m_opacity(1.0f),
+ 				m_vertical_align(va_baseline),
+ 				m_float(float_none),
+ 				m_clear(clear_none),
+@@ -176,6 +180,7 @@ namespace litehtml
+ 		void set_box_sizing(box_sizing mBoxSizing);
+ 
+ 		int get_z_index() const;
++		float get_opacity() const;
+ 		void set_z_index(int mZIndex);
+ 
+ 		vertical_align get_vertical_align() const;
+@@ -379,6 +384,11 @@ namespace litehtml
+ 		return (int)m_z_index.val();
+ 	}
+ 
++	inline float css_properties::get_opacity() const
++	{
++		return m_opacity;
++	}
++
+ 	inline void css_properties::set_z_index(int mZIndex)
+ 	{
+ 		m_z_index.set_value((float)mZIndex, css_units_none);
+diff --git a/include/litehtml/document_container.h b/include/litehtml/document_container.h
+index 5d0b8c0..10ec69e 100644
+--- a/include/litehtml/document_container.h
++++ b/include/litehtml/document_container.h
+@@ -61,6 +61,15 @@ namespace litehtml
+ 		virtual void				import_css(litehtml::string& text, const litehtml::string& url, litehtml::string& baseurl) = 0;
+ 		virtual void				set_clip(const litehtml::position& pos, const litehtml::border_radiuses& bdr_radius) = 0;
+ 		virtual void				del_clip() = 0;
++		// Прозорість ГРУПИ: усе, що намалює елемент і його нащадки, лягає
++		// одним шаром, і вже той шар змішується з альфою. Саме так працює
++		// CSS opacity — і саме тому це не зводиться до множення альфи в
++		// кожному кольорі: там, де діти перекриваються, вийшло б темніше.
++		//
++		// Не чисто віртуальні: контейнер, якому прозорість не потрібна,
++		// просто нічого не робить, і старий код лишається робочим.
++		virtual void				push_opacity(float /*opacity*/) {}
++		virtual void				pop_opacity() {}
+ 		virtual void				get_viewport(litehtml::position& viewport) const = 0;
+ 		virtual litehtml::element::ptr	create_element( const char* tag_name,
+ 														const litehtml::string_map& attributes,
+diff --git a/include/litehtml/string_id.h b/include/litehtml/string_id.h
+index 6373ec9..df5af97 100644
+--- a/include/litehtml/string_id.h
++++ b/include/litehtml/string_id.h
+@@ -280,6 +280,7 @@ STRING_ID(
+ 	_appearance_,
+ 	_box_sizing_,
+ 	_z_index_,
++	_opacity_,
+ 	_float_,
+ 	_clear_,
+ 	_text_indent_,
+diff --git a/src/css_properties.cpp b/src/css_properties.cpp
+index 59ef0f7..976c37c 100644
+--- a/src/css_properties.cpp
++++ b/src/css_properties.cpp
+@@ -220,6 +220,13 @@ void litehtml::css_properties::compute(const html_tag* el, const document::ptr&
+ 	doc->cvt_units(m_css_offsets.top,    m_font_metrics, 0);
+ 	doc->cvt_units(m_css_offsets.bottom, m_font_metrics, 0);
+ 
++	// Значення поза 0..1 стандарт велить обрізати, а не вважати помилкою.
++	{
++		css_length op = el->get_property<css_length>(_opacity_, false, 1,
++													   offset(m_opacity));
++		const float v = op.is_predefined() ? 1.0f : op.val();
++		m_opacity = v < 0.0f ? 0.0f : (v > 1.0f ? 1.0f : v);
++	}
+ 	m_z_index = el->get_property<css_length>(_z_index_, false, _auto, offset(m_z_index));
+ 	m_content = el->get_property<string>(_content_, false, "", offset(m_content));
+ 	m_cursor = el->get_property<string>(_cursor_, true, "auto", offset(m_cursor));
+diff --git a/src/render_item.cpp b/src/render_item.cpp
+index b2109e7..f14aea0 100644
+--- a/src/render_item.cpp
++++ b/src/render_item.cpp
+@@ -808,6 +808,29 @@ void litehtml::render_item::draw_stacking_context( uint_ptr hdc, pixel_t x, pixe
+     }
+ }
+ 
++// Малює елемент разом із нащадками під шаром прозорості.
++//
++// Повертає false, якщо елемент непрозорий і його треба малювати як завжди.
++//
++// Чому цілком і в одному місці: звичайним шляхом фон елемента малюється
++// одним проходом (draw_block/draw_inlines), а його вміст — наступним
++// проходом того ж батька. Під шар мають потрапити обидва, інакше
++// прозорість накриє лише половину.
++static bool draw_opacity_group(litehtml::uint_ptr hdc, const litehtml::position& pos,
++                               const litehtml::position* clip,
++                               const std::shared_ptr<litehtml::render_item>& el)
++{
++    const float opacity = el->src_el()->css().get_opacity();
++    if(opacity >= 1.0f) return false;
++
++    litehtml::document_container* container = el->src_el()->get_document()->container();
++    container->push_opacity(opacity);
++    el->src_el()->draw(hdc, pos.x, pos.y, clip, el);
++    el->draw_stacking_context(hdc, pos.x, pos.y, clip, false);
++    container->pop_opacity();
++    return true;
++}
++
+ void litehtml::render_item::draw_children(uint_ptr hdc, pixel_t x, pixel_t y, const position* clip, draw_flag flag, int zindex)
+ {
+     position pos = m_pos;
+@@ -865,6 +888,11 @@ void litehtml::render_item::draw_children(uint_ptr hdc, pixel_t x, pixel_t y, co
+                 case draw_block:
+                     if (!el->src_el()->is_inline() && el->src_el()->css().get_float() == float_none && !el->src_el()->is_positioned())
+                     {
++                        if (draw_opacity_group(hdc, pos, clip, el))
++                        {
++                            process = false;
++                            break;
++                        }
+                         el->src_el()->draw(hdc, pos.x, pos.y, clip, el);
+                     }
+                     break;
+@@ -879,6 +907,11 @@ void litehtml::render_item::draw_children(uint_ptr hdc, pixel_t x, pixel_t y, co
+                 case draw_inlines:
+                     if (el->src_el()->is_inline() && el->src_el()->css().get_float() == float_none && !el->src_el()->is_positioned())
+                     {
++                        if (draw_opacity_group(hdc, pos, clip, el))
++                        {
++                            process = false;
++                            break;
++                        }
+                         el->src_el()->draw(hdc, pos.x, pos.y, clip, el);
+                         if (el->src_el()->css().get_display() == display_inline_block || el->src_el()->css().get_display() == display_inline_flex)
+                         {
+@@ -891,6 +924,11 @@ void litehtml::render_item::draw_children(uint_ptr hdc, pixel_t x, pixel_t y, co
+                     break;
+             }
+ 
++            // Напівпрозорий елемент уже намальовано цілком у своєму
++            // проході (див. draw_opacity_group). Решті проходів сюди не
++            // можна: другий малюнок ліг би поверх першого вже без шару.
++            if (el->src_el()->css().get_opacity() < 1.0f) process = false;
++
+             if (process)
+             {
+                 if (flag == draw_positioned)
+diff --git a/src/style.cpp b/src/style.cpp
+index f93745f..ed13338 100644
+--- a/src/style.cpp
++++ b/src/style.cpp
+@@ -239,6 +239,10 @@ void style::add_property(string_id name, const css_token_vector& value, const st
+ 	//  =============================  LENGTH  =============================
+ 
+ 	// auto | <integer>  https://developer.mozilla.org/en-US/docs/Web/CSS/z-index#formal_syntax
++	// <number [0,1]>  https://developer.mozilla.org/en-US/docs/Web/CSS/opacity
++	case _opacity_:
++		return add_length_property(name, val, "", f_number, important);
++
+ 	case _z_index_:
+ 		return add_length_property(name, val, "auto", f_integer, important);
+ 

@@ -1,0 +1,138 @@
+Підтримка CSS box-shadow у litehtml v0.10.
+
+Накладається ПІСЛЯ litehtml-opacity.patch (спирається на рядки, які той додає).
+
+Навіщо. Тінь під рядком — звична річ у темах для OBS, і без неї чужа тема
+виглядає пласкою. Рушій цієї властивості не знає взагалі.
+
+Як зроблено. Рушій НЕ розбирає значення — він несе його рядком, як написано в
+CSS, і віддає тому, хто малює (document_container::draw_box_shadow). Так
+зроблено навмисно: розбирати «10px 4px 8px rgba(...)» рушієві ні до чого, а той,
+хто малює, однаково має знати і зсув, і розмиття, і колір. Той самий підхід уже
+працює для text-shadow.
+
+Викликається перед тлом: зовнішня тінь лежить ПІД ним.
+
+Межа. draw_background не викликається для display: inline, тож на суто
+рядкових елементах тіні не буде. Блоки й inline-block (а це .m, .b, .money)
+покриті.
+
+Латку варто надіслати нагору, але поки що вона живе тут: збірка й так
+закріплена на конкретному коміті (native/thirdparty.sh).
+
+diff --git a/include/litehtml/css_properties.h b/include/litehtml/css_properties.h
+index b8af00a..f4ad514 100644
+--- a/include/litehtml/css_properties.h
++++ b/include/litehtml/css_properties.h
+@@ -41,6 +41,9 @@ namespace litehtml
+ 		// CSS opacity: 0..1. Значення < 1 робить елемент групою — він
+ 		// малюється в окремий шар, і вже шар змішується (див. render_item).
+ 		float					m_opacity;
++		// box-shadow як його написали: розбирає той, хто малює (див.
++		// document_container::draw_box_shadow).
++		string					m_box_shadow;
+ 		vertical_align			m_vertical_align;
+ 		element_float			m_float;
+ 		element_clear			m_clear;
+@@ -181,6 +184,7 @@ namespace litehtml
+ 
+ 		int get_z_index() const;
+ 		float get_opacity() const;
++		const string& get_box_shadow() const;
+ 		void set_z_index(int mZIndex);
+ 
+ 		vertical_align get_vertical_align() const;
+@@ -389,6 +393,11 @@ namespace litehtml
+ 		return m_opacity;
+ 	}
+ 
++	inline const string& css_properties::get_box_shadow() const
++	{
++		return m_box_shadow;
++	}
++
+ 	inline void css_properties::set_z_index(int mZIndex)
+ 	{
+ 		m_z_index.set_value((float)mZIndex, css_units_none);
+diff --git a/include/litehtml/document_container.h b/include/litehtml/document_container.h
+index 10ec69e..d37e636 100644
+--- a/include/litehtml/document_container.h
++++ b/include/litehtml/document_container.h
+@@ -70,6 +70,15 @@ namespace litehtml
+ 		// просто нічого не робить, і старий код лишається робочим.
+ 		virtual void				push_opacity(float /*opacity*/) {}
+ 		virtual void				pop_opacity() {}
++		// Тінь блока. Значення передається РЯДКОМ, як його написали в CSS:
++		// розбирати «10px 4px 8px rgba(...)» рушієві ні до чого, а той, хто
++		// малює, однаково має знати і колір, і розмиття. Викликається перед
++		// тлом — тінь лежить під ним.
++		virtual void				draw_box_shadow(uint_ptr /*hdc*/,
++												const position& /*border_box*/,
++												const border_radiuses& /*radius*/,
++												const string& /*value*/,
++												pixel_t /*font_size*/) {}
+ 		virtual void				get_viewport(litehtml::position& viewport) const = 0;
+ 		virtual litehtml::element::ptr	create_element( const char* tag_name,
+ 														const litehtml::string_map& attributes,
+diff --git a/include/litehtml/string_id.h b/include/litehtml/string_id.h
+index df5af97..3e00339 100644
+--- a/include/litehtml/string_id.h
++++ b/include/litehtml/string_id.h
+@@ -280,6 +280,7 @@ STRING_ID(
+ 	_appearance_,
+ 	_box_sizing_,
+ 	_z_index_,
++	_box_shadow_,
+ 	_opacity_,
+ 	_float_,
+ 	_clear_,
+diff --git a/src/css_properties.cpp b/src/css_properties.cpp
+index 976c37c..c0c2293 100644
+--- a/src/css_properties.cpp
++++ b/src/css_properties.cpp
+@@ -227,6 +227,8 @@ void litehtml::css_properties::compute(const html_tag* el, const document::ptr&
+ 		const float v = op.is_predefined() ? 1.0f : op.val();
+ 		m_opacity = v < 0.0f ? 0.0f : (v > 1.0f ? 1.0f : v);
+ 	}
++	m_box_shadow = el->get_property<string>(_box_shadow_, false, "",
++											offset(m_box_shadow));
+ 	m_z_index = el->get_property<css_length>(_z_index_, false, _auto, offset(m_z_index));
+ 	m_content = el->get_property<string>(_content_, false, "", offset(m_content));
+ 	m_cursor = el->get_property<string>(_cursor_, true, "auto", offset(m_cursor));
+diff --git a/src/html_tag.cpp b/src/html_tag.cpp
+index 2b494b7..4527bc0 100644
+--- a/src/html_tag.cpp
++++ b/src/html_tag.cpp
+@@ -872,6 +872,15 @@ void litehtml::html_tag::draw_background(uint_ptr hdc, pixel_t x, pixel_t y, con
+ 
+ 		if(border_box.does_intersect(clip) || is_root())
+ 		{
++			// Тінь блока — ПІД тлом, тому першою.
++			if(!m_css.get_box_shadow().empty())
++			{
++				border_radiuses sh_radius = m_css.get_borders().radius.calc_percents(
++					border_box.width, border_box.height);
++				get_document()->container()->draw_box_shadow(
++					hdc, border_box, sh_radius, m_css.get_box_shadow(),
++					m_css.get_font_size());
++			}
+ 			auto v_offset = ri->get_draw_vertical_offset();
+ 			pos.y += v_offset;
+ 			pos.height -= v_offset;
+diff --git a/src/style.cpp b/src/style.cpp
+index ed13338..476d49c 100644
+--- a/src/style.cpp
++++ b/src/style.cpp
+@@ -243,6 +243,12 @@ void style::add_property(string_id name, const css_token_vector& value, const st
+ 	case _opacity_:
+ 		return add_length_property(name, val, "", f_number, important);
+ 
++	// Значення несемо рядком: розбирає його той, хто малює.
++	case _box_shadow_:
++		str = get_repr(value, 0, -1, true);
++		add_parsed_property(name, property_value(str, important));
++		break;
++
+ 	case _z_index_:
+ 		return add_length_property(name, val, "auto", f_integer, important);
+ 

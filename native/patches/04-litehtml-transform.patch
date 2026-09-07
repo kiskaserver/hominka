@@ -1,0 +1,165 @@
+Підтримка CSS transform у litehtml v0.10.
+
+Накладається ПІСЛЯ 02-opacity і 03-box-shadow (спирається на їхні рядки).
+
+Навіщо. Рушій розбирає властивість «transform» рівно ніяк: у списку його немає,
+значення мовчки зникає. У темах він трапляється — нахилена плашка, трохи
+збільшений значок.
+
+Як зроблено. Так само, як box-shadow: рушій несе значення РЯДКОМ, а матрицю
+будує той, хто малює. Разом зі значенням передається прямокутник елемента —
+від нього рахується типовий transform-origin, тобто центр.
+
+Чому в тій самій групі, що й opacity. Перетворення має накрити елемент ЦІЛКОМ,
+а фон і вміст малюються різними проходами. Механізм для цього вже є
+(draw_opacity_group з латки 02) — просто розширюємо його: тепер група потрібна,
+коли є або прозорість, або перетворення.
+
+Межа. Перетворення впливає лише на малювання: розкладка сусідів рахується так,
+ніби елемент не рухався. Так і має бути за стандартом.
+
+Латку варто надіслати нагору, але поки що вона живе тут: збірка й так
+закріплена на конкретному коміті (native/thirdparty.sh).
+
+diff --git a/include/litehtml/css_properties.h b/include/litehtml/css_properties.h
+index f4ad514..b681445 100644
+--- a/include/litehtml/css_properties.h
++++ b/include/litehtml/css_properties.h
+@@ -44,6 +44,8 @@ namespace litehtml
+ 		// box-shadow як його написали: розбирає той, хто малює (див.
+ 		// document_container::draw_box_shadow).
+ 		string					m_box_shadow;
++		// transform як його написали: матрицю будує той, хто малює.
++		string					m_transform;
+ 		vertical_align			m_vertical_align;
+ 		element_float			m_float;
+ 		element_clear			m_clear;
+@@ -185,6 +187,7 @@ namespace litehtml
+ 		int get_z_index() const;
+ 		float get_opacity() const;
+ 		const string& get_box_shadow() const;
++		const string& get_transform() const;
+ 		void set_z_index(int mZIndex);
+ 
+ 		vertical_align get_vertical_align() const;
+@@ -398,6 +401,11 @@ namespace litehtml
+ 		return m_box_shadow;
+ 	}
+ 
++	inline const string& css_properties::get_transform() const
++	{
++		return m_transform;
++	}
++
+ 	inline void css_properties::set_z_index(int mZIndex)
+ 	{
+ 		m_z_index.set_value((float)mZIndex, css_units_none);
+diff --git a/include/litehtml/document_container.h b/include/litehtml/document_container.h
+index d37e636..92c535a 100644
+--- a/include/litehtml/document_container.h
++++ b/include/litehtml/document_container.h
+@@ -74,6 +74,17 @@ namespace litehtml
+ 		// розбирати «10px 4px 8px rgba(...)» рушієві ні до чого, а той, хто
+ 		// малює, однаково має знати і колір, і розмиття. Викликається перед
+ 		// тлом — тінь лежить під ним.
++		// Перетворення елемента. Як і тінь, значення йде РЯДКОМ: рушієві
++		// нічого робити з «rotate(4deg) scale(1.1)», а той, хто малює, має
++		// матрицю й так. border_box потрібен для типового transform-origin —
++		// центра елемента.
++		//
++		// Повертає false, якщо нічого не застосував: тоді pop_transform не
++		// викликається.
++		virtual bool				push_transform(const position& /*border_box*/,
++											   const string& /*value*/,
++											   pixel_t /*font_size*/) { return false; }
++		virtual void				pop_transform() {}
+ 		virtual void				draw_box_shadow(uint_ptr /*hdc*/,
+ 												const position& /*border_box*/,
+ 												const border_radiuses& /*radius*/,
+diff --git a/include/litehtml/string_id.h b/include/litehtml/string_id.h
+index 3e00339..08d047e 100644
+--- a/include/litehtml/string_id.h
++++ b/include/litehtml/string_id.h
+@@ -281,6 +281,7 @@ STRING_ID(
+ 	_box_sizing_,
+ 	_z_index_,
+ 	_box_shadow_,
++	_transform_,
+ 	_opacity_,
+ 	_float_,
+ 	_clear_,
+diff --git a/src/css_properties.cpp b/src/css_properties.cpp
+index c0c2293..b4589e1 100644
+--- a/src/css_properties.cpp
++++ b/src/css_properties.cpp
+@@ -229,6 +229,8 @@ void litehtml::css_properties::compute(const html_tag* el, const document::ptr&
+ 	}
+ 	m_box_shadow = el->get_property<string>(_box_shadow_, false, "",
+ 											offset(m_box_shadow));
++	m_transform = el->get_property<string>(_transform_, false, "",
++										   offset(m_transform));
+ 	m_z_index = el->get_property<css_length>(_z_index_, false, _auto, offset(m_z_index));
+ 	m_content = el->get_property<string>(_content_, false, "", offset(m_content));
+ 	m_cursor = el->get_property<string>(_cursor_, true, "auto", offset(m_cursor));
+diff --git a/src/render_item.cpp b/src/render_item.cpp
+index f14aea0..fdc9419 100644
+--- a/src/render_item.cpp
++++ b/src/render_item.cpp
+@@ -821,13 +821,28 @@ static bool draw_opacity_group(litehtml::uint_ptr hdc, const litehtml::position&
+                                const std::shared_ptr<litehtml::render_item>& el)
+ {
+     const float opacity = el->src_el()->css().get_opacity();
+-    if(opacity >= 1.0f) return false;
++    const litehtml::string& transform = el->src_el()->css().get_transform();
++    if(opacity >= 1.0f && transform.empty()) return false;
+ 
+     litehtml::document_container* container = el->src_el()->get_document()->container();
+-    container->push_opacity(opacity);
++
++    // Прямокутник елемента разом із полями й рамкою — від нього рахується
++    // типовий transform-origin (центр).
++    litehtml::position border_box = el->pos();
++    border_box.x += pos.x;
++    border_box.y += pos.y;
++    border_box += el->get_paddings();
++    border_box += el->get_borders();
++
++    const bool transformed = !transform.empty() &&
++        container->push_transform(border_box, transform,
++                                  el->src_el()->css().get_font_size());
++    const bool faded = opacity < 1.0f;
++    if(faded) container->push_opacity(opacity);
+     el->src_el()->draw(hdc, pos.x, pos.y, clip, el);
+     el->draw_stacking_context(hdc, pos.x, pos.y, clip, false);
+-    container->pop_opacity();
++    if(faded) container->pop_opacity();
++    if(transformed) container->pop_transform();
+     return true;
+ }
+ 
+@@ -927,7 +942,8 @@ void litehtml::render_item::draw_children(uint_ptr hdc, pixel_t x, pixel_t y, co
+             // Напівпрозорий елемент уже намальовано цілком у своєму
+             // проході (див. draw_opacity_group). Решті проходів сюди не
+             // можна: другий малюнок ліг би поверх першого вже без шару.
+-            if (el->src_el()->css().get_opacity() < 1.0f) process = false;
++            if (el->src_el()->css().get_opacity() < 1.0f ||
++                !el->src_el()->css().get_transform().empty()) process = false;
+ 
+             if (process)
+             {
+diff --git a/src/style.cpp b/src/style.cpp
+index 476d49c..affebdb 100644
+--- a/src/style.cpp
++++ b/src/style.cpp
+@@ -244,6 +244,11 @@ void style::add_property(string_id name, const css_token_vector& value, const st
+ 		return add_length_property(name, val, "", f_number, important);
+ 
+ 	// Значення несемо рядком: розбирає його той, хто малює.
++	case _transform_:
++		str = get_repr(value, 0, -1, true);
++		add_parsed_property(name, property_value(str, important));
++		break;
++
+ 	case _box_shadow_:
+ 		str = get_repr(value, 0, -1, true);
+ 		add_parsed_property(name, property_value(str, important));

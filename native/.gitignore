@@ -1,2 +1,8 @@
 # Артефакти збірки — робляться з коду, у git їм не місце.
 dist/
+
+# Вхід і картинки самоперевірки рендера — робляться з коду (render/make_samples.py,
+# render/reference_shot.py), у git їм місця немає.
+render/samples.json
+render/*.png
+render/*.html

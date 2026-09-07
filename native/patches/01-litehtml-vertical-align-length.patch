@@ -1,0 +1,145 @@
+Підтримка «vertical-align: <довжина>» у litehtml v0.10.
+
+Навіщо. litehtml знає для vertical-align лише вісім ключових слів (baseline,
+sub, super, top, text-top, middle, bottom, text-bottom) і мовчки викидає
+довжини. А базові стилі чату тримають на них усе вирівнювання рядка: емоут
+опускається на 0.35em, значок площадки — на 0.15em, плашка автора піднімається
+на 0.15em. Без цього емоути й плашки стають на базову лінію й «стрибають»
+відносно тексту поруч.
+
+Чому не обійшлися своїм кодом. Спершу таку властивість ми перекладали у
+«position:relative; top:…» ще до того, як віддати стилі litehtml. Зміщення
+збігалося до пікселя, але відносне позиціювання НЕ збільшує висоту рядка — а
+справжній vertical-align збільшує. Через це високий емоут, опущений униз,
+залазив на сусідній рядок, і те саме ставалося з довгими повідомленнями, які
+переносяться на кілька рядків. Тобто обхід лікував симптом, а не причину.
+
+Як зроблено. Довжина зберігається окремою властивістю (_vertical_align_offset_)
+і застосовується там, де litehtml розставляє елементи в рядку, — ДО того, як
+порахована висота рядка (add_item_height нижче бере item->top() і
+item->bottom()). Тому рядок росте під зсунутий елемент сам, без окремого коду.
+
+Латку варто надіслати нагору, але поки що вона живе тут: збірка й так
+закріплена на конкретному коміті (native/thirdparty.sh).
+
+diff --git a/include/litehtml/css_properties.h b/include/litehtml/css_properties.h
+index 0c88887..bb8c0bd 100644
+--- a/include/litehtml/css_properties.h
++++ b/include/litehtml/css_properties.h
+@@ -39,6 +39,9 @@ namespace litehtml
+ 		box_sizing				m_box_sizing;
+ 		css_length				m_z_index;
+ 		vertical_align			m_vertical_align;
++		// «vertical-align: <довжина>»: зсув від базової лінії.
++		// Додатне значення піднімає елемент — так само, як у CSS.
++		css_length				m_vertical_align_offset;
+ 		element_float			m_float;
+ 		element_clear			m_clear;
+ 		css_margins				m_css_margins;
+@@ -113,6 +116,7 @@ namespace litehtml
+ 				m_box_sizing(box_sizing_content_box),
+ 				m_z_index(0),
+ 				m_vertical_align(va_baseline),
++				m_vertical_align_offset(0),
+ 				m_float(float_none),
+ 				m_clear(clear_none),
+ 				m_css_margins(),
+@@ -179,6 +183,7 @@ namespace litehtml
+ 		void set_z_index(int mZIndex);
+ 
+ 		vertical_align get_vertical_align() const;
++		const css_length& get_vertical_align_offset() const;
+ 		void set_vertical_align(vertical_align mVerticalAlign);
+ 
+ 		element_float get_float() const;
+@@ -389,6 +394,11 @@ namespace litehtml
+ 		return m_vertical_align;
+ 	}
+ 
++	inline const css_length& css_properties::get_vertical_align_offset() const
++	{
++		return m_vertical_align_offset;
++	}
++
+ 	inline void css_properties::set_vertical_align(vertical_align mVerticalAlign)
+ 	{
+ 		m_vertical_align = mVerticalAlign;
+diff --git a/include/litehtml/string_id.h b/include/litehtml/string_id.h
+index 6373ec9..ed9d947 100644
+--- a/include/litehtml/string_id.h
++++ b/include/litehtml/string_id.h
+@@ -266,6 +266,7 @@ STRING_ID(
+ 	_white_space_,
+ 	_text_align_,
+ 	_vertical_align_,
++	_vertical_align_offset_,
+ 	_color_,
+ 	_width_,
+ 	_height_,
+diff --git a/src/css_properties.cpp b/src/css_properties.cpp
+index 59ef0f7..96f3deb 100644
+--- a/src/css_properties.cpp
++++ b/src/css_properties.cpp
+@@ -23,6 +23,11 @@ void litehtml::css_properties::compute(const html_tag* el, const document::ptr&
+ 	m_overflow		 = (overflow)			el->get_property<int>( _overflow_,		false,	overflow_visible,		 offset(m_overflow));
+ 	m_text_align	 = (text_align)			el->get_property<int>( _text_align_,		true,	text_align_left,			offset(m_text_align));
+ 	m_vertical_align = (vertical_align)		el->get_property<int>( _vertical_align_,	false,	va_baseline,				 offset(m_vertical_align));
++	// «vertical-align: <довжина>» — окремою властивістю, бо в тій, що вище,
++	// живе перелік ключових слів. Одиниці (em, ex) переводимо в пікселі
++	// одразу: вони рахуються від кегля САМОГО елемента, а він відомий тут.
++	m_vertical_align_offset = el->get_property<css_length>(
++		_vertical_align_offset_, false, 0, offset(m_vertical_align_offset));
+ 	m_text_transform = (text_transform)		el->get_property<int>( _text_transform_,	true,	text_transform_none,		 offset(m_text_transform));
+ 	m_white_space	 = (white_space)		el->get_property<int>( _white_space_,		true,	white_space_normal,		 offset(m_white_space));
+ 	m_caption_side	 = (caption_side)		el->get_property<int>( _caption_side_,	true,	caption_side_top,		 offset(m_caption_side));
+@@ -226,6 +231,7 @@ void litehtml::css_properties::compute(const html_tag* el, const document::ptr&
+ 
+ 	m_css_text_indent = el->get_property<css_length>(_text_indent_, true, 0, offset(m_css_text_indent));
+ 	doc->cvt_units(m_css_text_indent, m_font_metrics, 0);
++	doc->cvt_units(m_vertical_align_offset, m_font_metrics, 0);
+ 
+ 	m_line_height.css_value = el->get_property<css_length>(_line_height_, true, normal, offset(m_line_height.css_value));
+ 	if(m_line_height.css_value.is_predefined())
+diff --git a/src/line_box.cpp b/src/line_box.cpp
+index 091a96c..44023d3 100644
+--- a/src/line_box.cpp
++++ b/src/line_box.cpp
+@@ -473,7 +473,20 @@ std::list< std::unique_ptr<litehtml::line_box_item> > litehtml::line_box::finish
+ 		}
+ 		if(!ignore)
+ 		{
+-			lbi->pos().y = bl - lbi->get_el()->get_last_baseline() + content_offset;
++			// «vertical-align: <довжина>» — зсув від базової лінії. Додатне
++			// значення піднімає елемент, тому віднімаємо.
++			//
++			// Робиться це САМЕ ТУТ, ДО підрахунку висоти рядка нижче
++			// (add_item_height бере item->top() і item->bottom()), — тому рядок
++			// росте під зсунутий елемент сам, і високий емоут не залазить на
++			// сусідні рядки.
++			//
++			// Відсотки пропускаємо: у vertical-align вони рахуються від
++			// line-height, а cvt_units їх не переводить — застосувати таке
++			// значення як пікселі означало б зсунути елемент навмання.
++			const css_length& va = lbi->get_el()->css().get_vertical_align_offset();
++			const pixel_t va_off = va.units() == css_units_percentage ? 0 : va.val();
++			lbi->pos().y = bl - lbi->get_el()->get_last_baseline() + content_offset - va_off;
+ 		}
+ 
+ 		if(is_top_bottom_box)
+diff --git a/src/style.cpp b/src/style.cpp
+index f93745f..cb9482f 100644
+--- a/src/style.cpp
++++ b/src/style.cpp
+@@ -234,6 +234,12 @@ void style::add_property(string_id name, const css_token_vector& value, const st
+ 
+ 		if (int index = value_index(ident, m_valid_values[name]); index >= 0)
+ 			add_parsed_property(name, property_value(index, important));
++		else if (name == _vertical_align_)
++			// Не ключове слово — тоді це довжина: «vertical-align: -0.35em».
++			// Кладемо її окремою властивістю, а сам vertical-align лишається
++			// baseline, від якого цей зсув і відраховується.
++			add_length_property(_vertical_align_offset_, val, "",
++					f_length_percentage, important);
+ 		break;
+ 
+ 	//  =============================  LENGTH  =============================

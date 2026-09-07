@@ -84,12 +84,47 @@ echo ">> x64: testhost-vk.exe (для перевірки Vulkan)"
 x86_64-w64-mingw32-g++ -O2 -s -static -municode -mwindows $DLL_INC \
     "$SRC/testhost/testhost_vk.cpp" -o "$OUT/testhost-vk-x64.exe"
 
-# DirectComposition-оверлей (крок 1: тестовий прямокутник) — окремий процес, що
-# видно поверх гри в незалежному flip і скрито від OBS. У гру нічого не вкладає.
-echo ">> x64: hominka-dcomp.exe (DirectComposition-оверлей)"
-x86_64-w64-mingw32-g++ -O2 -s -static -municode -mwindows \
-    "$SRC/dcomp/dcomp_overlay.cpp" -o "$OUT/hominka-dcomp-x64.exe" \
-    -ld3d11 -ldxgi -ldcomp
+# Нативний рендер чату (лише x64). Малює стрічку через litehtml + Direct2D —
+# замість Chromium. Потоки posix: litehtml користується std::mutex, а mingw за
+# замовчуванням іде з win32-threads, де його немає (див. thirdparty.sh).
+# -static вкладає libwinpthread всередину, тож зайвої DLL у користувача не буде.
+#
+# Порядок бібліотек має значення: gumbo після litehtml, sharpyuv після webp —
+# ld розв'язує символи зліва направо і назад не вертається.
+#
+# Чужі заголовки підключаємо через -isystem, а не -I: тоді GCC вважає їх
+# системними й не сипле попередженнями з чужого коду (nanosvg порівнює size_t
+# з long — це не наша справа). Наші -Wall -Wextra від цього не слабшають.
+echo ">> x64: hominka-render.exe (нативний рендер чату)"
+x86_64-w64-mingw32-g++-posix $COMMON -municode -std=c++17 \
+    -isystem "$TP/include" \
+    "$SRC/render/main.cpp" "$SRC/render/container_d2d.cpp" \
+    "$SRC/render/chat_doc.cpp" "$SRC/render/imgcache.cpp" \
+    "$SRC/render/cssbits.cpp" \
+    "$SRC/render/feedgfx.cpp" \
+    "$SRC/render/feed.cpp" "$SRC/render/ipc.cpp" \
+    "$SRC/render/chrome.cpp" \
+    -o "$OUT/hominka-render-x64.exe" \
+    -L"$TP/lib" -limgui -llitehtml -lgumbo -lwebpdemux -lwebp -lsharpyuv \
+    -ld2d1 -ldwrite -lwindowscodecs -ld3d11 -ldxgi -ldcomp \
+    -ld3dcompiler_47 -lgdi32 -ldwmapi -lole32 -luuid
+
+# Та сама програма, але з символами й без -s: коли рендер падає, VEH друкує
+# зсув від початку модуля, а addr2line по ЦЬОМУ файлу перетворює його на
+# «файл:рядок». У випуск не входить — лише поруч у dist для розбору.
+echo ">> x64: hominka-render.debug.exe (символи для addr2line)"
+x86_64-w64-mingw32-g++-posix -O1 -g -static -static-libgcc -static-libstdc++ \
+    -municode -std=c++17 -isystem "$TP/include" \
+    "$SRC/render/main.cpp" "$SRC/render/container_d2d.cpp" \
+    "$SRC/render/chat_doc.cpp" "$SRC/render/imgcache.cpp" \
+    "$SRC/render/cssbits.cpp" \
+    "$SRC/render/feedgfx.cpp" \
+    "$SRC/render/feed.cpp" "$SRC/render/ipc.cpp" \
+    "$SRC/render/chrome.cpp" \
+    -o "$OUT/hominka-render.debug.exe" \
+    -L"$TP/lib" -limgui -llitehtml -lgumbo -lwebpdemux -lwebp -lsharpyuv \
+    -ld2d1 -ldwrite -lwindowscodecs -ld3d11 -ldxgi -ldcomp \
+    -ld3dcompiler_47 -lgdi32 -ldwmapi -lole32 -luuid
 
 echo ""
 echo "Готово. У $OUT:"
