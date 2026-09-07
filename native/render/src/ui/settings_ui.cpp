@@ -37,6 +37,13 @@ const float LABEL_W = 92.0f;      // стовпчик підписів у роз
 
 ImVec4 col(ImU32 c) { return ImGui::ColorConvertU32ToFloat4(c); }
 
+std::string trimmed(const std::string& s) {
+    size_t a = 0, b = s.size();
+    while (a < b && (unsigned char)s[a] <= ' ') ++a;
+    while (b > a && (unsigned char)s[b - 1] <= ' ') --b;
+    return s.substr(a, b - a);
+}
+
 void text_col(ImU32 c, const char* s) {
     ImGui::PushStyleColor(ImGuiCol_Text, col(c));
     ImGui::TextUnformatted(s);
@@ -203,6 +210,75 @@ void copy_to(char* dst, size_t cap, const std::string& src) {
     const size_t n = src.size() < cap - 1 ? src.size() : cap - 1;
     memcpy(dst, src.data(), n);
     dst[n] = 0;
+}
+
+// Опис випуску: він пишеться людиною в кілька рядків, зі списками й
+// підзаголовками. Показати його одним абзацом означає злити все докупи — і
+// написане «по пунктах» читається як суцільне полотно.
+//
+// Правил рівно три, за тим, як ці описи й пишуть:
+//   • рядок на «•» — пункт списку, перенос іде під текст, а не під маркер;
+//   • рядок КАПСОМ — підзаголовок розділу;
+//   • порожній рядок — кінець абзацу.
+void draw_notes(const std::string& text) {
+    size_t pos = 0;
+    while (pos <= text.size()) {
+        size_t end = text.find('\n', pos);
+        const bool last = end == std::string::npos;
+        if (last) end = text.size();
+        std::string line = trimmed(text.substr(pos, end - pos));
+        pos = end + 1;
+
+        if (line.empty()) {
+            ImGui::Dummy(ImVec2(0, 6));
+            if (last) break;
+            continue;
+        }
+
+        // Підзаголовок: літери є, і серед них немає рядкових. Кирилицю
+        // розбираємо самі — std::toupper на UTF-8 побайтово не працює.
+        //
+        // Межі саме такі, і українські літери тут не дрібниця: «і» (U+0456),
+        // «ї» (U+0457) і «є» (U+0454) лежать у D1 90..9F, а не в D1 80..8F, як
+        // решта рядкових. Взяти лише другий діапазон означало б вважати рядок
+        // «і це важливо» підзаголовком.
+        bool has_lower = false, has_letter = false;
+        for (size_t i = 0; i < line.size() && !has_lower; ++i) {
+            const unsigned char c = (unsigned char)line[i];
+            const unsigned char n = i + 1 < line.size() ? (unsigned char)line[i + 1] : 0;
+            if (c >= 'a' && c <= 'z') { has_lower = has_letter = true; }
+            else if (c >= 'A' && c <= 'Z') has_letter = true;
+            else if (c == 0xD0) {            // А-Я: 90..AF, а-п: B0..BF
+                has_letter = true;
+                has_lower = n >= 0xB0;
+                ++i;
+            } else if (c == 0xD1) {          // р-я: 80..8F, ё/є/і/ї…: 90..9F
+                has_letter = true;
+                has_lower = n <= 0x9F;
+                ++i;
+            } else if (c == 0xD2 || c == 0xD3) {   // ґ/Ґ і сусіди: непарний — мала
+                has_letter = true;
+                has_lower = (n & 1) != 0;
+                ++i;
+            }
+        }
+        if (has_letter && !has_lower && line.size() > 3) {
+            ImGui::Dummy(ImVec2(0, 6));
+            text_col(ACCENT_DIM, line.c_str());
+            continue;
+        }
+
+        if (line.compare(0, 3, "•") == 0) {          // «•», три байти в UTF-8
+            // Висячий відступ: другий рядок пункту стає під текст, а не під
+            // маркер, і список лишається списком.
+            ImGui::Indent(14.0f);
+            dim_wrapped(line.c_str());
+            ImGui::Unindent(14.0f);
+            continue;
+        }
+        dim_wrapped(line.c_str());
+        if (last) break;
+    }
 }
 
 // --- сторінки ---------------------------------------------------------------
@@ -550,31 +626,55 @@ void page_update(Config* cfg, const UpdateView& upd, SettingsEvents* ev) {
     ImGui::Dummy(ImVec2(0, 12));
     if (toggle("Перевіряти автоматично", &cfg->auto_update)) ev->changed = true;
 
-    ImGui::Dummy(ImVec2(0, 16));
-    if (upd.mandatory)
-        text_col(IM_COL32(252, 211, 77, 255), "Це виправлення важливе — краще поставити.");
+    ImGui::Dummy(ImVec2(0, 14));
     if (upd.percent >= 0) {
         ImGui::ProgressBar(upd.percent / 100.0f,
                            ImVec2(ImGui::GetContentRegionAvail().x, 6.0f), "");
         ImGui::Dummy(ImVec2(0, 6));
     }
 
-    // Опис випуску буває довгим — йому окреме місце з прокруткою, щоб він не
-    // виштовхував кнопки за нижній край.
-    // Висота — по вмісту, зі стелею: короткому рядку не потрібна половина
-    // сторінки, а довгий опис випуску не має виштовхувати кнопки за край.
-    {
-        const float want = ImGui::CalcTextSize(upd.status.c_str(), nullptr, false,
-                                               ImGui::GetContentRegionAvail().x).y + 8.0f;
-        const float cap = ImGui::GetContentRegionAvail().y - 46.0f;
-        ImGui::BeginChild("##upd", ImVec2(0, want < cap ? want : cap), false);
-        dim_wrapped(upd.status.c_str());
+    // Стан — одним рядком. Коли є що ставити, рядок мовчить: назва випуску
+    // нижче каже те саме, тільки конкретніше, а два повідомлення про одне —
+    // це вже шум.
+    if (upd.title.empty()) dim_wrapped(upd.status.c_str());
+
+    if (!upd.title.empty() || !upd.notes.empty()) {
+        if (upd.title.empty()) ImGui::Dummy(ImVec2(0, 8));
+        ImGui::BeginChild("##upd", ImVec2(0, ImGui::GetContentRegionAvail().y - 52.0f),
+                          true);
+        if (!upd.title.empty()) {
+            text_col(TEXT, upd.title.c_str());
+            if (!upd.size.empty()) {
+                ImGui::SameLine(0, 10);
+                text_col(TEXT_DIM, upd.size.c_str());
+            }
+            ImGui::Dummy(ImVec2(0, 4));
+        }
+        if (upd.mandatory)
+            text_col(IM_COL32(252, 211, 77, 255),
+                     "Це виправлення важливе — краще поставити.");
+        if (!upd.warning.empty()) {
+            ImGui::PushStyleColor(ImGuiCol_Text, col(IM_COL32(252, 211, 77, 255)));
+            ImGui::TextWrapped("%s", upd.warning.c_str());
+            ImGui::PopStyleColor();
+            ImGui::Dummy(ImVec2(0, 4));
+        }
+        if (!upd.notes.empty()) {
+            ImGui::Separator();
+            ImGui::Dummy(ImVec2(0, 4));
+            draw_notes(upd.notes);
+        }
         ImGui::EndChild();
+        ImGui::Dummy(ImVec2(0, 4));
     }
-    ImGui::Dummy(ImVec2(0, 4));
 
     if (upd.can_download) {
-        if (ghost("Завантажити оновлення", 220.0f)) ev->start_download = true;
+        // Розмір у самій кнопці: качати три мегабайти й качати двісті — різні
+        // рішення, і людина має ухвалювати його до натискання, а не після.
+        char label[64];
+        snprintf(label, sizeof label, "Завантажити%s%s", upd.size.empty() ? "" : " ",
+                 upd.size.c_str());
+        if (ghost(label, 220.0f)) ev->start_download = true;
         ImGui::SameLine(0, 8);
     }
     if (upd.can_install) {
