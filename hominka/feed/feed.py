@@ -23,11 +23,19 @@ class ChatFeed(QObject):
 
     def __init__(self, view, parent=None):
         super().__init__(parent)
+        # Може бути None: коли чат малює нативний рендер, браузера немає
+        # взагалі, і сторінці нікуди подітися. Стрічка від цього не міняється —
+        # черга, затримка й темп ті самі, просто малює інший.
         self.view = view
         self.custom_css = ""
         # Порядок частин рядка (див. page.PARTS). Список, а не рядок: його
         # переставляють у ⚙ → свій CSS → «Порядок».
         self.layout = list(DEFAULT_LAYOUT)
+        # Куди ще віддавати ті самі події. Потрібне нативному рендеру: він має
+        # бачити РІВНО той самий потік, що й сторінка, — з тією ж затримкою, тим
+        # самим темпом і тими ж правилами про прибрані повідомлення. Робити для
+        # нього другу таку саму чергу означало б завести другу правду.
+        self.sink = None
         self.ready = False
         self._queue = []          # чекають завантаження сторінки
         self._delayed = []        # (коли показати, подія)
@@ -49,16 +57,22 @@ class ChatFeed(QObject):
     def load(self):
         """Показує порожню стрічку. Базова адреса потрібна, щоб браузер пускав
         картинки емоутів із чужих доменів."""
-        self.ready = False
         self._queue = []
         self._delayed = []
+        if self.view is None:
+            # Сторінки немає — чекати на її завантаження теж не треба.
+            self.ready = True
+            return
+        self.ready = False
         self.view.setHtml(page_html(self.custom_css, self.layout),
                           QUrl("https://stream.svitix.com/"))
 
     def set_custom_css(self, css: str):
         """Новий свій CSS — одразу на екран, не чекаючи перезавантаження."""
         self.custom_css = css or ""
-        if self.ready:
+        if self.sink is not None:
+            self.sink({"kind": "css", "css": self.custom_css})
+        if self.ready and self.view is not None:
             self.view.page().runJavaScript(apply_css_js(self.custom_css))
 
     def set_layout(self, layout):
@@ -68,7 +82,9 @@ class ChatFeed(QObject):
         зараз на екрані, — а порядок підбирають саме дивлячись на живі рядки.
         """
         self.layout = list(layout or DEFAULT_LAYOUT)
-        if self.ready:
+        if self.sink is not None:
+            self.sink({"kind": "layout", "layout": self.layout})
+        if self.ready and self.view is not None:
             self.view.page().runJavaScript(apply_layout_js(self.layout))
 
     def on_loaded(self):
@@ -125,6 +141,16 @@ class ChatFeed(QObject):
         self._render(event)
 
     def _render(self, event: dict):
+        if self.sink is not None:
+            # Спершу тому, хто слухає: рендер малює сам і встигне до того, як
+            # браузер прокрутить свій JS.
+            try:
+                self.sink(event)
+            except Exception:
+                # Другий споживач не має права зламати чат у вікні.
+                pass
+        if self.view is None:
+            return
         kind = event.get("kind")
         if kind == "delete":
             js = "window.fts&&fts.del(%s)" % json.dumps(event.get("id", ""))

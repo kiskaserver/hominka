@@ -14,6 +14,21 @@ from .urls import site_chat_url
 from .version import APP_VERSION
 
 
+def peek() -> dict:
+    """Сирі налаштування — до того, як зібрано вікно.
+
+    Потрібне рівно для одного рішення: чи піднімати браузер узагалі. Воно має
+    бути прийняте ДО складання вікна, а звичайне читання конфігу відбувається
+    пізніше, бо кладе значення прямо у віджети.
+    """
+    try:
+        with open(CONFIG_PATH, "r", encoding="utf-8-sig") as f:
+            cfg = json.load(f)
+        return cfg if isinstance(cfg, dict) else {}
+    except Exception:
+        return {}
+
+
 class ConfigMixin:
     """Читання і запис налаштувань. Частина Overlay."""
 
@@ -132,6 +147,7 @@ class ConfigMixin:
                     "siteChatUrl": self.site_url,
                     "customCss": self.custom_css,
                     "chatLayout": self.chat_layout,
+                    "renderer": self.renderer,
                     "keepTop": self.keep_top,
                     "gameOverlay": {
                         "opacity": self.game_opacity,

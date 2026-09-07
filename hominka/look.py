@@ -32,7 +32,8 @@ class LookMixin:
 
     def set_zoom(self, z: float):
         self.zoom = max(0.5, min(3.0, round(z, 2)))
-        self.view.setZoomFactor(self.zoom)
+        if self.view is not None:
+            self.view.setZoomFactor(self.zoom)
         self.panel.sync_zoom()
         self.save_config()
 
@@ -42,8 +43,6 @@ class LookMixin:
         self._apply_chrome()
         # Те саме тло — у чат поверх гри (dcomp/інжект): його малює продюсер у
         # своєму кадрі, тож підкладку треба оновити й там.
-        if getattr(self, "game_overlay", None) is not None:
-            self.game_overlay.set_bg_alpha(self.bg_alpha)
         self.save_config()
 
     # --- рамка / чисті повідомлення ---

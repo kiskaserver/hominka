@@ -20,15 +20,12 @@ from ctypes import wintypes
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QColor, QIcon
 from PySide6.QtWidgets import QApplication, QFrame, QMainWindow, QVBoxLayout
-from PySide6.QtWebEngineCore import QWebEnginePage
-from PySide6.QtWebEngineWidgets import QWebEngineView
-
 from . import feed as chatfeed
 from . import update as updater
+from . import config
 from .config import ConfigMixin
 from . import fullscreen, x11
 from .paths import BASE_DIR, resource_path
-from .probe import LiveProbe
 from .sources import SourcesMixin
 from .splash import close_splash, splash_text
 from .look import LookMixin
@@ -39,7 +36,6 @@ from .ui.panel import SettingsPanel
 from .updating import UpdatingMixin
 from .urls import is_youtube, resolve_chat_url
 from .version import APP_ICON, APP_NAME, APP_VERSION
-from .webprofile import build_profile
 from .winapi import (
     HOTKEY_ID, IS_WINDOWS, MOD_ALT, MOD_CONTROL, MOD_NOREPEAT, VK_SPACE, WM_HOTKEY,
     _hwnd, exclude_from_capture, hide_new_windows_from_capture, user32,
@@ -133,30 +129,41 @@ class Overlay(SourcesMixin, UpdatingMixin, ConfigMixin, LookMixin, QMainWindow):
         from .compositor import CompositionKeeper
         self._compositor = CompositionKeeper() if IS_WINDOWS else None
 
-        # Чат поверх гри через DirectComposition (native/hominka-dcomp — див.
-        # dcomp.py): окремий процес, видимий над безрамковим повноекранним
-        # (Hunt), скритий від OBS, БЕЗ інжекту. Кадр бере зі спільної памʼяті
-        # (той самий продюсер, що й інжект-оверлей).
-        from .dcomp import DCompOverlay
-        self._dcomp = DCompOverlay() if IS_WINDOWS else None
+        # Чат поверх гри. Обидва шляхи — і окреме вікно DirectComposition, і
+        # оверлей, вкладений у гру, — живить ОДИН нативний рендер: він малює чат
+        # сам і сам кладе кадр у спільну память для overlay.dll. Грабера кадру з
+        # браузера більше немає взагалі.
         self.dcomp_on = False
-        # Продюсер кадру для dcomp — граблить ГОЛОВНЕ вікно чату (без другого
-        # веб-вью, який валив рушій під грою). Створюємо ліниво при вмиканні.
-        self._dcomp_producer = None
-        # До цього моменту (monotonic) грабер кадру не чіпаємо: поки користувач
-        # тягне/розтягує вікно, синхронний grab() головного вікна на GUI-потоці
-        # смикав би перетягування (див. pause_producer / MainViewProducer).
-        self._producer_hold_until = 0.0
+        # Чим малювати чат: "web" — браузером у цьому вікні (як було),
+        # "native" — окремим процесом рендера.
+        #
+        # Читаємо ДО складання вікна, і саме ТУТ — єдине місце. Спокуса
+        # прочитати цей ключ ще й у _load_config разом з рештою велика, але від
+        # нього залежить, чи створювати браузер, а це рішення приймається
+        # раніше: два читання неминуче розійшлися б.
+        cfg = config.peek()
+        self.renderer = "native" if (cfg.get("renderer") or "") == "native" else "web"
+        # Нативний рендер бере на себе вікно чату лише в режимі стрічки. Умова
+        # тут та сама, що в sources.refresh_source: стрічка вмикається, щойно
+        # задано Twitch, Kick або чат сайту. У «веб-режимі» (чужа сторінка
+        # YouTube) без браузера показувати нема чого, і там він лишається.
+        self._native_window = (self.renderer == "native" and url is None and
+                               bool((cfg.get("twitchChannel") or "").strip() or
+                                    (cfg.get("kickChannel") or "").strip() or
+                                    (cfg.get("siteChatUrl") or "").strip()))
+        self._native = None
+        self._fetcher = None
 
-        # Справжній чат у грі через інжектор (native/). Створюємо лениво —
-        # тільки коли вмикають, бо це друге приховане вікно з рушієм браузера.
+        # Справжній чат у грі через інжектор (native/): overlay.dll бере кадр зі
+        # спільної памʼяті, куди його кладе нативний рендер.
         self.game_on = False
-        self.game_overlay = None
-        # Позицію й розмір чату в грі задає САМЕ ЦЕ ВІКНО чату: куди поставив і
-        # як розтягнув на моніторі — там і такого ж розміру в грі (див.
-        # _game_rect). Тут лишаються тільки прозорість і приховування від OBS.
+        # Позицію й розмір чату в грі задає САМЕ ВІКНО чату: куди поставив і як
+        # розтягнув на моніторі — там і такого ж розміру в грі. Рахує це сам
+        # рендер (DCompWindow::monitor_fraction) — він і є тим вікном. Тут
+        # лишаються тільки прозорість і приховування від OBS.
         self.game_opacity = 235
         self.game_hide_obs = False   # чат у грі бачить лише стрімер, не OBS
+        self._inject_pid = 0         # у який процес вклали DLL (0 = будь-який)
 
     def _build_window(self):
         """Рамка без системного заголовка: смужка, смужка оновлення, куточок."""
@@ -183,6 +190,37 @@ class Overlay(SourcesMixin, UpdatingMixin, ConfigMixin, LookMixin, QMainWindow):
 
     def _build_web(self):
         """Сторінка чату і все, що з нею пов'язано."""
+        # Браузер піднімаємо ЛІНИВО. Chromium — це шість процесів і сотні
+        # мегабайтів памʼяті; коли чат малює нативний рендер, він не потрібен
+        # узагалі, і не запустити його — головний виграш цього кроку.
+        self.profile = None
+        self.view = None
+        if not self._native_window:
+            self._ensure_web()
+        self.feed = chatfeed.ChatFeed(self.view)
+
+        self.setCentralWidget(self.frame)
+        self.panel = SettingsPanel(self)
+        self.grip = SizeGrip(self.frame, ACCENT_ACTIVE)
+
+    def _ensure_web(self):
+        """Створює сторінку чату, якщо її ще немає.
+
+        Викликається звідусіль, де без браузера справді не обійтися: чат сайту,
+        сторінка YouTube, пошук власного ефіру. У режимі стрічки з нативним
+        рендером не викликається жодного разу — і Chromium не стартує.
+        """
+        if self.view is not None:
+            return
+        # Імпорт саме тут, а не вгорі файлу. Модулі QtWebEngine тягнуть за собою
+        # бібліотеки Chromium на сотні мегабайтів ще до того, як зʼявиться хоч
+        # одна сторінка. Коли чат малює нативний рендер, вони не потрібні
+        # взагалі — і не завантажити їх дешевше, ніж завантажити й не вживати.
+        from PySide6.QtWebEngineCore import QWebEnginePage
+        from PySide6.QtWebEngineWidgets import QWebEngineView
+
+        from .webprofile import build_profile
+
         # Профіль тримаємо в полі: сторінка живе лише поки живий профіль, і без
         # посилання Qt зносить його разом із входом у YouTube.
         self.profile = build_profile(self)
@@ -192,11 +230,11 @@ class Overlay(SourcesMixin, UpdatingMixin, ConfigMixin, LookMixin, QMainWindow):
         self.view.setAttribute(Qt.WA_TranslucentBackground, True)
         self.view.loadFinished.connect(self._on_loaded)
         self._vbox.addWidget(self.view, 1)
-        self.feed = chatfeed.ChatFeed(self.view)
-
-        self.setCentralWidget(self.frame)
-        self.panel = SettingsPanel(self)
-        self.grip = SizeGrip(self.frame, ACCENT_ACTIVE)
+        self.view.setZoomFactor(getattr(self, "zoom", 1.0) or 1.0)
+        if getattr(self, "feed", None) is not None and self.feed.view is None:
+            # Стрічка вже жила без сторінки — тепер вона в неї є.
+            self.feed.view = self.view
+            self.feed.load()
 
     def _restore_and_open(self):
         """Налаштування з диска — і одразу те джерело, яке з них випливає."""
@@ -215,9 +253,20 @@ class Overlay(SourcesMixin, UpdatingMixin, ConfigMixin, LookMixin, QMainWindow):
         захисту від захоплення екрана. Четвертий — запис налаштувань — живе в
         _reset_state, бо потрібен раніше за все інше.
         """
+        # Конфіг уже прочитано (це робить _restore_and_open) — аж тепер відомо,
+        # чи потрібен нативний рендер і чи є в нього бінар.
+        self._setup_native_renderer()
+
         # Пошук власної трансляції: окрема прихована сторінка в тому ж профілі.
-        self.probe = LiveProbe(self.profile, self)
-        self.probe.result.connect(self._on_probe)
+        # Створюємо ЛІНИВО (див. probe_live): без заданого каналу шукати нема
+        # чого, а піднімати заради порожнього пошуку цілий браузер — тим паче.
+        self.probe = None
+        if self.view is not None and (self.my_channel.strip() or self.yt_channel_id):
+            # Імпорт тут, а не вгорі: probe.py тягне за собою QtWebEngine, а
+            # він потрібен лише коли браузер і так уже піднято.
+            from .probe import LiveProbe
+            self.probe = LiveProbe(self.profile, self)
+            self.probe.result.connect(self._on_probe)
         self._probe_timer = QTimer(self)
         self._probe_timer.setInterval(self._probe_interval())
         self._probe_timer.timeout.connect(self.probe_live)
@@ -264,40 +313,143 @@ class Overlay(SourcesMixin, UpdatingMixin, ConfigMixin, LookMixin, QMainWindow):
             self._over_game_timer.timeout.connect(self._keep_over_game)
             self._over_game_timer.start()
 
+    def _setup_native_renderer(self):
+        """Готує нативний рендер, якщо його ввімкнено в налаштуваннях.
+
+        Не запускає процес: він піднімається разом із «чатом поверх гри», бо на
+        робочому столі чат і далі малює вікно. Тут лише зв'язки — щоб той самий
+        потік подій, що йде на сторінку, йшов і в рендер."""
+        if self.renderer != "native" or not IS_WINDOWS:
+            return
+        from .imagefetch import ImageFetcher
+        from .nativerender import NativeRenderer
+        self._native = NativeRenderer(self)
+        if not self._native.available():
+            # Бінаря немає (стара збірка) — тихо лишаємось на старому шляху.
+            self._native = None
+            self.renderer = "web"
+            return
+        # Качалка картинок працює у своїх потоках і кличе нас звідти. Писати в
+        # канал звідти можна: у нативного рендера свій потік-писар із чергою.
+        self._fetcher = ImageFetcher(lambda url, data: self._native.image(url, data))
+        self._fetcher.start()
+        self.feed.sink = self._push_native
+        # Назад приходить те, що людина зробила у вікні оверлея. Сигнал Qt сам
+        # перекине це з потоку-читача сюди, у потік вікна.
+        self._native.event.connect(self._on_native_event)
+        if self._native_window:
+            # Вікно рендера тут — це і є вікно чату, а не додаток «поверх гри».
+            # Тож умикаємо його одразу, не чекаючи тумблера.
+            QTimer.singleShot(0, lambda: self.set_dcomp_overlay(True))
+
+    def _push_native(self, event: dict):
+        """Та сама подія, що йде на сторінку, — і в нативний рендер.
+
+        Емоути й значки він малює з БАЙТІВ, які шлемо ми: у мережу той бік не
+        ходить принципово. Доки картинка їде, рядок показує код емоута —
+        рівно як чат виглядав, доки емоутів не було."""
+        if self._native is None:
+            return
+        kind = event.get("kind")
+        if kind == "delete":
+            self._native.delete(event.get("id", ""))
+            return
+        if kind == "purge":
+            self._native.purge(event.get("nick", ""))
+            return
+        if kind == "css":
+            self._native.set_css(event.get("css", ""))
+            return
+        if kind == "layout":
+            self._native.set_layout(event.get("layout") or [])
+            return
+        for e in event.get("emotes") or []:
+            self._fetcher.want((e or {}).get("url", ""))
+        for b in event.get("badgeIcons") or []:
+            self._fetcher.want((b or {}).get("url", ""))
+        self._native.message(event)
+
+    def _sync_native_config(self):
+        """Вигляд і розмір — щоб рендер малював рівно те саме, що вікно чату."""
+        if self._native is None or not self._native.alive():
+            return
+        v = self.view
+        w, h = (max(80, v.width()), max(60, v.height())) if v is not None             else (max(80, self.width()), max(60, self.height()))
+        self._native.set_config(zoom=self.zoom, width=w, height=h,
+                                opacity=self.windowOpacity(), bg_alpha=self.bg_alpha,
+                                frameless=self.frameless)
+
+    def _on_native_event(self, ev: dict):
+        """Людина покрутила щось у вікні оверлея.
+
+        Налаштування рендер сам не зберігає — він лише каже, що сталося, а
+        єдиним джерелом істини лишається config.json. Так не буває двох правд і
+        не треба вирішувати, чиє значення новіше.
+        """
+        t = ev.get("t")
+        if t == "look":
+            if "opacity" in ev:
+                self.setWindowOpacity(float(ev["opacity"]))
+            if "bg_alpha" in ev:
+                self.bg_alpha = float(ev["bg_alpha"])
+                self._apply_border(self.accent)
+            if "zoom" in ev:
+                self.zoom = round(float(ev["zoom"]), 2)
+                if self.view is not None:
+                    self.view.setZoomFactor(self.zoom)
+                self.panel.sync_zoom()
+            # Значення вже застосовані рендером — назад їх не шлемо, інакше
+            # повзунок сіпався б під пальцем.
+            self._native._cfg.update({k: ev[k] for k in ("opacity", "bg_alpha", "zoom")
+                                      if k in ev})
+            self.save_config()
+            return
+        if t == "lock":
+            # Те саме поняття, що й у Qt-вікні (look.toggle_click_through):
+            # замкнене вікно пропускає мишу крізь себе.
+            self.click_through = bool(ev.get("on"))
+            self._native._cfg["locked"] = self.click_through
+            return
+        if t == "geometry":
+            # Вікно оверлея тепер і є вікно чату — його геометрію й зберігаємо.
+            try:
+                self.setGeometry(int(ev["x"]), int(ev["y"]), int(ev["w"]), int(ev["h"]))
+            except (KeyError, ValueError, TypeError):
+                return
+            self._native._cfg.update({"width": int(ev["w"]), "height": int(ev["h"])})
+            self.save_config()
+            return
+        if t == "settings":
+            self.toggle_settings()
+            return
+
     def _keep_over_game(self):
         """Тримає DirectComposition-оверлей рівно за вікном чату, поки тумблер
         увімкнено й вікно чату видиме. БЕЗ завʼязки на «попереду гра»: та перевірка
         була ненадійна (Alt-Tab — і спереду вже не гра, чат зникав). Оверлей
         клік-скрізь, а вікно чату під ним на тому ж місці, тож на робочому столі
         двоєння не видно, а взаємодія з вікном чату проходить крізь нього."""
-        if not IS_WINDOWS or self._dcomp is None or not self.dcomp_on:
+        if not IS_WINDOWS or not self.dcomp_on:
             return
-        try:
-            if self.isVisible():
-                # Ставимо оверлей рівно там, де НА ЕКРАНІ лежить сам чат (view),
-                # а не все вікно: продюсер знімає саме view, тож пікселі й позиція
-                # збігаються (рамка/заголовок у кадр не входять).
-                v = self.view
-                tl = v.mapToGlobal(v.rect().topLeft())
-                self._dcomp.place(tl.x(), tl.y())
-            else:
-                self._dcomp.hide()
-        except Exception:
-            pass
-
-    def pause_producer(self, sec: float = 0.4):
-        """Притримати грабер кадру на sec секунд — на час перетягування чи зміни
-        розміру вікна (головного або редактора CSS).
-
-        grab() головного вікна виконується на GUI-потоці й на реальному GPU
-        блокується на зчитуванні кадру, поки відеокарта зайнята композицією руху
-        вікна — саме це смикало перетягування, коли ввімкнено чат поверх гри.
-        Кадр у грі під час руху й так не змінюється (той самий чат), тож пауза
-        нічого не коштує візуально; щойно рух спиняється — грабер оживає сам."""
-        import time
-        self._producer_hold_until = time.monotonic() + max(0.0, sec)
-
-
+        if self._native is not None:
+            # Нативний рендер: те саме місце, той самий сенс — вікно рендера
+            # лежить рівно на view, тож на робочому столі двоєння не видно.
+            try:
+                if self._native_window:
+                    # Вікно рендера саме собі хазяїн: людина тягає його за
+                    # смужку, а Python лише зберігає результат. Пересувати його
+                    # звідси означало б відбирати вікно з-під руки.
+                    self._sync_native_config()
+                elif self.isVisible():
+                    v = self.view
+                    tl = v.mapToGlobal(v.rect().topLeft())
+                    self._native.place(tl.x(), tl.y())
+                    self._sync_native_config()
+                else:
+                    self._native.hide()
+            except Exception:
+                pass
+            return
     def set_custom_css(self, css: str):
         """Свій CSS — у вікно чату негайно і в config.json.
 
@@ -308,8 +460,7 @@ class Overlay(SourcesMixin, UpdatingMixin, ConfigMixin, LookMixin, QMainWindow):
         self.save_config()
         if self.feed is not None:
             self.feed.set_custom_css(self.custom_css)
-        if self.game_overlay is not None:
-            self.game_overlay.set_custom_css(self.custom_css)
+
         if self.mode == "web":
             self._inject_custom_css()
 
@@ -323,8 +474,7 @@ class Overlay(SourcesMixin, UpdatingMixin, ConfigMixin, LookMixin, QMainWindow):
         self.save_config()
         if self.feed is not None:
             self.feed.set_layout(self.chat_layout)
-        if self.game_overlay is not None:
-            self.game_overlay.set_layout(self.chat_layout)
+
 
     def _inject_custom_css(self):
         """Кладе свій CSS і на звичайну сторінку чату (сайт або YouTube).
@@ -333,7 +483,7 @@ class Overlay(SourcesMixin, UpdatingMixin, ConfigMixin, LookMixin, QMainWindow):
         — а от «мій CSS працює тільки в одному з трьох режимів» пояснити було б
         нічим.
         """
-        if not self.custom_css:
+        if not self.custom_css or self.view is None:
             return
         self.view.page().runJavaScript(chatfeed.apply_css_js(self.custom_css))
 
@@ -350,6 +500,8 @@ class Overlay(SourcesMixin, UpdatingMixin, ConfigMixin, LookMixin, QMainWindow):
         self.css_window.activateWindow()
 
     def _on_loaded(self, ok: bool):
+        if self.view is None:
+            return
         self.view.setZoomFactor(self.zoom)
         if ok and self.mode == "feed":
             self.feed.on_loaded()
@@ -410,12 +562,10 @@ class Overlay(SourcesMixin, UpdatingMixin, ConfigMixin, LookMixin, QMainWindow):
         super().moveEvent(e)
         if hasattr(self, "panel") and self.panel.isVisible():
             self._place_panel()
-        self._sync_game_rect()   # пересунув вікно — чат у грі їде слідом
         # Тягнемо вікно — притримуємо грабер (щоб рух не смикався) і рухаємо
         # dcomp-оверлей слідом ЩЕ під час руху, а не раз на 350 мс, щоб він не
         # відставав від вікна.
         if getattr(self, "dcomp_on", False):
-            self.pause_producer()
             self._keep_over_game()
 
 
@@ -426,9 +576,7 @@ class Overlay(SourcesMixin, UpdatingMixin, ConfigMixin, LookMixin, QMainWindow):
         self.grip.raise_()
         if self.panel.isVisible():
             self._place_panel()
-        self._sync_game_rect()   # розтягнув вікно — чат у грі росте так само
         if getattr(self, "dcomp_on", False):
-            self.pause_producer()
             self._keep_over_game()
         self.save_config()
 
@@ -479,70 +627,39 @@ class Overlay(SourcesMixin, UpdatingMixin, ConfigMixin, LookMixin, QMainWindow):
         self.panel.set_fullscreen_state(fullscreen.state())
 
     # --- справжній чат у грі (інжектор) ---
-    def _game_rect(self):
-        """Прямокутник вікна чату як частки СВОГО монітора: (x, y, w, h) ∈ [0..1].
+    def _sync_inject(self):
+        """Каже рендеру, чи класти кадр у спільну память для overlay.dll.
 
-        Саме він стає розкладкою чату в грі. На одному моніторі — точь-у-точь;
-        якщо вікно на іншому екрані, ніж гра, — та сама частка застосовується до
-        монітора гри.
+        Читання кадру з відеокарти коштує грошей, тож рендер робить його ЛИШЕ
+        поки інжект увімкнено. Розкладку чату в грі він рахує сам — за власним
+        вікном і монітором, на якому те стоїть.
         """
-        scr = self.screen()
-        g = self.frameGeometry()
-        if scr is None:
-            return (0.72, 0.06, 0.24, 0.40)
-        m = scr.geometry()
-        mw = float(m.width()) or 1.0
-        mh = float(m.height()) or 1.0
-        nx = (g.x() - m.x()) / mw
-        ny = (g.y() - m.y()) / mh
-        nw = g.width() / mw
-        nh = g.height() / mh
-        clamp = lambda v: max(0.0, min(1.0, v))
-        return (clamp(nx), clamp(ny), clamp(nw), clamp(nh))
-
-    def _sync_game_rect(self):
-        """Оновлює рамку й розмір чату в грі з поточного вікна чату."""
-        if getattr(self, "game_overlay", None) is None:
+        if self._native is None:
             return
-        nx, ny, nw, nh = self._game_rect()
-        self.game_overlay.set_rect(nx, ny, nw, nh)
-        self.game_overlay.set_size(self.width(), self.height())
-
-    def _ensure_game_overlay(self):
-        if self.game_overlay is None:
-            from .gameoverlay import GameOverlay
-            self.game_overlay = GameOverlay(self)
-            self.game_overlay.set_opacity(self.game_opacity)
-            self.game_overlay.set_hide_from_obs(self.game_hide_obs)
-            self._sync_game_rect()
-        return self.game_overlay
+        self._native.set_inject(self.game_on, pid=self._inject_pid,
+                                opacity=self.game_opacity,
+                                hide_obs=self.game_hide_obs)
 
     def set_game_hide_obs(self, on: bool):
         """Ховати чат у грі від OBS (лишається видним стрімеру на моніторі)."""
         self.game_hide_obs = bool(on)
-        if self.game_overlay is not None:
-            self.game_overlay.set_hide_from_obs(self.game_hide_obs)
+        self._sync_inject()
         self.save_config()
 
-    def _sync_game_source(self):
-        """Каже оверлею гри показувати те саме джерело, що й головне вікно.
-
-        Головне вікно буває в режимі стрічки (події) або відкриває сторінку
-        чату (сайт/YouTube). Без цього оверлей у грі знав лише про стрічку — а
-        у веб-режимі до нього не доходило нічого, і чат був порожній.
-        """
-        if self.game_overlay is not None:
-            self.game_overlay.set_source(self.mode, self.url, self.is_yt)
-
     def set_game_overlay(self, on: bool):
-        """Вмикає/вимикає продюсера кадру чату для гри. Доступно в усіх каналах —
-        безпеку несуть вимкнений за замовчуванням прапорець, попередження і
-        відмова інжектора в онлайн-іграх (guard)."""
+        """Вмикає/вимикає кадр чату для оверлея, вкладеного в гру. Доступно в
+        усіх каналах — безпеку несуть вимкнений за замовчуванням прапорець,
+        попередження і відмова інжектора в онлайн-іграх (guard)."""
         self.game_on = bool(on)
         if self.game_on:
-            ov = self._ensure_game_overlay()
-            ov.set_source(self.mode, self.url, self.is_yt)
-            ov.set_enabled(True)
+            # Кадр малює той самий рендер, що й вікно чату, — піднімаємо його,
+            # якщо він ще не працює.
+            if self._native is not None and not self._native.alive():
+                self._native.start()
+                self._native.set_css(self.custom_css)
+                self._native.set_layout(self.chat_layout)
+                self._sync_native_config()
+            self._sync_inject()
             # Vulkan-гру не можна «вкласти» після старту — шар має бути на місці
             # ще до запуску гри. Реєструємо його, поки чат у грі ввімкнено; при
             # вимкненні/виході знімаємо, щоб не вантажився в чужі Vulkan-застосунки.
@@ -551,8 +668,8 @@ class Overlay(SourcesMixin, UpdatingMixin, ConfigMixin, LookMixin, QMainWindow):
                 vklayer.register()
             except Exception:
                 pass
-        elif self.game_overlay is not None:
-            self.game_overlay.set_enabled(False)
+        else:
+            self._sync_inject()
             try:
                 from . import vklayer
                 vklayer.unregister()
@@ -566,49 +683,50 @@ class Overlay(SourcesMixin, UpdatingMixin, ConfigMixin, LookMixin, QMainWindow):
         лишається схованим від OBS. Той самий продюсер кадру, що й для інжекту;
         показує його окремий процес (dcomp.py). Позицію тримає _keep_over_game."""
         self.dcomp_on = bool(on)
-        if self._dcomp is None:
-            return
-        # Захищаємось: помилка тут НЕ має роняти всю програму (у слоті Qt
-        # необроблений виняток абортить процес). Логуємо й тихо вимикаємось.
-        try:
-            if self.dcomp_on:
-                # Кадр беремо з ГОЛОВНОГО вікна чату (MainViewProducer) — без
-                # другого QWebEngineView, який валив рушій браузера на view.load()
-                # під грою (див. faulthandler-трейс). Нічого не завантажуємо.
-                if self._dcomp_producer is None:
-                    from .gameoverlay import MainViewProducer
-                    self._dcomp_producer = MainViewProducer(self)
-                self._dcomp_producer.set_enabled(True)
-                self._dcomp.start()       # нативне вікно показує кадр; позицію
-                                          # веде _keep_over_game (за вікном чату)
-            else:
-                self._dcomp.stop()
-                if self._dcomp_producer is not None:
-                    self._dcomp_producer.set_enabled(False)
-        except Exception as e:
-            self.dcomp_on = False
+        if self._native is not None:
+            # Нативний шлях: ані грабера, ані спільної памʼяті — процес малює
+            # чат сам із подій, які ми йому шлемо.
             try:
-                from .gameoverlay import _diag
-                _diag("set_dcomp_overlay помилка: %r" % (e,))
-            except Exception:
-                pass
+                if self.dcomp_on:
+                    if not self._native.start():
+                        self.dcomp_on = False
+                        return
+                    if self._native_window:
+                        # Вікно рендера стає вікном чату: ставимо його туди, де
+                        # мало бути Qt-вікно, і саме Qt-вікно ховаємо, щоб не
+                        # двоїлося.
+                        g = self.geometry()
+                        self._native.set_config(width=g.width(), height=g.height())
+                        self._native.place(g.x(), g.y())
+                        self.hide()
+                    # Стан, який рендер має знати ДО першого повідомлення.
+                    self._native.set_css(self.custom_css)
+                    self._native.set_layout(self.chat_layout)
+                    self._sync_native_config()
+                    self._native.set_enabled(True)
+                    self._keep_over_game()
+                else:
+                    self._native.stop()
+            except Exception as e:
+                self.dcomp_on = False
+                from .diag import log
+                log("чат поверх гри: %r" % (e,))
+            return
 
     def inject_game(self, hwnd: int):
         """Кладе overlay.dll у вікно hwnd і, якщо вдалося, вмикає продюсера."""
         from . import inject
         res = inject.inject(hwnd)
         if res.ok:
+            # Малювати чат лише в ЦЬОМУ процесі: інакше він зʼявився б і в
+            # сторонньому вікні, куди DLL могла потрапити раніше.
+            self._inject_pid = res.pid
             self.set_game_overlay(True)
-            # Малювати чат лише в цій грі — щоб він не зʼявився в іншому вікні,
-            # куди DLL могла потрапити раніше.
-            if self.game_overlay is not None:
-                self.game_overlay.set_target(res.pid)
         return res
 
     def set_game_opacity(self, opacity: int):
         self.game_opacity = int(opacity)
-        if self.game_overlay is not None:
-            self.game_overlay.set_opacity(self.game_opacity)
+        self._sync_inject()
         self.save_config()
 
     def set_keep_top(self, on: bool):
@@ -644,14 +762,22 @@ class Overlay(SourcesMixin, UpdatingMixin, ConfigMixin, LookMixin, QMainWindow):
         return new_disabled
 
     def closeEvent(self, e):
-        if self.game_overlay is not None:
-            self.game_overlay.close()
         if getattr(self, "_compositor", None) is not None:
             try:
                 self._compositor.close()
                 self._compositor.deleteLater()
             except Exception:
                 pass
+        if getattr(self, "_native", None) is not None:
+            try:
+                self._native.stop()
+            except Exception:
+                pass
+            if self._fetcher is not None:
+                try:
+                    self._fetcher.stop()
+                except Exception:
+                    pass
         if getattr(self, "_dcomp", None) is not None:
             try:
                 self._dcomp.stop()

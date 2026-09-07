@@ -7,7 +7,7 @@
 
 from PySide6.QtCore import QUrl
 
-from . import chat_kick, chat_twitch, chatsources as cs
+from . import chat_kick, chat_site, chat_twitch, chatsources as cs
 from . import youtube as chat_youtube
 from .styles import NO_SOURCE_HTML
 from .urls import channel_id_from, is_youtube, resolve_chat_url
@@ -72,6 +72,20 @@ class SourcesMixin:
     # --- пошук власної трансляції ---
     def probe_live(self):
         """Питає YouTube, чи йде зараз ефір на нашому каналі."""
+        # Питати нема про що — і піднімати заради цього браузер тим паче.
+        if not (self.my_channel.strip() or self.yt_channel_id):
+            return
+        if self.probe is None:
+            # Без браузера — легкий пошук звичайним запитом. Піднімати Chromium
+            # заради одного HTTP раз на кілька хвилин було б безглуздо, а саме
+            # через це «нуль процесів браузера» й не виходило.
+            if self.view is None:
+                from .probelight import LiveProbeLight
+                self.probe = LiveProbeLight(self)
+            else:
+                from .probe import LiveProbe
+                self.probe = LiveProbe(self.profile, self)
+            self.probe.result.connect(self._on_probe)
         if self.probe.busy:
             return
         self.probe.start(self.my_channel, self.yt_channel_id)
@@ -108,17 +122,24 @@ class SourcesMixin:
             out.append("Kick")
         if self.my_channel.strip() or self.yt_channel_id:
             out.append("YouTube")
-        return out or (["чат сайту"] if self.site_url.strip() else ["нічого"])
+        if self.site_url.strip():
+            out.append("чат сайту")
+        return out or ["нічого"]
 
     def refresh_source(self):
         """Переобчислює джерело чату і, якщо воно змінилося, відкриває його.
 
         Джерела — тільки ніки площадок із налаштувань. Спільна стрічка
-        вмикається, щойно задано Twitch або Kick: двох чатів однією сторінкою
-        YouTube не покажеш, та й іконка площадки потрібна саме тоді, коли
-        джерело не одне.
+        вмикається, щойно задано Twitch, Kick або чат сайту: двох чатів однією
+        сторінкою YouTube не покажеш, та й іконка площадки потрібна саме тоді,
+        коли джерело не одне.
+
+        Чат сайту потрапив сюди не одразу. Спершу він показувався сторінкою — і
+        через це не працював ані в грі, ані в нативному вікні: там браузера
+        немає. Читач (chat_site.py) бере його тим самим сокетом, яким
+        користується сама сторінка, тож тепер це звичайне джерело серед інших.
         """
-        if self.twitch_channel or self.kick_channel:
+        if self.twitch_channel or self.kick_channel or self.site_url.strip():
             self._start_feed()
             return
         self._stop_readers()
@@ -129,9 +150,6 @@ class SourcesMixin:
             self.mode = "web"
             self.url = url
             self._show_url()
-        # Оверлей у грі має показувати те саме джерело.
-        if getattr(self, "game_overlay", None) is not None:
-            self._sync_game_source()
 
     def _show_url(self):
         """Відкриває поточне посилання або пояснює, чого бракує.
@@ -139,6 +157,9 @@ class SourcesMixin:
         Порожня адреса — не помилка програми, а незаповнене налаштування:
         показати білу сторінку означало б залишити людину гадати, що зламалося.
         """
+        # Без браузера тут не обійтися — це ж чужа сторінка. Якщо його ще
+        # немає (чат малював нативний рендер), піднімаємо саме зараз.
+        self._ensure_web()
         if self.url:
             self.view.load(QUrl(self.url))
         else:
@@ -163,12 +184,21 @@ class SourcesMixin:
         yt_channel = self.my_channel.strip() or self.yt_channel_id
         if yt_channel:
             self._add_reader(chat_youtube.YouTubeChat(yt_channel, self))
+        if self.site_url.strip():
+            site = chat_site.SiteChat(self.site_url, self)
+            # Сервер сайту вміє мостити чужі чати у свій. Ті площадки, які ми
+            # читаємо САМІ, він хай не дублює — інакше кожне повідомлення
+            # Twitch прийшло б двічі.
+            if self.twitch_channel:
+                site.skip_sources.add("twitch")
+            if self.kick_channel:
+                site.skip_sources.add("kick")
+            if yt_channel:
+                site.skip_sources.add("youtube")
+            self._add_reader(site)
         # Назву оновлюємо ПІСЛЯ читачів: до цього active_sources() ще не знає,
         # звідки саме береться чат.
         self.bar.title.setText(self._title_for())
-        # Оверлей у грі — на ту саму стрічку.
-        if getattr(self, "game_overlay", None) is not None:
-            self._sync_game_source()
 
     def _add_reader(self, reader):
         reader.event.connect(self._on_chat_event)
@@ -182,11 +212,10 @@ class SourcesMixin:
         self.readers = []
 
     def _on_chat_event(self, event: dict):
-        # Копія у гру, якщо ввімкнено (див. gameoverlay.py). Незалежно від режиму
-        # головного вікна: у грі чат потрібен і тоді, коли на сайті показано
-        # сторінку YouTube, а не спільну стрічку.
-        if getattr(self, "game_on", False) and self.game_overlay is not None:
-            self.game_overlay.push(event)
+        # Далі подія йде однією дорогою — у стрічку. Звідти ж її бере й
+        # нативний рендер (ChatFeed.sink), а отже і чат поверх гри, і чат у
+        # самій грі. Окремої копії «для гри», як було раніше, більше немає:
+        # другий шлях означав другу чергу, другу затримку й другу правду.
         if self.mode == "feed" and self.feed is not None:
             self.feed.push(event)
 

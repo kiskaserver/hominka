@@ -126,7 +126,8 @@ def build_native() -> str:
     finally:
         subprocess.run(["docker", "rm", cid], capture_output=True)
     need = ["injector-x64.exe", "injector-x86.exe", "overlay-x64.dll", "overlay-x86.dll",
-            "hominka-vklayer-x64.dll", "hominka-vklayer-x86.dll", "hominka-dcomp-x64.exe"]
+            "hominka-vklayer-x64.dll", "hominka-vklayer-x86.dll",
+            "hominka-render-x64.exe"]
     missing = [n for n in need if not os.path.isfile(os.path.join(out, n))]
     if missing:
         raise SystemExit("нативна збірка не дала: %s" % ", ".join(missing))
@@ -232,7 +233,10 @@ def pack(version: str, exe_path: str = "", suffix: str = "win64",
             for name in ("injector-x64.exe", "injector-x86.exe",
                          "overlay-x64.dll", "overlay-x86.dll",
                          "hominka-vklayer-x64.dll", "hominka-vklayer-x86.dll",
-                         "hominka-dcomp-x64.exe"):
+                         # Нативний рендер чату. Відладочної копії
+                         # (hominka-render.debug.exe) тут навмисно немає: вона
+                         # важить 11 МБ і потрібна лише для розбору збоїв.
+                         "hominka-render-x64.exe"):
                 p = os.path.join(native_dir, name)
                 if os.path.isfile(p):
                     z.write(p, "native/" + name)
