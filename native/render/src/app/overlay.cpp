@@ -1,5 +1,8 @@
 #include "app/overlay.h"
 
+#include <psapi.h>
+
+#include <cstdio>
 #include <string>
 #include <vector>
 
@@ -87,6 +90,7 @@ UpdateView update_view(const Updater& up) {
         v.can_check = true;
         break;
     case Updater::State::Available:
+        v.available = true;
         v.status = channel_label(rel.channel) + " " + rel.version + " — " +
                    kind_label(rel.kind) +
                    (rel.notes.empty() ? std::string() : ".\n" + rel.notes);
@@ -137,6 +141,39 @@ GameView game_view(const GameState& gs) {
     if (!gs.windows.empty() && gs.picked < (int)gs.windows.size())
         v.fso_off = fso_disabled(game_exe_path(gs.windows[(size_t)gs.picked].hwnd));
     return v;
+}
+
+// Стан джерел очима панелі. Просто перекладаємо — панель не має знати ні про
+// ChatNet, ні про те, скільки там потоків.
+// Рядок «Зараз» для розділу «Про програму». Памʼять беремо в системи: саме це
+// число й було приводом до всього переносу, і показати його чесно доречно.
+std::string about_facts(const ChatNet& net, const DCompWindow& win) {
+    PROCESS_MEMORY_COUNTERS pmc = {};
+    pmc.cb = sizeof pmc;
+    const unsigned mb = GetProcessMemoryInfo(GetCurrentProcess(), &pmc, sizeof pmc)
+                            ? (unsigned)(pmc.WorkingSetSize / (1024 * 1024))
+                            : 0;
+    int live = 0;
+    for (const ChatNet::SourceInfo& s : net.sources())
+        if (s.connected) ++live;
+
+    char buf[160];
+    snprintf(buf, sizeof buf, "%u МБ памʼяті · вікно %d×%d · читаємо джерел: %d",
+             mb, win.width(), win.height(), live);
+    return buf;
+}
+
+std::vector<SourceView> source_view(const ChatNet& net) {
+    std::vector<SourceView> out;
+    for (const ChatNet::SourceInfo& s : net.sources()) {
+        SourceView v;
+        v.name = s.name;
+        v.configured = s.configured;
+        v.connected = s.connected;
+        v.note = s.note;
+        out.push_back(v);
+    }
+    return out;
 }
 
 bool pump_images(ImageFetch* fetch, ImageCache* images, Feed* feed) {
@@ -224,13 +261,6 @@ int run_overlay(DWORD parent_pid, bool standalone) {
         if (!cfg.layout.empty()) feed.set_layout(cfg.layout);
         fetch.start();
         net.apply(cfg);
-        if (!gui.create(L"HominkaSettings", L"Hominka — налаштування", 360, 620))
-            rlog("вікно налаштувань не створилося (лишаємося без нього)");
-        // Редактор теми — теж окреме вікно, і його можна тягнути за краї:
-        // код і довідник поруч у вузькому вікні не вміщаються.
-        if (!css_win.create(L"HominkaCssEditor", L"Hominka — свій CSS", 1080, 700,
-                            /*resizable=*/true, /*mono=*/true))
-            rlog("вікно редактора теми не створилося");
         cstate.text = cfg.custom_css;
         // Архіви минулих оновлень — двісті мегабайтів кожен, а %TEMP% Windows
         // сама не чистить.
@@ -248,7 +278,9 @@ int run_overlay(DWORD parent_pid, bool standalone) {
     // робочому режимі.
     const char* shot_prefix = standalone ? getenv("HOMINKA_UI_SHOT") : nullptr;
     const int64_t started = now_ms();
-    bool shot_settings = false;
+    // Панель знімаємо по розділах: побачити треба кожен, а не лише той, що
+    // відкрився першим.
+    int settings_shots = 0;
     // Редактор знімаємо двічі: зі списком проблем і з довідником. Довідник —
     // це кілька сотень рядків згенерованого тексту, і подивитися на нього
     // очима варто хоча б раз.
@@ -390,7 +422,12 @@ int run_overlay(DWORD parent_pid, bool standalone) {
                     cfg.save();
                 }
                 if (cev.geometry_changed) user_sizing = false;
-                if (cev.open_settings) gui.show_beside(win.screen_rect());
+                if (cev.open_settings) {
+                    if (!gui.created() &&
+                        !gui.create(L"HominkaSettings", L"Hominka — налаштування", 720, 520))
+                        rlog("вікно налаштувань не створилося (лишаємося без нього)");
+                    gui.show_beside(win.screen_rect());
+                }
             } else {
                 report_chrome(&ipc, cev, look, win, &user_sizing, &feed);
             }
@@ -461,26 +498,31 @@ int run_overlay(DWORD parent_pid, bool standalone) {
         if (standalone) {
             if (gui.begin()) {
                 const SettingsEvents sev =
-                    draw_settings(&sstate, &cfg, net.status(), update_view(updater),
-                                  game_view(games), gui.width(), gui.height());
+                    draw_settings(&sstate, &cfg, source_view(net), update_view(updater),
+                                  game_view(games), about_facts(net, win),
+                                  gui.width(), gui.height());
                 // Знімок — ДО показу: у flip-моделі після Present задній буфер
                 // уже інший, і в PNG потрапила б порожнеча.
                 // Знімаємо не одразу після показу: панель просить у системи
                 // свою висоту, і застосується це лише наступним кадром.
                 const bool want_shot =
-                    shot_prefix && !shot_settings && now_ms() - started > 9500;
+                    shot_prefix && settings_shots < 5 && now_ms() - started > 9500;
                 gui.end(!want_shot);
                 if (want_shot) {
-                    shot_settings = true;
                     wchar_t path[512];
-                    _snwprintf(path, 512, L"%hs-settings.png", shot_prefix);
-                    rlog("знімок налаштувань: %d", (int)dump_gui_png(&gui, path));
+                    _snwprintf(path, 512, L"%hs-settings%d.png", shot_prefix,
+                               settings_shots + 1);
+                    rlog("знімок налаштувань %d: %d", settings_shots + 1,
+                         (int)dump_gui_png(&gui, path));
                     gui.present();
-                    _snwprintf(path, 512, L"%hs-chat.png", shot_prefix);
-                    rlog("знімок чату: %d", (int)dump_window_png(&win, path));
+                    if (settings_shots == 0) {
+                        _snwprintf(path, 512, L"%hs-chat.png", shot_prefix);
+                        rlog("знімок чату: %d", (int)dump_window_png(&win, path));
+                    }
+                    ++settings_shots;
+                    sstate.page = settings_shots;      // наступний розділ
                 }
                 gui.drag(sev.title_active);
-                if (sev.content_height > 0) gui.want_height(sev.content_height);
                 if (sev.close) gui.hide();
                 if (sev.look_changed) {
                     look.opacity = cfg.look.opacity;
@@ -490,7 +532,15 @@ int run_overlay(DWORD parent_pid, bool standalone) {
                     feed.set_zoom(look.zoom);
                 }
                 if (sev.sources_changed) net.apply(cfg);
-                if (sev.css_editor) css_win.show_beside(win.screen_rect());
+                if (sev.css_editor) {
+                    // Редактор теми — окреме вікно, і його можна тягнути за
+                    // краї: код і довідник поруч у вузькому не вміщаються.
+                    if (!css_win.created() &&
+                        !css_win.create(L"HominkaCssEditor", L"Hominka — свій CSS", 1080,
+                                        700, /*resizable=*/true, /*mono=*/true))
+                        rlog("вікно редактора теми не створилося");
+                    css_win.show_beside(win.screen_rect());
+                }
                 if (sev.pick_game >= 0) {
                     games.picked = sev.pick_game;
                     games.status.clear();
@@ -612,10 +662,26 @@ int run_overlay(DWORD parent_pid, bool standalone) {
 
             // Вікна ще не показані — показуємо: знімок робиться саме з них.
             if (shot_prefix && now_ms() - started > 8000) {
-                if (!gui.visible()) gui.show_beside(win.screen_rect());
-                if (!css_win.visible()) css_win.show_beside(win.screen_rect());
+                // Рамку вікна чату видно, лише коли на нього наведено, — тож
+                // для знімка ставимо курсор на смужку. Інакше перевіряти її
+                // вигляд нічим: у кадрі був би самий чат.
+                {
+                    const RECT r = win.screen_rect();
+                    SetCursorPos((r.left + r.right) / 2, r.top + 10);
+                }
+                if (!gui.visible()) {
+                    if (!gui.created())
+                        gui.create(L"HominkaSettings", L"Hominka — налаштування", 720, 520);
+                    gui.show_beside(win.screen_rect());
+                }
+                if (!css_win.visible()) {
+                    if (!css_win.created())
+                        css_win.create(L"HominkaCssEditor", L"Hominka — свій CSS", 1080,
+                                       700, true, true);
+                    css_win.show_beside(win.screen_rect());
+                }
             }
-            if (shot_prefix && shot_settings && css_shots >= 2) {
+            if (shot_prefix && settings_shots >= 5 && css_shots >= 2) {
                 if (games.injected) vklayer_unregister();
                 chrome.shutdown();
                 return 0;

@@ -96,58 +96,59 @@ x86_64-w64-mingw32-g++ -O2 -s -static -municode -mwindows $DLL_INC \
 # системними й не сипле попередженнями з чужого коду (nanosvg порівнює size_t
 # з long — це не наша справа). Наші -Wall -Wextra від цього не слабшають.
 #
-# Свої включення йдуть від кореня native/ і native/render/ — тому в кожному
+# Свої включення йдуть від native/ і native/render/include — тому в кожному
 # рядку «#include» видно, звідки річ: core/, gfx/, net/, ui/, platform/,
-# update/, app/.
-RENDER_INC="-isystem $TP/include -I $SRC -I $SRC/render"
+# update/, app/. Заголовки й реалізації лежать окремо (include/ і src/): у
+# теці модуля видно самі .cpp, а не подвійний список із парами.
+RENDER_INC="-isystem $TP/include -I $SRC -I $SRC/render/include"
 
 # Джерела — тим самим поділом, що й теки. Один список на дві збірки: доки він
 # був переписаний двічі, звичайна збірка й відладочна встигали розійтися.
 RENDER_SRC="
-    $SRC/render/app/main.cpp
-    $SRC/render/app/diag.cpp
-    $SRC/render/app/ipc_mode.cpp
-    $SRC/render/app/nettest.cpp
-    $SRC/render/app/overlay.cpp
-    $SRC/render/app/offscreen.cpp
-    $SRC/render/app/preview.cpp
-    $SRC/render/app/runtime.cpp
-    $SRC/render/app/selftest.cpp
+    $SRC/render/src/app/main.cpp
+    $SRC/render/src/app/diag.cpp
+    $SRC/render/src/app/ipc_mode.cpp
+    $SRC/render/src/app/nettest.cpp
+    $SRC/render/src/app/overlay.cpp
+    $SRC/render/src/app/offscreen.cpp
+    $SRC/render/src/app/preview.cpp
+    $SRC/render/src/app/runtime.cpp
+    $SRC/render/src/app/selftest.cpp
 
-    $SRC/render/core/chat_doc.cpp
-    $SRC/render/core/config.cpp
-    $SRC/render/core/feed.cpp
-    $SRC/render/core/feedgfx.cpp
+    $SRC/render/src/core/chat_doc.cpp
+    $SRC/render/src/core/config.cpp
+    $SRC/render/src/core/feed.cpp
+    $SRC/render/src/core/feedgfx.cpp
 
-    $SRC/render/gfx/container_d2d.cpp
-    $SRC/render/gfx/cssbits.cpp
-    $SRC/render/gfx/imgcache.cpp
+    $SRC/render/src/gfx/container_d2d.cpp
+    $SRC/render/src/gfx/cssbits.cpp
+    $SRC/render/src/gfx/imgcache.cpp
 
-    $SRC/render/net/badges.cpp
-    $SRC/render/net/chatnet.cpp
-    $SRC/render/net/emotes.cpp
-    $SRC/render/net/imgfetch.cpp
-    $SRC/render/net/net_http.cpp
-    $SRC/render/net/src_kick.cpp
-    $SRC/render/net/src_site.cpp
-    $SRC/render/net/src_twitch.cpp
-    $SRC/render/net/src_youtube.cpp
+    $SRC/render/src/net/badges.cpp
+    $SRC/render/src/net/chatnet.cpp
+    $SRC/render/src/net/emotes.cpp
+    $SRC/render/src/net/imgfetch.cpp
+    $SRC/render/src/net/net_http.cpp
+    $SRC/render/src/net/src_kick.cpp
+    $SRC/render/src/net/src_site.cpp
+    $SRC/render/src/net/src_twitch.cpp
+    $SRC/render/src/net/src_youtube.cpp
 
-    $SRC/render/platform/gamewin.cpp
-    $SRC/render/platform/ipc.cpp
-    $SRC/render/platform/vklayer.cpp
+    $SRC/render/src/platform/gamewin.cpp
+    $SRC/render/src/platform/ipc.cpp
+    $SRC/render/src/platform/vklayer.cpp
 
-    $SRC/render/ui/chrome.cpp
-    $SRC/render/ui/cssedit_ui.cpp
-    $SRC/render/ui/csslint.cpp
-    $SRC/render/ui/cssref.cpp
-    $SRC/render/ui/gui_win.cpp
-    $SRC/render/ui/samples.cpp
-    $SRC/render/ui/settings_ui.cpp
-    $SRC/render/ui/uifont.cpp
+    $SRC/render/src/ui/chrome.cpp
+    $SRC/render/src/ui/cssedit_ui.cpp
+    $SRC/render/src/ui/csslint.cpp
+    $SRC/render/src/ui/cssref.cpp
+    $SRC/render/src/ui/gui_win.cpp
+    $SRC/render/src/ui/samples.cpp
+    $SRC/render/src/ui/settings_ui.cpp
+    $SRC/render/src/ui/uifont.cpp
 
-    $SRC/render/update/release.cpp
-    $SRC/render/update/updater.cpp
+    $SRC/render/src/update/release.cpp
+    $SRC/render/src/update/updater.cpp
 "
 
 RENDER_LIBS="-L$TP/lib -limgui -llitehtml -lgumbo -lwebpdemux -lwebp -lsharpyuv

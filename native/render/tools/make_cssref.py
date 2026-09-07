@@ -39,7 +39,7 @@ def cstr(s: str) -> str:
 def main():
     lines = [
         "// Згенеровано make_cssref.py з hominka/cssui/catalog.py — не правити руками.",
-        '#include "cssref.h"',
+        '#include "ui/cssref.h"',
         "",
         "namespace hominka {",
         "",
@@ -68,7 +68,7 @@ def main():
         "}  // namespace hominka",
         "",
     ]
-    path = os.path.join(RENDER, "ui", "cssref.cpp")
+    path = os.path.join(RENDER, "src", "ui", "cssref.cpp")
     io.open(path, "w", encoding="utf-8", newline="\n").write("\n".join(lines))
     print("cssref.cpp: %d рецептів, %d селекторів" % (len(RECIPES), len(SELECTORS)))
 

@@ -1,5 +1,5 @@
 // Згенеровано make_cssref.py з hominka/cssui/catalog.py — не правити руками.
-#include "cssref.h"
+#include "ui/cssref.h"
 
 namespace hominka {
 

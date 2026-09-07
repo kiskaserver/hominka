@@ -169,6 +169,37 @@ std::string ChatNet::status() const {
     return out.empty() ? "Жодного каналу не вказано." : out;
 }
 
+std::vector<ChatNet::SourceInfo> ChatNet::sources() const {
+    std::vector<SourceInfo> out;
+    auto add = [&out](const char* name, bool configured, bool connected,
+                      const std::string& err) {
+        SourceInfo s;
+        s.name = name;
+        s.configured = configured;
+        s.connected = connected;
+        s.note = connected ? "" : (err.empty() ? "під'єднуюся…" : err);
+        out.push_back(s);
+    };
+    add("Twitch", twitch_ != nullptr, twitch_ && twitch_->connected(),
+        twitch_ ? twitch_->error() : "");
+    add("Kick", kick_ != nullptr, kick_ && kick_->connected(),
+        kick_ ? kick_->error() : "");
+    // YouTube чекає на ефір, і це не помилка: каналу може просто зараз не бути
+    // в мережі. Кажемо саме так, а не «під'єднуюся».
+    {
+        SourceInfo s;
+        s.name = "YouTube";
+        s.configured = youtube_ != nullptr;
+        s.connected = youtube_ && youtube_->connected();
+        if (!s.connected && youtube_)
+            s.note = youtube_->error().empty() ? "чекаю на ефір…" : youtube_->error();
+        out.push_back(s);
+    }
+    add("Сайт", site_ != nullptr, site_ && site_->connected(),
+        site_ ? site_->error() : "");
+    return out;
+}
+
 void ChatNet::stop() {
     if (twitch_) { twitch_->stop(); twitch_.reset(); }
     if (kick_) { kick_->stop(); kick_.reset(); }

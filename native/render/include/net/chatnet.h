@@ -43,8 +43,19 @@ public:
 
     void stop();
 
-    // Що показати людині: до чого під'єдналися, а де не вийшло.
+    // Що показати людині: до чого під'єдналися, а де не вийшло. Рядком — для
+    // журналу й командного рядка.
     std::string status() const;
+
+    // Те саме, але по джерелах: панелі потрібен не рядок, а стан кожного
+    // окремо — інакше «щось не так» доводиться вичитувати з речення.
+    struct SourceInfo {
+        const char* name = "";     // «Twitch», «Kick», «YouTube», «Сайт»
+        bool configured = false;   // канал вписано
+        bool connected = false;
+        std::string note;          // причина, якщо не під'єдналися
+    };
+    std::vector<SourceInfo> sources() const;
 
 private:
     void push(const ChatEvent& ev);

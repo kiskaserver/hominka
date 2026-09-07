@@ -41,6 +41,11 @@ public:
     void show_beside(const RECT& anchor);
     void hide();
     bool visible() const { return visible_; }
+    // Чи вікно взагалі створено. Створюємо їх ліниво — при першому показі: за
+    // кожним стоїть свій пристрій D3D, свій свопчейн і свій атлас шрифтів, а
+    // це десятки мегабайтів на вікно, яке людина може жодного разу не
+    // відкрити.
+    bool created() const { return hwnd_ != nullptr; }
 
     HWND hwnd() const { return hwnd_; }
     int width() const { return width_; }

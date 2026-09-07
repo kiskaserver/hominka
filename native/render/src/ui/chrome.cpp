@@ -1,9 +1,12 @@
 #include "ui/chrome.h"
 
+#include <cmath>
+
 #include "imgui/imgui.h"
 #include "imgui/imgui_impl_dx11.h"
 #include "imgui/imgui_impl_win32.h"
 
+#include "ui/settings_ui.h"
 #include "ui/uifont.h"
 
 extern IMGUI_IMPL_API LRESULT ImGui_ImplWin32_WndProcHandler(HWND hWnd, UINT msg,
@@ -55,13 +58,12 @@ bool Chrome::init(HWND hwnd, ID3D11Device* dev, ID3D11DeviceContext* ctx) {
     // Шрифт із системи, з кирилицею — див. uifont.h.
     load_ui_font(15.0f);
 
-    ImGui::StyleColorsDark();
+    // Той самий вигляд, що й у панелі налаштувань: кольори, скруглення,
+    // повзунки. Рамка чату й панель — одна програма, і синій повзунок ImGui за
+    // замовчуванням посеред фіолетового робив із них дві.
+    settings_style();
     ImGuiStyle& st = ImGui::GetStyle();
-    st.WindowRounding = 0.0f;
-    st.WindowBorderSize = 0.0f;
-    st.WindowPadding = ImVec2(0, 0);
-    st.FrameRounding = 5.0f;
-    st.GrabRounding = 5.0f;
+    st.FramePadding = ImVec2(6, 3);          // смужка заввишки 22 пікселі
     st.Colors[ImGuiCol_WindowBg] = ImVec4(0, 0, 0, 0);   // тло малює Direct2D
 
     if (!ImGui_ImplWin32_Init(hwnd)) return false;
@@ -179,46 +181,98 @@ ChromeEvents Chrome::draw_controls(int w, int h, Look* look, HWND hwnd) {
         ImGui::PushStyleColor(ImGuiCol_ButtonHovered, IM_COL32(255, 255, 255, 40));
         ImGui::PushStyleColor(ImGuiCol_ButtonActive, IM_COL32(255, 255, 255, 70));
 
-        // Замок: вимикає й вмикає клік-крізь. Те саме, що робив Ctrl+Alt+Space
-        // і кнопка 🔓 у Qt-вікні.
-        if (ImGui::Button(look->locked ? "[#]" : "[o]", ImVec2(28, BAR_H - 6))) {
-            look->locked = !look->locked;
-            ev.lock_changed = true;
+        // Замок: вимикає й вмикає клік-крізь. Малюємо колодку, а не пишемо
+        // «[o]»: на смужці в двадцять два пікселі підпис прочитати нема коли,
+        // а замкнену колодку видно з першого погляду.
+        {
+            const ImVec2 p0 = ImGui::GetCursorScreenPos();
+            const bool pressed = ImGui::InvisibleButton("##lock", ImVec2(26, BAR_H - 6));
+            const bool hot = ImGui::IsItemHovered();
+            if (pressed) {
+                look->locked = !look->locked;
+                ev.lock_changed = true;
+            }
+            if (hot)
+                ImGui::SetTooltip(look->locked ? "Розімкнути (миша знову діє)"
+                                               : "Замкнути (миша проходить крізь)");
+            if (hot)
+                dl->AddRectFilled(p0, ImVec2(p0.x + 26, p0.y + BAR_H - 6),
+                                  IM_COL32(255, 255, 255, 40), 4.0f);
+            const ImU32 tint = look->locked ? ACCENT_LOCK
+                                            : (hot ? IM_COL32(255, 255, 255, 255) : TEXT_DIM);
+            const float cx = p0.x + 13.0f, cy = p0.y + (BAR_H - 6) * 0.5f;
+            // Корпус і дужка. Розімкнена — дужка зсунута вбік і не замикається.
+            dl->AddRectFilled(ImVec2(cx - 4.5f, cy - 1.0f), ImVec2(cx + 4.5f, cy + 5.5f),
+                              tint, 1.5f);
+            dl->PathArcTo(ImVec2(look->locked ? cx : cx + 3.0f, cy - 1.0f), 3.2f,
+                          3.14159265f, 6.2831853f, 12);
+            dl->PathStroke(tint, 0, 1.6f);
         }
-        if (ImGui::IsItemHovered())
-            ImGui::SetTooltip(look->locked ? "Розімкнути (миша знову діє)"
-                                           : "Замкнути (миша проходить крізь)");
 
-        ImGui::SameLine(0, 4);
-        if (ImGui::Button("A-", ImVec2(26, BAR_H - 6))) {
+        ImGui::SameLine(0, 2);
+        if (ImGui::Button("A−", ImVec2(26, BAR_H - 6))) {
             look->zoom = look->zoom - 0.1f < 0.5f ? 0.5f : look->zoom - 0.1f;
             ev.look_changed = true;
         }
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("Дрібніший текст");
         ImGui::SameLine(0, 2);
         if (ImGui::Button("A+", ImVec2(26, BAR_H - 6))) {
             look->zoom = look->zoom + 0.1f > 3.0f ? 3.0f : look->zoom + 0.1f;
             ev.look_changed = true;
         }
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("Більший текст");
 
         // Повзунки прозорості — найчастіше крутять саме їх, тож вони під рукою,
-        // а не в налаштуваннях.
+        // а не в налаштуваннях. У відсотках: «0.60» ні про що не каже.
         ImGui::SameLine(0, 8);
-        ImGui::SetNextItemWidth(70);
         ImGui::PushStyleColor(ImGuiCol_FrameBg, IM_COL32(255, 255, 255, 25));
-        if (ImGui::SliderFloat("##op", &look->opacity, 0.2f, 1.0f, "%.2f"))
-            ev.look_changed = true;
-        if (ImGui::IsItemHovered()) ImGui::SetTooltip("Прозорість вікна");
-        ImGui::SameLine(0, 4);
-        ImGui::SetNextItemWidth(70);
-        if (ImGui::SliderFloat("##bg", &look->bg_alpha, 0.0f, 1.0f, "%.2f"))
-            ev.look_changed = true;
-        if (ImGui::IsItemHovered()) ImGui::SetTooltip("Прозорість підкладки");
-        ImGui::PopStyleColor();
+        ImGui::PushStyleColor(ImGuiCol_SliderGrab, ACCENT);
+        ImGui::PushStyleColor(ImGuiCol_SliderGrabActive, IM_COL32(192, 132, 252, 255));
+        {
+            float op = look->opacity * 100.0f;
+            ImGui::SetNextItemWidth(66);
+            if (ImGui::SliderFloat("##op", &op, 20.0f, 100.0f, "%.0f%%")) {
+                look->opacity = op / 100.0f;
+                ev.look_changed = true;
+            }
+            if (ImGui::IsItemHovered()) ImGui::SetTooltip("Прозорість вікна");
 
-        // Шестерня — відкриває справжню панель налаштувань у Hominka.
-        ImGui::SameLine(0, 6);
-        if (ImGui::Button("*", ImVec2(24, BAR_H - 6))) ev.open_settings = true;
-        if (ImGui::IsItemHovered()) ImGui::SetTooltip("Налаштування");
+            ImGui::SameLine(0, 4);
+            float bg = look->bg_alpha * 100.0f;
+            ImGui::SetNextItemWidth(66);
+            if (ImGui::SliderFloat("##bg", &bg, 0.0f, 100.0f, "%.0f%%")) {
+                look->bg_alpha = bg / 100.0f;
+                ev.look_changed = true;
+            }
+            if (ImGui::IsItemHovered()) ImGui::SetTooltip("Тло під чатом");
+        }
+        ImGui::PopStyleColor(3);
+
+        // Шестерня — вхід у налаштування. Малюємо її самі: гліфа шестерні в
+        // Segoe UI немає, а «*» на її місці нічого не означає — на нього просто
+        // не натискали.
+        ImGui::SameLine(0, 8);
+        {
+            const ImVec2 p0 = ImGui::GetCursorScreenPos();
+            const bool pressed = ImGui::InvisibleButton("##gear", ImVec2(24, BAR_H - 6));
+            const bool hot = ImGui::IsItemHovered();
+            if (pressed) ev.open_settings = true;
+            if (hot) ImGui::SetTooltip("Налаштування");
+            if (hot)
+                dl->AddRectFilled(p0, ImVec2(p0.x + 24, p0.y + BAR_H - 6),
+                                  IM_COL32(255, 255, 255, 40), 4.0f);
+
+            const ImVec2 c(p0.x + 12.0f, p0.y + (BAR_H - 6) * 0.5f);
+            const ImU32 tint = hot ? IM_COL32(255, 255, 255, 255) : TEXT_DIM;
+            // Шість зубців по колу плюс кільце: дрібно, але впізнавано.
+            for (int i = 0; i < 6; ++i) {
+                const float a = (float)i * 3.14159265f / 3.0f;
+                const float cs = cosf(a), sn = sinf(a);
+                dl->AddLine(ImVec2(c.x + cs * 3.0f, c.y + sn * 3.0f),
+                            ImVec2(c.x + cs * 6.5f, c.y + sn * 6.5f), tint, 2.0f);
+            }
+            dl->AddCircle(c, 4.0f, tint, 12, 2.0f);
+        }
 
         ImGui::PopStyleColor(3);
 
