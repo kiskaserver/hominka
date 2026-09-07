@@ -29,6 +29,9 @@ g++ $COMMON $INC \
     "$SRC/render/fontstore.cpp" \
     "$SRC/render/cssbits.cpp" \
     "$SRC/render/net_probe.cpp" \
+    "$SRC/render/net_http.cpp" \
+    "$SRC/render/badges.cpp" \
+    "$SRC/render/emotes.cpp" \
     "$SRC/render/chat_doc.cpp" \
     "$SRC/render/imgcache.cpp" \
     "$SRC/render/feed.cpp" \

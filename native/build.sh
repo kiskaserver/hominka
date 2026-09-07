@@ -102,6 +102,9 @@ x86_64-w64-mingw32-g++-posix $COMMON -municode -std=c++17 \
     "$SRC/render/chat_doc.cpp" "$SRC/render/imgcache.cpp" \
     "$SRC/render/cssbits.cpp" \
     "$SRC/render/net_probe.cpp" \
+    "$SRC/render/net_http.cpp" \
+    "$SRC/render/badges.cpp" \
+    "$SRC/render/emotes.cpp" \
     "$SRC/render/feedgfx.cpp" \
     "$SRC/render/feed.cpp" "$SRC/render/ipc.cpp" \
     "$SRC/render/chrome.cpp" \
@@ -121,6 +124,9 @@ x86_64-w64-mingw32-g++-posix -O1 -g -static -static-libgcc -static-libstdc++ \
     "$SRC/render/chat_doc.cpp" "$SRC/render/imgcache.cpp" \
     "$SRC/render/cssbits.cpp" \
     "$SRC/render/net_probe.cpp" \
+    "$SRC/render/net_http.cpp" \
+    "$SRC/render/badges.cpp" \
+    "$SRC/render/emotes.cpp" \
     "$SRC/render/feedgfx.cpp" \
     "$SRC/render/feed.cpp" "$SRC/render/ipc.cpp" \
     "$SRC/render/chrome.cpp" \
