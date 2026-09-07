@@ -4,6 +4,9 @@
 //   --selftest — намалювати зразки в PNG. Той самий вхід, що й у віконної
 //                версії, тож картинки можна класти поруч і звіряти.
 //   --run      — робота: вікно поверх усього й канал до Hominka.
+//   --preview  — те саме БЕЗ вікна: кадр іде пікселями назад у Hominka, і
+//                вона показує його в редакторі CSS. Так предпросмотр
+//                малюється тим самим рушієм, що й справжній чат.
 //
 // Кадру ВСЕРЕДИНІ гри (інжект) тут немає: overlay.dll — річ віконна, а на
 // Linux цей шлях вимагав би окремого шару Vulkan/GL. Чат показується поверх
@@ -28,7 +31,9 @@
 #include "feed.h"
 #include "fontstore.h"
 #include "imgcache.h"
+#include "chrome_bl.h"
 #include "ipc.h"
+#include "look.h"
 #include "x11_window.h"
 
 using json = nlohmann::json;
@@ -206,9 +211,8 @@ struct RunState {
     int want_w = 430, want_h = 560;
     int want_x = 80, want_y = 80;
     bool enabled = true;
-    bool locked = false;
     bool bye = false;
-    float opacity = 1.0f;
+    Look look;                        // прозорість, підкладка, кегль, замок
     std::string shot_path;
 };
 
@@ -253,9 +257,15 @@ bool apply(const IpcFrame& fr, Feed* feed, ImageCache* images, RunState* st) {
         if (j.contains("x") && j["x"].is_number()) st->want_x = j["x"].get<int>();
         if (j.contains("y") && j["y"].is_number()) st->want_y = j["y"].get<int>();
         if (j.contains("opacity") && j["opacity"].is_number())
-            st->opacity = j["opacity"].get<float>();
+            st->look.opacity = j["opacity"].get<float>();
+        if (j.contains("bg_alpha") && j["bg_alpha"].is_number())
+            st->look.bg_alpha = j["bg_alpha"].get<float>();
+        if (j.contains("frameless") && j["frameless"].is_boolean())
+            st->look.frameless = j["frameless"].get<bool>();
         if (j.contains("locked") && j["locked"].is_boolean())
-            st->locked = j["locked"].get<bool>();
+            st->look.locked = j["locked"].get<bool>();
+        if (j.contains("zoom") && j["zoom"].is_number())
+            st->look.zoom = j["zoom"].get<float>();
         return true;
     }
     if (t == "image") {
@@ -295,6 +305,9 @@ int run(pid_t parent_pid) {
     feed.set_width(st.want_w);
     win.show();
 
+    ChromeBL chrome;
+    chrome.set_fonts(&fonts);
+
     // Полотно кадру. Робимо один раз на розмір: перестворювати його щокадру —
     // це те саме викидання памʼяті, від якого ми й пішли.
     BLImage canvas;
@@ -315,6 +328,21 @@ int run(pid_t parent_pid) {
 
         const X11Event ev = win.poll_events();
         if (ev.closed) break;
+
+        // Миша: спершу рамка (вона знає про кнопки), потім вікно.
+        if (ev.motion) { chrome.on_motion(ev.mx, ev.my); changed = true; }
+        if (ev.leave) { chrome.on_leave(); changed = true; }
+        if (ev.press) {
+            chrome.on_button(ev.mx, ev.my, true);
+            switch (chrome.hit(ev.mx, ev.my, win.width(), win.height())) {
+            case ChromeBL::Hit::Strip: win.start_drag(ev.mx, ev.my); break;
+            case ChromeBL::Hit::Grip:  win.start_resize(ev.mx, ev.my); break;
+            default: break;            // кнопка чи порожнє місце — рамці видніше
+            }
+            changed = true;
+        }
+        if (ev.release) { chrome.on_button(ev.mx, ev.my, false); changed = true; }
+
         if (ev.moved) {
             // Людина перетягнула вікно — правда про геометрію лишається в
             // Python, тож просто розповідаємо, що сталося.
@@ -325,6 +353,9 @@ int run(pid_t parent_pid) {
             ipc.send(buf);
             st.want_x = win.x();
             st.want_y = win.y();
+            st.want_w = win.width();
+            st.want_h = win.height();
+            feed.set_width(st.want_w);
         }
 
         if (st.want_w != win.width() || st.want_h != win.height() ||
@@ -333,7 +364,9 @@ int run(pid_t parent_pid) {
             feed.set_width(st.want_w);
             changed = true;
         }
-        win.set_click_through(st.locked);
+        // Клік-крізь — лише коли рамка не чекає на мишу: інакше натискання на
+        // її ж кнопку провалилося б у гру.
+        win.set_click_through(st.look.locked && !chrome.wants_mouse());
 
         // Список бракуючих картинок забираємо, але НЕ шлемо: Hominka качає їх
         // сама, наперед (hominka/imagefetch.py), і слухача для такого запиту в
@@ -363,9 +396,32 @@ int run(pid_t parent_pid) {
             ctx.set_comp_op(BL_COMP_OP_SRC_COPY);
             ctx.fill_all(BLRgba32(0x00000000));
             ctx.set_comp_op(BL_COMP_OP_SRC_OVER);
-            if (st.opacity < 0.999f) ctx.set_global_alpha(st.opacity);
+            if (st.look.opacity < 0.999f) ctx.set_global_alpha(st.look.opacity);
+            // Порядок той самий, що й у віконної рамки: підкладка, чат, керування.
+            chrome.draw_backdrop(&ctx, w, h, st.look);
             feed.draw(&ctx, w, h, t);
+            const float was_zoom = st.look.zoom;
+            const ChromeEvents ce = chrome.draw_controls(&ctx, w, h, &st.look);
             ctx.end();
+
+            if (st.look.zoom != was_zoom) feed.set_zoom(st.look.zoom);
+            // Правда про налаштування лишається в Python: ми лише кажемо, що
+            // сталося, тими самими кадрами, що й віконна рамка.
+            if (ce.look_changed) {
+                char buf[160];
+                snprintf(buf, sizeof buf,
+                         "{\"t\":\"look\",\"opacity\":%.3f,\"bg_alpha\":%.3f,"
+                         "\"zoom\":%.3f}",
+                         st.look.opacity, st.look.bg_alpha, st.look.zoom);
+                ipc.send(buf);
+            }
+            if (ce.lock_changed) {
+                char buf[64];
+                snprintf(buf, sizeof buf, "{\"t\":\"lock\",\"on\":%s}",
+                         st.look.locked ? "true" : "false");
+                ipc.send(buf);
+            }
+            if (ce.open_settings) ipc.send("{\"t\":\"settings\"}");
 
             BLImageData data;
             if (canvas.get_data(&data) == BL_SUCCESS)
@@ -391,11 +447,102 @@ int run(pid_t parent_pid) {
     return 0;
 }
 
+// --- предпросмотр для редактора CSS ---------------------------------------
+//
+// Вікна тут немає навмисно: кадр малюється в память і їде назад каналом. Свій
+// канал («-preview»), тож із вікном оверлея вони не перетинаються ніде —
+// предпросмотр не може ані підмінити його, ані завалити.
+int preview(pid_t parent_pid) {
+    FontStore fonts;
+    if (!fonts.ok()) {
+        fprintf(stderr, "предпросмотр: FreeType недоступний\n");
+        return 3;
+    }
+    ImageCache images;
+    Feed feed(&fonts, &images);
+    images.set_evict_hook([&feed](const std::string& u) { feed.forget_image(u); });
+
+    IpcServer ipc;
+    if (!ipc.start((uint32_t)parent_pid, "-preview")) {
+        fprintf(stderr, "предпросмотр: канал не створився\n");
+        return 4;
+    }
+    fprintf(stderr, "предпросмотр: чекаю на %s\n", ipc.name().c_str());
+
+    RunState st;
+    st.want_w = 360;
+    st.want_h = 480;
+    feed.set_width(st.want_w);
+
+    BLImage canvas;
+    BLContext ctx;
+    int have_w = 0, have_h = 0;
+    int64_t last_gc = 0;
+    std::vector<IpcFrame> frames;
+
+    for (;;) {
+        if (!parent_alive(parent_pid)) break;
+
+        frames.clear();
+        ipc.poll(&frames);
+        bool changed = false;
+        for (const auto& fr : frames) changed |= apply(fr, &feed, &images, &st);
+        if (st.bye) break;
+        feed.take_missing();
+
+        const int64_t t = now_ms();
+        if (!changed && !feed.dirty(t)) { usleep(16000); continue; }
+
+        if (st.want_w != have_w || st.want_h != have_h) {
+            if (canvas.create(st.want_w, st.want_h, BL_FORMAT_PRGB32) != BL_SUCCESS) {
+                usleep(200000);
+                continue;
+            }
+            have_w = st.want_w;
+            have_h = st.want_h;
+            feed.set_width(have_w);
+        }
+        if (ctx.begin(canvas) != BL_SUCCESS) { usleep(50000); continue; }
+        ctx.set_comp_op(BL_COMP_OP_SRC_COPY);
+        ctx.fill_all(BLRgba32(0x00000000));
+        ctx.set_comp_op(BL_COMP_OP_SRC_OVER);
+        feed.draw(&ctx, have_w, have_h, t);
+        ctx.end();
+
+        if (t - last_gc > 1000) {
+            last_gc = t;
+            images.gc_animated(feed.animated_in_use());
+            feed.trim_anim();
+        }
+
+        BLImageData data;
+        if (canvas.get_data(&data) != BL_SUCCESS) { usleep(50000); continue; }
+        // Рядок у Blend2D може бути довшим за ширину*4 (вирівнювання), а той
+        // бік чекає щільні пікселі — тож при потребі складаємо рядок за рядком.
+        const size_t tight = (size_t)have_w * 4;
+        std::vector<uint8_t> px;
+        px.resize(tight * (size_t)have_h);
+        const uint8_t* src = (const uint8_t*)data.pixel_data;
+        for (int y = 0; y < have_h; ++y)
+            memcpy(px.data() + tight * (size_t)y, src + (size_t)y * data.stride, tight);
+
+        json j;
+        j["t"] = "frame";
+        j["w"] = have_w;
+        j["h"] = have_h;
+        ipc.send(j.dump(), px.data(), px.size());
+        usleep(16000);
+    }
+    ipc.stop();
+    return 0;
+}
+
 void usage() {
     fprintf(stderr,
             "hominka-render-linux — нативний рендер чату\n"
             "  --selftest <вхід.json> <вихід.png>   намалювати зразки\n"
             "  --run <pid Hominka>                  вікно оверлея й канал\n"
+            "  --preview <pid Hominka>              кадр у редактор CSS\n"
             "  --probe                              перевірити зв'язку\n"
             "  --verbose                            докладний журнал\n");
 }
@@ -414,6 +561,10 @@ int main(int argc, char** argv) {
     if (!strcmp(args[0], "--run")) {
         if (args.size() < 2) { usage(); return 1; }
         return run((pid_t)atoi(args[1]));
+    }
+    if (!strcmp(args[0], "--preview")) {
+        if (args.size() < 2) { usage(); return 1; }
+        return preview((pid_t)atoi(args[1]));
     }
     if (!strcmp(args[0], "--selftest")) {
         if (args.size() < 3) { usage(); return 1; }

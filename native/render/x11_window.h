@@ -28,11 +28,19 @@
 
 namespace hominka {
 
-// Що людина зробила з вікном — те саме, що ImGui-рамка під Windows повертає
-// через свої кнопки. Поки що зроблено найнеобхідніше: перетягування й розмір.
+// Що сталося з вікном за це коло.
+//
+// Миша віддається НАЗОВНІ, а не обробляється тут, і це навмисно: тільки рамка
+// знає, чи потрапило натискання в кнопку, у смужку чи в порожнє місце. Вікно
+// вміє лише те, чого рамка не вміє, — рухати й розтягувати себе.
 struct X11Event {
     bool moved = false;               // змінилася геометрія
     bool closed = false;              // вікно закрили
+    bool motion = false;              // курсор рухався
+    bool press = false;               // натиснули ліву
+    bool release = false;             // відпустили ліву
+    bool leave = false;               // курсор пішов з вікна
+    int mx = 0, my = 0;               // курсор у координатах вікна
 };
 
 class X11Window {
@@ -64,6 +72,14 @@ public:
     // Розбирає події X. Не блокує.
     X11Event poll_events();
 
+    // Почати тягнути вікно (за смужку) або розтягувати (за куточок). Далі рух
+    // веде саме вікно, доки не відпустять: X11 такого не робить, віконного
+    // менеджера в override-redirect вікна немає.
+    void start_drag(int mx, int my);
+    void start_resize(int mx, int my);
+    void end_drag();
+    bool dragging() const { return dragging_ || resizing_; }
+
 private:
     void apply_above();
 
@@ -80,9 +96,11 @@ private:
     bool click_through_ = false;
     bool have_shape_ = false;         // чи є розширення XShape
     Atom wm_delete_ = 0;
-    // Перетягування: X11 сам такого не робить, тож рахуємо самі.
+    // Перетягування й розтягування: X11 сам такого не робить, рахуємо самі.
     bool dragging_ = false;
+    bool resizing_ = false;
     int drag_dx_ = 0, drag_dy_ = 0;
+    int resize_w_ = 0, resize_h_ = 0;
     std::string title_;
 };
 

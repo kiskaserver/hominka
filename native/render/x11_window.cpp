@@ -38,7 +38,8 @@ bool X11Window::create(int x, int y, int w, int h, const char* title) {
     // оверлею — і саме тому перетягування доводиться робити самим.
     attr.override_redirect = True;
     attr.event_mask = ExposureMask | ButtonPressMask | ButtonReleaseMask |
-                      PointerMotionMask | StructureNotifyMask;
+                      PointerMotionMask | StructureNotifyMask |
+                      EnterWindowMask | LeaveWindowMask;
 
     x_ = x; y_ = y; w_ = w > 0 ? w : 1; h_ = h > 0 ? h : 1;
     win_ = XCreateWindow(dpy_, RootWindow(dpy_, screen_), x_, y_, w_, h_, 0,
@@ -167,6 +168,27 @@ void X11Window::present_blank() {
     XFlush(dpy_);
 }
 
+void X11Window::start_drag(int mx, int my) {
+    dragging_ = true;
+    resizing_ = false;
+    drag_dx_ = mx;
+    drag_dy_ = my;
+}
+
+void X11Window::start_resize(int mx, int my) {
+    resizing_ = true;
+    dragging_ = false;
+    drag_dx_ = mx;
+    drag_dy_ = my;
+    resize_w_ = w_;
+    resize_h_ = h_;
+}
+
+void X11Window::end_drag() {
+    dragging_ = false;
+    resizing_ = false;
+}
+
 X11Event X11Window::poll_events() {
     X11Event out;
     if (!ok()) return out;
@@ -177,23 +199,49 @@ X11Event X11Window::poll_events() {
         switch (e.type) {
         case ButtonPress:
             if (e.xbutton.button == Button1) {
-                dragging_ = true;
-                drag_dx_ = e.xbutton.x_root - x_;
-                drag_dy_ = e.xbutton.y_root - y_;
+                out.press = true;
+                out.mx = e.xbutton.x;
+                out.my = e.xbutton.y;
             }
             break;
         case ButtonRelease:
-            if (e.xbutton.button == Button1) dragging_ = false;
+            if (e.xbutton.button == Button1) {
+                out.release = true;
+                out.mx = e.xbutton.x;
+                out.my = e.xbutton.y;
+                end_drag();
+            }
+            break;
+        case EnterNotify:
+            out.motion = true;
+            out.mx = e.xcrossing.x;
+            out.my = e.xcrossing.y;
+            break;
+        case LeaveNotify:
+            out.leave = true;
             break;
         case MotionNotify:
+            out.motion = true;
+            out.mx = e.xmotion.x;
+            out.my = e.xmotion.y;
             if (dragging_) {
-                // Перетягування рахуємо самі: override-redirect означає, що
-                // віконний менеджер нам у цьому не допоможе.
+                // Тягнемо за смужку: курсор має лишатися в тій самій точці
+                // вікна, інакше воно «стрибне» під нього першим же рухом.
                 const int nx = e.xmotion.x_root - drag_dx_;
                 const int ny = e.xmotion.y_root - drag_dy_;
                 if (nx != x_ || ny != y_) {
-                    x_ = nx; y_ = ny;
+                    x_ = nx;
+                    y_ = ny;
                     XMoveWindow(dpy_, win_, x_, y_);
+                    out.moved = true;
+                }
+            } else if (resizing_) {
+                const int nw = resize_w_ + (e.xmotion.x - drag_dx_);
+                const int nh = resize_h_ + (e.xmotion.y - drag_dy_);
+                const int cw = nw < 160 ? 160 : nw;
+                const int ch = nh < 120 ? 120 : nh;
+                if (cw != w_ || ch != h_) {
+                    set_geometry(x_, y_, cw, ch);
                     out.moved = true;
                 }
             }

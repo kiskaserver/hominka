@@ -34,6 +34,7 @@ g++ $COMMON $INC \
     "$SRC/render/ipc.cpp" \
     "$SRC/render/ipc_unix.cpp" \
     "$SRC/render/x11_window.cpp" \
+    "$SRC/render/chrome_bl.cpp" \
     -o "$OUT/hominka-render-linux" \
     $LIBS
 

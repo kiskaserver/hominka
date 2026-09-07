@@ -185,9 +185,13 @@ def draw_check():
     return 0
 
 
-def count_colour(png, want):
-    """Скільки пікселів заданого кольору у PNG. Читаємо самі: Pillow в образі
-    немає, а PNG тут наш власний — без інтерлейсу й без палітри."""
+def decode_png(png):
+    """PNG -> (ширина, висота, список рядків RGBA).
+
+    Читаємо самі: Pillow у перевірочному образі немає, а PNG тут наш власний —
+    без інтерлейсу й без палітри, тож досить розпакувати IDAT і зняти фільтри.
+    Без зняття фільтрів «кольори» були б різницями з попереднім рядком.
+    """
     import struct
     import zlib
     data = open(png, "rb").read()
@@ -203,36 +207,40 @@ def count_colour(png, want):
         pos += 12 + ln
     px = zlib.decompress(raw)
     stride = w * 4
-    found = 0
+    rows = []
     prev = bytearray(stride)
     off = 0
     for _ in range(h):
         ft = px[off]
         line = bytearray(px[off + 1:off + 1 + stride])
         off += 1 + stride
-        # Розпаковуємо фільтри PNG: без цього «кольори» будуть різницями.
         for i in range(stride):
-            a = line[i - 4] if i >= 4 else 0
-            b = prev[i]
-            c = prev[i - 4] if i >= 4 else 0
+            a_ = line[i - 4] if i >= 4 else 0
+            b_ = prev[i]
+            c_ = prev[i - 4] if i >= 4 else 0
             if ft == 1:
-                line[i] = (line[i] + a) & 0xFF
+                line[i] = (line[i] + a_) & 0xFF
             elif ft == 2:
-                line[i] = (line[i] + b) & 0xFF
+                line[i] = (line[i] + b_) & 0xFF
             elif ft == 3:
-                line[i] = (line[i] + (a + b) // 2) & 0xFF
+                line[i] = (line[i] + (a_ + b_) // 2) & 0xFF
             elif ft == 4:
-                p = a + b - c
-                pa, pb, pc = abs(p - a), abs(p - b), abs(p - c)
-                pr = a if (pa <= pb and pa <= pc) else (b if pb <= pc else c)
+                p = a_ + b_ - c_
+                pa, pb, pc = abs(p - a_), abs(p - b_), abs(p - c_)
+                pr = a_ if (pa <= pb and pa <= pc) else (b_ if pb <= pc else c_)
                 line[i] = (line[i] + pr) & 0xFF
-        for x in range(0, stride, 4):
+        rows.append(line)
+        prev = line
+    return w, h, rows
+
+
+def count_colour(png, want):
+    """Скільки пікселів заданого кольору у PNG."""
+    w, h, rows = decode_png(png)
+    found = 0
+    for line in rows:
+        for x in range(0, w * 4, 4):
             if (abs(line[x] - want[0]) <= 12 and abs(line[x + 1] - want[1]) <= 12
                     and abs(line[x + 2] - want[2]) <= 12):
                 found += 1
-        prev = line
     return found
-
-
-if __name__ == "__main__":
-    sys.exit(main())
