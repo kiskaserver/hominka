@@ -216,7 +216,7 @@ def stamp_version(version: str):
 
 
 def pack(version: str, exe_path: str = "", suffix: str = "win64",
-         native_dir: str = "") -> str:
+         native_dir: str = "", with_render: bool = True) -> str:
     """Кладе один файл програми в zip; за потреби — і нативні файли поруч.
 
     Раніше пакували цілу теку і мусили пильнувати, щоб у неї не потрапили
@@ -246,6 +246,11 @@ def pack(version: str, exe_path: str = "", suffix: str = "win64",
                          # (hominka-render.debug.exe) тут навмисно немає: вона
                          # важить 11 МБ і потрібна лише для розбору збоїв.
                          "hominka-render-x64.exe"):
+                # У нативному випуску рендер — це сама програма (Hominka.exe),
+                # і друга його копія в native/ була б тими самими шістьма
+                # мегабайтами вдруге.
+                if name == "hominka-render-x64.exe" and not with_render:
+                    continue
                 p = os.path.join(native_dir, name)
                 if os.path.isfile(p):
                     z.write(p, "native/" + name)
@@ -315,6 +320,10 @@ def main():
     ap.add_argument("--no-warning", action="store_true",
                     help="випустити без попередження, навіть якщо канал має стандартне")
     ap.add_argument("--no-build", action="store_true", help="взяти вже зібране в dist/")
+    ap.add_argument("--native", action="store_true",
+                    help="випуск БЕЗ Python: програма — це сам нативний рендер "
+                         "(hominka-render-x64.exe під іменем Hominka.exe). "
+                         "Архів ~6 МБ замість ~200; PyInstaller не запускається")
     ap.add_argument("--no-native", action="store_true",
                     help="не вкладати інжектор навіть у тестовий канал")
     ap.add_argument("--linux-zip", default="",
@@ -367,16 +376,26 @@ def main():
         linux_zip = args.linux_zip
         if not linux_zip and not args.no_linux:
             linux_zip = build_linux(args.version)
-        if not args.no_build:
+        # Нативний випуск: PyInstaller не потрібен зовсім — програмою стає сам
+        # рендер. Заставка теж ні до чого: він відкривається миттєво, і
+        # показувати «зачекайте» нема за що.
+        if not args.no_build and not args.native:
             build_splash(args.version)   # версія на заставці (канал — у рядку під час запуску)
             build_exe()
         # Інжектор («чат у грі») тепер їде в УСІ канали — це повноцінна
         # можливість, вимкнена за замовчуванням і з попередженням. Збираємо його
         # тим самим контейнером; --no-native дає випуск без нього.
         native_dir = ""
-        if not args.no_native:
+        if not args.no_native or args.native:
             native_dir = build_native()
-        win_zip = pack(args.version, EXE, "win64", native_dir)
+        exe_path = EXE
+        if args.native:
+            # Кладемо рендер під іменем Hominka.exe: саме його шукає підмінник
+            # при оновленні, і саме його бачить людина в теці програми.
+            exe_path = os.path.join(native_dir, "Hominka.exe")
+            shutil.copy2(os.path.join(native_dir, "hominka-render-x64.exe"), exe_path)
+        win_zip = pack(args.version, exe_path, "win64", native_dir,
+                       with_render=not args.native)
         uploads.append(win_zip)
         files.append(entry(args.version, win_zip, "win64"))
         if linux_zip:

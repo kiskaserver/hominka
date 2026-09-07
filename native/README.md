@@ -205,6 +205,21 @@ native/dist/hominka-render-x64.exe --verifyrelease маніфест.json   # ч�
 python native/render/release_smoke.py    # 11 підмін справжнього маніфесту
 ```
 
+### Випуск без Python
+
+`release.py --native` кладе в архів САМ рендер під іменем `Hominka.exe`, а
+PyInstaller не запускає зовсім. Архів виходить ~3 МБ замість ~200:
+
+```
+Hominka.exe                       5.8 МБ
+native/injector-{x64,x86}.exe
+native/overlay-{x64,x86}.dll
+native/hominka-vklayer-{x64,x86}.dll
+```
+
+Оновлення такого випуску працює так само: підмінник шукає в архіві саме
+`Hominka.exe`, і це він і є.
+
 ### Робочий режим
 
 `--run <pid Hominka>` піднімає вікно оверлея й чекає на повідомлення каналом
