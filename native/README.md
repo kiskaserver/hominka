@@ -42,7 +42,7 @@ DLL читає буфер зі спільної памʼяті, заливає �
 браузері за межами екрана, знімав із нього картинку (`QWebEngineView.grab()`),
 рахував CRC по всьому кадру, щоб зрозуміти, чи він змінився, і перекладав байти
 в спільну память. Тепер кадр кладе туди сам нативний рендер
-(`render/frame_writer.h`): чат уже намальовано на відеокарті, лишається забрати
+(`render/platform/frame_writer.h`): чат уже намальовано на відеокарті, лишається забрати
 його звідти. CRC не потрібен — ми й так знаємо, чи малювали. Читання з
 відеокарти робиться ЛИШЕ поки інжект увімкнено.
 
@@ -74,46 +74,47 @@ litehtml замість Chromium узято заради ТЕМ: сторінк�
 Малює Direct2D + DirectWrite — вони є в кожній Windows, добре кладуть кирилицю
 з емодзі й пишуть прямо в ту саму текстуру, яку показує DirectComposition.
 
-- `page_assets.h` — дзеркало `hominka/feed/page.py`: базові стилі, значки
-  площадок, текстові плашки. Класи й data-атрибути — публічна домовленість,
-  розійдуться тут — зламаються чужі теми.
-- `chat_doc.{h,cpp}` — складання розмітки ОДНОГО повідомлення (порт `PARTS`,
-  `body()`, правил емоутів і підсвітки «@ніка»).
-- `container_d2d.{h,cpp}` — `litehtml::document_container` на Direct2D.
-- `imgcache.{h,cpp}` — картинки: WIC (PNG/JPEG/GIF, зі складанням кадрів
-  анімації), libwebp (емоути 7TV/BTTV, зокрема анімовані),
-  nanosvg (значки). Мережі тут немає — байти шле Python.
-- `feed.{h,cpp}` — стрічка: кеш намальованих рядків, складання кадру, поява.
-- `chrome.{h,cpp}` — рамка вікна на Dear ImGui: смужка перетягування, замок,
-  A−/A+, повзунки прозорості, шестерня, куточок для розтягування.
-- `ipc.{h,cpp}` — канал до Hominka (кадри «довжина + JSON + вкладення»).
-- `../common/dcomp_window.h` — вікно D3D11 + DirectComposition + Direct2D,
-  спільне зі старим `dcomp_overlay.exe`.
-- `frame_writer.h` — кадр у спільну память для overlay.dll (лише коли інжект
-  увімкнено).
-- `net_http.{h,cpp}`, `src_twitch/src_kick/src_youtube.{h,cpp}`, `chatnet.{h,cpp}`,
-  `emotes.{h,cpp}`, `badges.{h,cpp}`, `imgfetch.{h,cpp}` — мережа: чат трьох
-  площадок, сторонні емоути, значки й качання картинок. Python для цього більше
-  не потрібен.
-- `config.{h,cpp}` — той самий `config.json`, що й у Python: те саме місце, ті
-  самі ключі, чужі ключі не переписуються.
-- `gui_win.{h,cpp}` — звичайне вікно з ImGui (панель налаштувань і редактор
-  теми). Окреме, бо вікно чату створене з `WS_EX_NOACTIVATE` і клавіатури не
-  отримує взагалі.
-- `settings_ui.{h,cpp}` — панель налаштувань; `cssedit_ui.{h,cpp}` — редактор
-  теми; `csslint.{h,cpp}` — помилки CSS і «рушій цього не вміє»;
-  `cssref.cpp` — довідник класів, згенерований `make_cssref.py` із
-  `hominka/cssui/catalog.py`.
-- `main.cpp` — режими: `--app` (програма сама собі), `--selftest`, `--run`,
-  `--preview`, `--nettest`, `--csslint`, `--probe`.
+Тека `render/` розкладена так, щоб залежності йшли в один бік: `core` не знає
+ні про мережу, ні про систему; `ui` спирається на `core`; `platform` — листок.
+Включення пишуться від кореня (`#include "net/emotes.h"`), тож у кожному рядку
+видно, звідки річ.
+
+- **`core/`** — модель повідомлення й стрічка.
+  `page_assets.h` — дзеркало `hominka/feed/page.py`: базові стилі, значки
+  площадок, текстові плашки; класи й data-атрибути тут публічна домовленість,
+  розійдуться — зламаються чужі теми. `chat_doc` складає розмітку ОДНОГО
+  повідомлення, `feed` тримає кеш намальованих рядків і складає кадр,
+  `config` — той самий `config.json`, що й у Python (те саме місце, ті самі
+  ключі, чужі ключі не переписуються).
+- **`gfx/`** — растеризація. `container_d2d` і `container_bl` —
+  `litehtml::document_container` на Direct2D і на Blend2D; `imgcache` —
+  картинки через WIC, libwebp і nanosvg; `cssbits` — розбір того, чого
+  litehtml не вміє (тіні, прозорість, перетворення); `fontstore` — шрифти
+  через FreeType і fontconfig.
+- **`net/`** — чат чотирьох джерел (`src_twitch`, `src_kick`, `src_youtube`,
+  `src_site`), сторонні емоути, значки, качання картинок і `chatnet`, що
+  зводить усе це в одну чергу.
+- **`ui/`** — усе, що людина бачить: рамка вікна (`chrome`, `chrome_bl`),
+  панель налаштувань, редактор теми з перевіркою CSS і довідником, шрифт
+  інтерфейсу.
+- **`platform/`** — вікна й система: канал до Hominka (`ipc`), вікно X11,
+  чужі вікна й інжектор (`gamewin`), реєстрація шару Vulkan, кадр у спільну
+  память для `overlay.dll` (`frame_writer.h`).
+- **`update/`** — маніфест випуску з перевіркою підпису і сам оновлювач.
+- **`app/`** — точки входу й режими: `main.cpp` тільки розбирає аргументи,
+  `overlay.cpp` — цикл, який і є програмою, далі `preview`, `selftest`,
+  `diag`, `nettest`, `ipc_mode` (шлях, яким керує Python) і дрібниці
+  (`runtime`, `offscreen`).
+- **`tools/`** — перевірки й генератори на Python. Знімки вони кладуть у
+  тимчасову теку, а не поруч із кодом.
 
 Перевірка (саме вона й ділить «працює» від «схоже»):
 
 ```powershell
-python native/render/make_samples.py native/render/samples.json
-native/dist/hominka-render-x64.exe --selftest native/render/samples.json native/render/out.png
-python native/render/reference_shot.py native/render/ref.png   # той самий чат у QWebEngine
-python native/render/compare.py native/render/ref.png native/render/out.png native/render/side.png
+python native/render/tools/make_samples.py native/render/tools/samples.json
+native/dist/hominka-render-x64.exe --selftest native/render/tools/samples.json %TEMP%\out.png
+python native/render/tools/reference_shot.py %TEMP%\ref.png   # той самий чат у QWebEngine
+python native/render/tools/compare.py %TEMP%\ref.png %TEMP%\out.png %TEMP%\side.png
 ```
 
 `side.png` кладе браузер і нативний рендер поруч. Станом на зараз розбіжність —
@@ -192,7 +193,7 @@ native/dist/hominka-render-x64.exe --app
 
 ```powershell
 native/dist/hominka-render-x64.exe --csslint тема.css
-python native/render/csslint_smoke.py
+python native/render/tools/csslint_smoke.py
 ```
 
 Оновлення перевіряються проти СПРАВЖНЬОГО сервера: підпис — це те єдине, що
@@ -202,7 +203,7 @@ python native/render/csslint_smoke.py
 native/dist/hominka-render-x64.exe --updatecheck stable            # що там є
 native/dist/hominka-render-x64.exe --updatecheck stable 2.0.0 --download
 native/dist/hominka-render-x64.exe --verifyrelease маніфест.json   # чому не сходиться
-python native/render/release_smoke.py    # 11 підмін справжнього маніфесту
+python native/render/tools/release_smoke.py    # 11 підмін справжнього маніфесту
 ```
 
 ### Випуск без Python
@@ -306,11 +307,11 @@ WebP (7TV, FFZ) простіший: `WebPAnimDecoder` з libwebp сам відд
 нерухомій картинці, бо `Feed::dirty()` рахував і рядки, що виїхали за край.
 
 ```powershell
-python native/render/ipc_smoke.py     # канал і рендер окремо  → live.png
-python native/render/app_smoke.py     # уся програма цілком    → app.png
-python native/render/preview_smoke.py # перегляд у редакторі   → preview.png
-python native/render/css_smoke.py     # розбір CSS чужих тем
-python native/render/anim_smoke.py    # анімовані емоути й межа кеша
+python native/render/tools/ipc_smoke.py     # канал і рендер окремо  → live.png
+python native/render/tools/app_smoke.py     # уся програма цілком    → app.png
+python native/render/tools/preview_smoke.py # перегляд у редакторі   → preview.png
+python native/render/tools/css_smoke.py     # розбір CSS чужих тем
+python native/render/tools/anim_smoke.py    # анімовані емоути й межа кеша
 
 Linux-перевірки йдуть у контейнері (див. розділ нижче): `linux_smoke.py`
 (канал, вікно, малювання), `pyclient_smoke.py` (справжній клієнт Python),
@@ -356,10 +357,10 @@ Chromium при цьому не запускається взагалі: `QWebEn
 Перевірка інжект-шляху на іграх-макетах (кожна перевіряє свій API):
 
 ```powershell
-python native/render/inject_smoke.py dx11
-python native/render/inject_smoke.py dx12
-python native/render/inject_smoke.py gl
-python native/render/inject_smoke.py vk
+python native/render/tools/inject_smoke.py dx11
+python native/render/tools/inject_smoke.py dx12
+python native/render/tools/inject_smoke.py gl
+python native/render/tools/inject_smoke.py vk
 ```
 
 У журналі має бути рядок виду
@@ -547,7 +548,7 @@ wintypes` поза Windows кидає помилку на самому імпо�
 ```powershell
 docker build -f native\Dockerfile.linux -t hominka-lin .   # з КОРЕНЯ chat-overlay
 docker run --rm hominka-lin sh -c "Xvfb :99 -screen 0 1280x720x24 & sleep 2; \
-    DISPLAY=:99 python3 /src/render/pyclient_smoke.py"
+    DISPLAY=:99 python3 /src/render/tools/pyclient_smoke.py"
 ```
 
 Зворотний канал перевіряється перетягуванням: `xdotool` підробляє мишу, і ми
@@ -622,7 +623,7 @@ AppImage — див. `linux/README.md`. У ньому лежить і сам р�
 
 ```powershell
 docker run --rm hominka-lin sh -c "Xvfb :99 -screen 0 1280x720x24 & sleep 2; \
-    DISPLAY=:99 python3 /src/render/linux_smoke.py"
+    DISPLAY=:99 python3 /src/render/tools/linux_smoke.py"
 ```
 
 Вона піднімає рендер, під'єднується до сокета, шле повідомлення, просить

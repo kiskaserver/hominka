@@ -95,82 +95,75 @@ x86_64-w64-mingw32-g++ -O2 -s -static -municode -mwindows $DLL_INC \
 # Чужі заголовки підключаємо через -isystem, а не -I: тоді GCC вважає їх
 # системними й не сипле попередженнями з чужого коду (nanosvg порівнює size_t
 # з long — це не наша справа). Наші -Wall -Wextra від цього не слабшають.
+#
+# Свої включення йдуть від кореня native/ і native/render/ — тому в кожному
+# рядку «#include» видно, звідки річ: core/, gfx/, net/, ui/, platform/,
+# update/, app/.
+RENDER_INC="-isystem $TP/include -I $SRC -I $SRC/render"
+
+# Джерела — тим самим поділом, що й теки. Один список на дві збірки: доки він
+# був переписаний двічі, звичайна збірка й відладочна встигали розійтися.
+RENDER_SRC="
+    $SRC/render/app/main.cpp
+    $SRC/render/app/diag.cpp
+    $SRC/render/app/ipc_mode.cpp
+    $SRC/render/app/nettest.cpp
+    $SRC/render/app/overlay.cpp
+    $SRC/render/app/offscreen.cpp
+    $SRC/render/app/preview.cpp
+    $SRC/render/app/runtime.cpp
+    $SRC/render/app/selftest.cpp
+
+    $SRC/render/core/chat_doc.cpp
+    $SRC/render/core/config.cpp
+    $SRC/render/core/feed.cpp
+    $SRC/render/core/feedgfx.cpp
+
+    $SRC/render/gfx/container_d2d.cpp
+    $SRC/render/gfx/cssbits.cpp
+    $SRC/render/gfx/imgcache.cpp
+
+    $SRC/render/net/badges.cpp
+    $SRC/render/net/chatnet.cpp
+    $SRC/render/net/emotes.cpp
+    $SRC/render/net/imgfetch.cpp
+    $SRC/render/net/net_http.cpp
+    $SRC/render/net/src_kick.cpp
+    $SRC/render/net/src_site.cpp
+    $SRC/render/net/src_twitch.cpp
+    $SRC/render/net/src_youtube.cpp
+
+    $SRC/render/platform/gamewin.cpp
+    $SRC/render/platform/ipc.cpp
+    $SRC/render/platform/vklayer.cpp
+
+    $SRC/render/ui/chrome.cpp
+    $SRC/render/ui/cssedit_ui.cpp
+    $SRC/render/ui/csslint.cpp
+    $SRC/render/ui/cssref.cpp
+    $SRC/render/ui/gui_win.cpp
+    $SRC/render/ui/samples.cpp
+    $SRC/render/ui/settings_ui.cpp
+    $SRC/render/ui/uifont.cpp
+
+    $SRC/render/update/release.cpp
+    $SRC/render/update/updater.cpp
+"
+
+RENDER_LIBS="-L$TP/lib -limgui -llitehtml -lgumbo -lwebpdemux -lwebp -lsharpyuv
+    -lixwebsocket -lmbedtls -lmbedx509 -lmbedcrypto -lmonocypher
+    -ld2d1 -ldwrite -lwindowscodecs -ld3d11 -ldxgi -ldcomp
+    -ld3dcompiler_47 -lgdi32 -ldwmapi -lole32 -luuid -lws2_32 -lcrypt32
+    -lshlwapi -lbcrypt -lwinhttp"
+
 echo ">> x64: hominka-render.exe (нативний рендер чату)"
-x86_64-w64-mingw32-g++-posix $COMMON -municode -std=c++17 \
-    -isystem "$TP/include" \
-    "$SRC/render/main.cpp" "$SRC/render/container_d2d.cpp" \
-    "$SRC/render/chat_doc.cpp" "$SRC/render/imgcache.cpp" \
-    "$SRC/render/cssbits.cpp" \
-    "$SRC/render/src_twitch.cpp" \
-    "$SRC/render/chatnet.cpp" \
-    "$SRC/render/config.cpp" \
-    "$SRC/render/imgfetch.cpp" \
-    "$SRC/render/uifont.cpp" \
-    "$SRC/render/gui_win.cpp" \
-    "$SRC/render/settings_ui.cpp" \
-    "$SRC/render/cssedit_ui.cpp" \
-    "$SRC/render/csslint.cpp" \
-    "$SRC/render/cssref.cpp" \
-    "$SRC/render/samples.cpp" \
-    "$SRC/render/release.cpp" \
-    "$SRC/render/updater.cpp" \
-    "$SRC/render/gamewin.cpp" \
-    "$SRC/render/vklayer.cpp" \
-    "$SRC/render/src_youtube.cpp" \
-    "$SRC/render/src_site.cpp" \
-    "$SRC/render/badges.cpp" \
-    "$SRC/render/nettest.cpp" \
-    "$SRC/render/src_kick.cpp" \
-    "$SRC/render/net_http.cpp" \
-    "$SRC/render/emotes.cpp" \
-    "$SRC/render/feedgfx.cpp" \
-    "$SRC/render/feed.cpp" "$SRC/render/ipc.cpp" \
-    "$SRC/render/chrome.cpp" \
-    -o "$OUT/hominka-render-x64.exe" \
-    -L"$TP/lib" -limgui -llitehtml -lgumbo -lwebpdemux -lwebp -lsharpyuv \
-    -lixwebsocket -lmbedtls -lmbedx509 -lmbedcrypto -lmonocypher \
-    -ld2d1 -ldwrite -lwindowscodecs -ld3d11 -ldxgi -ldcomp \
-    -ld3dcompiler_47 -lgdi32 -ldwmapi -lole32 -luuid -lws2_32 -lcrypt32 -lshlwapi -lbcrypt -lwinhttp
+x86_64-w64-mingw32-g++-posix $COMMON -municode -std=c++17 $RENDER_INC     $RENDER_SRC -o "$OUT/hominka-render-x64.exe" $RENDER_LIBS
 
 # Та сама програма, але з символами й без -s: коли рендер падає, VEH друкує
 # зсув від початку модуля, а addr2line по ЦЬОМУ файлу перетворює його на
 # «файл:рядок». У випуск не входить — лише поруч у dist для розбору.
 echo ">> x64: hominka-render.debug.exe (символи для addr2line)"
-x86_64-w64-mingw32-g++-posix -O1 -g -static -static-libgcc -static-libstdc++ \
-    -municode -std=c++17 -isystem "$TP/include" \
-    "$SRC/render/main.cpp" "$SRC/render/container_d2d.cpp" \
-    "$SRC/render/chat_doc.cpp" "$SRC/render/imgcache.cpp" \
-    "$SRC/render/cssbits.cpp" \
-    "$SRC/render/src_twitch.cpp" \
-    "$SRC/render/chatnet.cpp" \
-    "$SRC/render/config.cpp" \
-    "$SRC/render/imgfetch.cpp" \
-    "$SRC/render/uifont.cpp" \
-    "$SRC/render/gui_win.cpp" \
-    "$SRC/render/settings_ui.cpp" \
-    "$SRC/render/cssedit_ui.cpp" \
-    "$SRC/render/csslint.cpp" \
-    "$SRC/render/cssref.cpp" \
-    "$SRC/render/samples.cpp" \
-    "$SRC/render/release.cpp" \
-    "$SRC/render/updater.cpp" \
-    "$SRC/render/gamewin.cpp" \
-    "$SRC/render/vklayer.cpp" \
-    "$SRC/render/src_youtube.cpp" \
-    "$SRC/render/src_site.cpp" \
-    "$SRC/render/badges.cpp" \
-    "$SRC/render/nettest.cpp" \
-    "$SRC/render/src_kick.cpp" \
-    "$SRC/render/net_http.cpp" \
-    "$SRC/render/emotes.cpp" \
-    "$SRC/render/feedgfx.cpp" \
-    "$SRC/render/feed.cpp" "$SRC/render/ipc.cpp" \
-    "$SRC/render/chrome.cpp" \
-    -o "$OUT/hominka-render.debug.exe" \
-    -L"$TP/lib" -limgui -llitehtml -lgumbo -lwebpdemux -lwebp -lsharpyuv \
-    -lixwebsocket -lmbedtls -lmbedx509 -lmbedcrypto -lmonocypher \
-    -ld2d1 -ldwrite -lwindowscodecs -ld3d11 -ldxgi -ldcomp \
-    -ld3dcompiler_47 -lgdi32 -ldwmapi -lole32 -luuid -lws2_32 -lcrypt32 -lshlwapi -lbcrypt -lwinhttp
+x86_64-w64-mingw32-g++-posix -O1 -g -static -static-libgcc -static-libstdc++     -municode -std=c++17 $RENDER_INC     $RENDER_SRC -o "$OUT/hominka-render.debug.exe" $RENDER_LIBS
 
 echo ""
 echo "Готово. У $OUT:"
