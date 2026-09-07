@@ -195,6 +195,16 @@ native/dist/hominka-render-x64.exe --csslint тема.css
 python native/render/csslint_smoke.py
 ```
 
+Оновлення перевіряються проти СПРАВЖНЬОГО сервера: підпис — це те єдине, що
+стоїть між людиною і чужим кодом на її машині.
+
+```powershell
+native/dist/hominka-render-x64.exe --updatecheck stable            # що там є
+native/dist/hominka-render-x64.exe --updatecheck stable 2.0.0 --download
+native/dist/hominka-render-x64.exe --verifyrelease маніфест.json   # чому не сходиться
+python native/render/release_smoke.py    # 11 підмін справжнього маніфесту
+```
+
 ### Робочий режим
 
 `--run <pid Hominka>` піднімає вікно оверлея й чекає на повідомлення каналом

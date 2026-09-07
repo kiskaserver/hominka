@@ -175,7 +175,7 @@ void settings_style() {
 }
 
 SettingsEvents draw_settings(SettingsState* st, Config* cfg, const std::string& status,
-                             int w, int h) {
+                             const UpdateView& upd, int w, int h) {
     SettingsEvents ev;
     if (!st->synced) st->sync(*cfg);
 
@@ -327,6 +327,65 @@ SettingsEvents draw_settings(SettingsState* st, Config* cfg, const std::string& 
         ImGui::Dummy(ImVec2(0, 6));
         if (ghost("Свій CSS для чату…", ImGui::GetContentRegionAvail().x - CARD_PAD))
             ev.css_editor = true;
+        card.end();
+    }
+
+    // Оновлення ---------------------------------------------------------------
+    if (upd.supported) {
+        Card card;
+        card.begin("ОНОВЛЕННЯ");
+
+        field_label("Канал");
+        static const char* kIds[] = {"stable", "beta", "dev"};
+        static const char* kNames[] = {"Стабільна", "Бета", "Тестова"};
+        static const char* kHints[] = {
+            "Перевірені випуски. Рекомендовано.",
+            "Свіжі можливості до того, як вони потраплять у стабільну.",
+            "Збірки одразу після змін. Можуть ламатися.",
+        };
+        for (int i = 0; i < 3; ++i) {
+            if (i) ImGui::SameLine(0, 4);
+            const bool on = cfg->channel == kIds[i];
+            ImGui::PushStyleColor(ImGuiCol_Button, on ? col(ACCENT) : ImVec4(1, 1, 1, 0.06f));
+            ImGui::PushStyleColor(ImGuiCol_ButtonHovered,
+                                  on ? col(ACCENT) : ImVec4(1, 1, 1, 0.16f));
+            ImGui::PushStyleColor(ImGuiCol_ButtonActive, col(ACCENT));
+            if (ImGui::Button(kNames[i])) {
+                cfg->channel = kIds[i];
+                ev.changed = true;
+                ev.check_update = true;   // канал інший — і випуск може бути інший
+            }
+            ImGui::PopStyleColor(3);
+            if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", kHints[i]);
+        }
+
+        ImGui::Dummy(ImVec2(0, 4));
+        if (toggle("Перевіряти автоматично", &cfg->auto_update)) ev.changed = true;
+
+        ImGui::Dummy(ImVec2(0, 4));
+        if (upd.percent >= 0) {
+            ImGui::ProgressBar(upd.percent / 100.0f,
+                               ImVec2(ImGui::GetContentRegionAvail().x - CARD_PAD, 6.0f), "");
+            ImGui::Dummy(ImVec2(0, 2));
+        }
+        if (upd.mandatory) {
+            ImGui::PushStyleColor(ImGuiCol_Text, col(IM_COL32(252, 211, 77, 255)));
+            ImGui::TextWrapped("Це виправлення важливе — краще поставити.");
+            ImGui::PopStyleColor();
+        }
+        dim_text(upd.status.c_str());
+
+        ImGui::Dummy(ImVec2(0, 4));
+        const float bw = (ImGui::GetContentRegionAvail().x - CARD_PAD - 6.0f) / 2.0f;
+        if (upd.can_check && ghost("Перевірити", bw)) ev.check_update = true;
+        if (upd.can_download) {
+            if (upd.can_check) ImGui::SameLine(0, 6);
+            if (ghost("Завантажити", bw)) ev.start_download = true;
+        }
+        if (upd.can_install) {
+            if (upd.can_check) ImGui::SameLine(0, 6);
+            if (ghost("Встановити й перезапустити", bw)) ev.do_install = true;
+        }
         card.end();
     }
 

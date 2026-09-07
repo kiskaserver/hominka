@@ -43,6 +43,7 @@ ENV JSON_REF=v3.11.3
 # TLS і WebSocket: чат ходить лише по захищених з'єднаннях.
 ENV MBEDTLS_REF=mbedtls-3.6.7
 ENV IXWS_REF=v12.0.1
+ENV MONOCYPHER_REF=4.0.3
 ENV TP=/tp
 COPY thirdparty.sh /tmp/thirdparty.sh
 COPY patches /tmp/patches

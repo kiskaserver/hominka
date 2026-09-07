@@ -54,6 +54,8 @@
 #include "page_assets.h"
 #include "samples.h"
 #include "settings_ui.h"
+#include "updater.h"
+#include "version.h"
 
 using json = nlohmann::json;
 
@@ -478,6 +480,49 @@ bool pump_chat(ChatNet* net, Feed* feed, ImageCache* images, ImageFetch* fetch, 
 // Докачані картинки → кеш. Розбираємо саме тут, у потоці малювання: кеш
 // спільний із розкладкою, і робити його потокобезпечним заради кількох
 // емоутів на секунду означало б платити блокуванням у найгарячішому місці.
+// Стан оновлювача → те, що бачить людина. Складаємо тут, бо панель про
+// Windows нічого не знає й знати не повинна.
+UpdateView update_view(const Updater& up) {
+    UpdateView v;
+    v.supported = true;
+    const Release rel = up.release();
+    switch (up.state()) {
+    case Updater::State::Idle:
+        v.status = "Версія " HOMINKA_VERSION ".";
+        v.can_check = true;
+        break;
+    case Updater::State::Checking:
+        v.status = "Питаю сервер оновлень…";
+        break;
+    case Updater::State::UpToDate:
+        v.status = "У вас найсвіжіша версія (" HOMINKA_VERSION ").";
+        v.can_check = true;
+        break;
+    case Updater::State::Available:
+        v.status = channel_label(rel.channel) + " " + rel.version + " — " +
+                   kind_label(rel.kind) +
+                   (rel.notes.empty() ? std::string() : ".\n" + rel.notes);
+        v.can_download = true;
+        v.can_check = true;
+        v.mandatory = rel.mandatory;
+        break;
+    case Updater::State::Downloading:
+        v.status = "Завантажую " + rel.version + "…";
+        v.percent = up.percent();
+        break;
+    case Updater::State::Ready:
+        v.status = "Версію " + rel.version + " завантажено й перевірено. "
+                   "Програма закриється й відкриється вже оновленою.";
+        v.can_install = true;
+        break;
+    case Updater::State::Failed:
+        v.status = "Не вийшло: " + up.error();
+        v.can_check = true;
+        break;
+    }
+    return v;
+}
+
 bool pump_images(ImageFetch* fetch, ImageCache* images, Feed* feed) {
     bool changed = false;
     std::string url;
@@ -549,6 +594,8 @@ int run_overlay(DWORD parent_pid, bool standalone) {
     SettingsState sstate;
     GuiWindow css_win;
     CssEditState cstate;
+    Updater updater;
+    bool update_asked = false;
     if (standalone) {
         cfg.load();
         look = cfg.look;
@@ -565,6 +612,9 @@ int run_overlay(DWORD parent_pid, bool standalone) {
                             /*resizable=*/true, /*mono=*/true))
             rlog("вікно редактора теми не створилося");
         cstate.text = cfg.custom_css;
+        // Архіви минулих оновлень — двісті мегабайтів кожен, а %TEMP% Windows
+        // сама не чистить.
+        Updater::cleanup_downloads();
         win.move_to(cfg.x, cfg.y);
         // Замок вимикають і з клавіатури: вікно чату фокусу не бере, тож
         // єдиний спосіб — глобальне сполучення. Те саме, що було в Python.
@@ -783,7 +833,8 @@ int run_overlay(DWORD parent_pid, bool standalone) {
         if (standalone) {
             if (gui.begin()) {
                 const SettingsEvents sev =
-                    draw_settings(&sstate, &cfg, net.status(), gui.width(), gui.height());
+                    draw_settings(&sstate, &cfg, net.status(), update_view(updater),
+                                  gui.width(), gui.height());
                 // Знімок — ДО показу: у flip-моделі після Present задній буфер
                 // уже інший, і в PNG потрапила б порожнеча.
                 // Знімаємо не одразу після показу: панель просить у системи
@@ -812,6 +863,18 @@ int run_overlay(DWORD parent_pid, bool standalone) {
                 }
                 if (sev.sources_changed) net.apply(cfg);
                 if (sev.css_editor) css_win.show_beside(win.screen_rect());
+                if (sev.check_update) updater.check(cfg.channel, HOMINKA_VERSION, "");
+                if (sev.start_download) updater.download();
+                if (sev.do_install) {
+                    const std::string bad = updater.install();
+                    if (bad.empty()) {
+                        rlog("оновлення: підмінник запущено, виходжу");
+                        cfg.flush(true);
+                        chrome.shutdown();
+                        return 0;
+                    }
+                    rlog("оновлення не встановилося: %s", bad.c_str());
+                }
                 if (sev.changed) cfg.save();
             }
 
@@ -859,6 +922,13 @@ int run_overlay(DWORD parent_pid, bool standalone) {
                 cfg.save();
             }
             cfg.flush();
+
+            // Перевірка оновлень раз на запуск і не одразу: спершу хай
+            // під'єднається чат — саме заради нього програму й відкрили.
+            if (cfg.auto_update && !update_asked && now_ms() - started > 5000) {
+                update_asked = true;
+                updater.check(cfg.channel, HOMINKA_VERSION, "");
+            }
 
             // Вікна ще не показані — показуємо: знімок робиться саме з них.
             if (shot_prefix && now_ms() - started > 8000) {
@@ -1117,6 +1187,80 @@ int css_check(const wchar_t* path) {
     return 0;
 }
 
+// Перевірка оновлення з командного рядка. Саме тут видно, чи сходиться підпис
+// зі СПРАВЖНІМ маніфестом на сервері: формат того, що підписується, мусить
+// збігатися з Python до байта, і перевірити це можна лише проти живого випуску.
+int update_check(const char* channel, const char* pretend, bool fetch) {
+    Updater up;
+    const char* current = pretend && *pretend ? pretend : HOMINKA_VERSION;
+    up.check(channel, current, "");
+    for (int i = 0; i < 300 && up.state() == Updater::State::Checking; ++i) Sleep(100);
+
+    if (up.state() == Updater::State::UpToDate) {
+        printf("оновлень немає (у нас %s)\n", current);
+        return 0;
+    }
+    if (up.state() != Updater::State::Available) {
+        fprintf(stderr, "не вийшло: %s\n", up.error().c_str());
+        return 1;
+    }
+
+    const Release r = up.release();
+    printf("є оновлення: %s %s (%s), %lld байт\n", channel_label(r.channel).c_str(),
+           r.version.c_str(), kind_label(r.kind).c_str(), r.size);
+    printf("  файл: %s\n", r.url.c_str());
+    printf("  sha256: %s\n", r.sha256.c_str());
+    printf("  підпис перевірено\n");
+    if (!fetch) return 0;
+
+    // Завантаження — окремим кроком і лише на прохання: це двісті мегабайтів.
+    // Але саме тут перевіряється те, чого інакше не побачиш: чи справді ми
+    // тягнемо потоком, чи сходиться сума й чи не бреше поступ.
+    printf("качаю…\n");
+    fflush(stdout);
+    up.download();
+    int last = -1;
+    while (up.state() == Updater::State::Downloading) {
+        const int p = up.percent();
+        if (p / 10 != last / 10) {
+            last = p;
+            printf("  %d%%\n", p);
+            fflush(stdout);
+        }
+        Sleep(200);
+    }
+    if (up.state() != Updater::State::Ready) {
+        fprintf(stderr, "не завантажилося: %s\n", up.error().c_str());
+        return 1;
+    }
+    printf("завантажено, сума збіглася\n");
+    Updater::cleanup_downloads();
+    return 0;
+}
+
+// Перевірка маніфесту з файлу: чи сходиться підпис і що саме в ньому.
+//
+// Потрібне двічі. По-перше, це відповідь на «чому не оновлюється» — видно, чи
+// річ у підписі. По-друге, саме так ганяються підміни: беремо СПРАВЖНІЙ
+// маніфест, міняємо в ньому по одному полю й дивимося, що ловиться
+// (release_smoke.py).
+int verify_release(const wchar_t* path) {
+    const std::string text = read_file(path);
+    if (text.empty()) {
+        fprintf(stderr, "порожній або не прочитався файл\n");
+        return 2;
+    }
+    std::string err;
+    const Release rel = parse_manifest(text, "stable", &err);
+    if (!err.empty()) {
+        printf("ні: %s\n", err.c_str());
+        return 1;
+    }
+    printf("так: %s %s (%s)\n", rel.channel.c_str(), rel.version.c_str(),
+           rel.kind.c_str());
+    return 0;
+}
+
 // Найпростіша перевірка: розібрати тривіальну сторінку НАШИМ контейнером.
 // Ділить навпіл: якщо падає і тут — річ у контейнері, а не в розмітці чату.
 int probe_litehtml() {
@@ -1149,6 +1293,8 @@ void usage() {
              L"  hominka-render-x64.exe --preview <pid Hominka>\n"
              L"  hominka-render-x64.exe --nettest <площадка> <канал> [сек]\n"
              L"  hominka-render-x64.exe --csslint <тема.css>\n"
+             L"  hominka-render-x64.exe --updatecheck [канал] [версія] [--download]\n"
+             L"  hominka-render-x64.exe --verifyrelease <маніфест.json>\n"
              L"  hominka-render-x64.exe --probe\n");
 }
 
@@ -1185,6 +1331,19 @@ int wmain(int argc, wchar_t** argv) {
         rc = hominka::run_preview((DWORD)_wtoi(argv[2]));
     } else if (argc >= 3 && !wcscmp(argv[1], L"--run")) {
         rc = hominka::run_overlay((DWORD)_wtoi(argv[2]), false);
+    } else if (argc >= 3 && !wcscmp(argv[1], L"--verifyrelease")) {
+        rc = hominka::verify_release(argv[2]);
+    } else if (argc >= 2 && !wcscmp(argv[1], L"--updatecheck")) {
+        char ch[32] = "stable", pretend[32] = {0};
+        bool fetch = false;
+        if (argc >= 3 && argv[2][0] != L'-')
+            WideCharToMultiByte(CP_UTF8, 0, argv[2], -1, ch, sizeof ch - 1, nullptr, nullptr);
+        for (int i = 3; i < argc; ++i) {
+            if (!wcscmp(argv[i], L"--download")) fetch = true;
+            else WideCharToMultiByte(CP_UTF8, 0, argv[i], -1, pretend, sizeof pretend - 1,
+                                     nullptr, nullptr);
+        }
+        rc = hominka::update_check(ch, pretend, fetch);
     } else if (argc >= 3 && !wcscmp(argv[1], L"--csslint")) {
         rc = hominka::css_check(argv[2]);
     } else if (argc >= 2 && !wcscmp(argv[1], L"--app")) {

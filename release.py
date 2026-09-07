@@ -182,7 +182,7 @@ def build_exe():
 
 
 def stamp_version(version: str):
-    """Проставляє версію в hominka/version.py і version_info.txt.
+    """Проставляє версію в hominka/version.py, version_info.txt і version.h.
 
     Одне джерело правди — аргумент --version: інакше в маніфесті одне, у вікні
     «про програму» друге, а у властивостях .exe третє."""
@@ -194,6 +194,15 @@ def stamp_version(version: str):
     p = os.path.join(HERE, "hominka", "version.py")
     src = open(p, encoding="utf-8").read()
     src = re.sub(r'APP_VERSION = "[^"]*"', 'APP_VERSION = "%s"' % version, src, count=1)
+    open(p, "w", encoding="utf-8", newline="\n").write(src)
+
+    # Нативна частина бачить лише теку native/, тож номер їй доводиться
+    # копіювати. Робимо це ТУТ, поруч із рештою: інакше нативне вікно «про
+    # програму» показувало б версію позаминулого випуску, і ніхто б не помітив.
+    p = os.path.join(HERE, "native", "render", "version.h")
+    src = open(p, encoding="utf-8").read()
+    src = re.sub(r'#define HOMINKA_VERSION "[^"]*"',
+                 '#define HOMINKA_VERSION "%s"' % version, src, count=1)
     open(p, "w", encoding="utf-8", newline="\n").write(src)
 
     p = os.path.join(HERE, "version_info.txt")

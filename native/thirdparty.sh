@@ -19,6 +19,11 @@
 #   ixwebsocket— WebSocket і HTTP в одному. Twitch IRC і Kick (Pusher) — це
 #               саме WebSocket, а решта (значки, емоути, YouTube) — звичайні
 #               запити; тягти дві бібліотеки заради цього ні до чого.
+#   monocypher— перевірка підпису випуску (Ed25519). Своєї реалізації тут бути
+#               не має: підпис — це те єдине, що стоїть між користувачем і
+#               чужим кодом на його машині, і писати для нього власну
+#               арифметику по модулю було б найгіршою з можливих економій.
+#               Один файл, суспільне надбання, стала до атак по часу.
 #   imgui     — рамка вікна: смужка перетягування, куточок, замок, повзунки.
 #               Саме те, заради чого на C++ узагалі варто братися за інтерфейс:
 #               кнопка тут — один рядок, а не клас на сто.
@@ -171,11 +176,19 @@ cmake -S ixws -B ixws/build $TC \
 cmake --build ixws/build -j"$(nproc)" >/dev/null
 cmake --install ixws/build >/dev/null
 
+echo ">> monocypher $MONOCYPHER_REF"
+git clone -q --depth 1 -b "$MONOCYPHER_REF"     https://github.com/LoupVaillant/Monocypher.git monocypher
+cp monocypher/src/monocypher.h monocypher/src/optional/monocypher-ed25519.h "$TP/include/"
+$CC -O2 -w -I"$TP/include" -c monocypher/src/monocypher.c -o /tmp/monocypher.o
+$CC -O2 -w -I"$TP/include" -c monocypher/src/optional/monocypher-ed25519.c     -o /tmp/monocypher-ed25519.o
+x86_64-w64-mingw32-ar rcs "$TP/lib/libmonocypher.a" /tmp/monocypher.o /tmp/monocypher-ed25519.o
+rm -f /tmp/monocypher.o /tmp/monocypher-ed25519.o
+
 echo ">> nlohmann/json $JSON_REF"
 git clone -q --depth 1 -b "$JSON_REF" https://github.com/nlohmann/json.git
 mkdir -p "$TP/include/nlohmann"
 cp json/single_include/nlohmann/json.hpp "$TP/include/nlohmann/"
 
-rm -rf /tmp/litehtml /tmp/libwebp /tmp/nanosvg /tmp/json /tmp/imgui
+rm -rf /tmp/litehtml /tmp/libwebp /tmp/nanosvg /tmp/json /tmp/imgui /tmp/monocypher
 echo ">> сторонні бібліотеки готові в $TP"
 ls -la "$TP/lib"

@@ -112,6 +112,8 @@ x86_64-w64-mingw32-g++-posix $COMMON -municode -std=c++17 \
     "$SRC/render/csslint.cpp" \
     "$SRC/render/cssref.cpp" \
     "$SRC/render/samples.cpp" \
+    "$SRC/render/release.cpp" \
+    "$SRC/render/updater.cpp" \
     "$SRC/render/src_youtube.cpp" \
     "$SRC/render/badges.cpp" \
     "$SRC/render/nettest.cpp" \
@@ -123,9 +125,9 @@ x86_64-w64-mingw32-g++-posix $COMMON -municode -std=c++17 \
     "$SRC/render/chrome.cpp" \
     -o "$OUT/hominka-render-x64.exe" \
     -L"$TP/lib" -limgui -llitehtml -lgumbo -lwebpdemux -lwebp -lsharpyuv \
-    -lixwebsocket -lmbedtls -lmbedx509 -lmbedcrypto \
+    -lixwebsocket -lmbedtls -lmbedx509 -lmbedcrypto -lmonocypher \
     -ld2d1 -ldwrite -lwindowscodecs -ld3d11 -ldxgi -ldcomp \
-    -ld3dcompiler_47 -lgdi32 -ldwmapi -lole32 -luuid -lws2_32 -lcrypt32 -lshlwapi -lbcrypt
+    -ld3dcompiler_47 -lgdi32 -ldwmapi -lole32 -luuid -lws2_32 -lcrypt32 -lshlwapi -lbcrypt -lwinhttp
 
 # Та сама програма, але з символами й без -s: коли рендер падає, VEH друкує
 # зсув від початку модуля, а addr2line по ЦЬОМУ файлу перетворює його на
@@ -147,6 +149,8 @@ x86_64-w64-mingw32-g++-posix -O1 -g -static -static-libgcc -static-libstdc++ \
     "$SRC/render/csslint.cpp" \
     "$SRC/render/cssref.cpp" \
     "$SRC/render/samples.cpp" \
+    "$SRC/render/release.cpp" \
+    "$SRC/render/updater.cpp" \
     "$SRC/render/src_youtube.cpp" \
     "$SRC/render/badges.cpp" \
     "$SRC/render/nettest.cpp" \
@@ -158,9 +162,9 @@ x86_64-w64-mingw32-g++-posix -O1 -g -static -static-libgcc -static-libstdc++ \
     "$SRC/render/chrome.cpp" \
     -o "$OUT/hominka-render.debug.exe" \
     -L"$TP/lib" -limgui -llitehtml -lgumbo -lwebpdemux -lwebp -lsharpyuv \
-    -lixwebsocket -lmbedtls -lmbedx509 -lmbedcrypto \
+    -lixwebsocket -lmbedtls -lmbedx509 -lmbedcrypto -lmonocypher \
     -ld2d1 -ldwrite -lwindowscodecs -ld3d11 -ldxgi -ldcomp \
-    -ld3dcompiler_47 -lgdi32 -ldwmapi -lole32 -luuid -lws2_32 -lcrypt32 -lshlwapi -lbcrypt
+    -ld3dcompiler_47 -lgdi32 -ldwmapi -lole32 -luuid -lws2_32 -lcrypt32 -lshlwapi -lbcrypt -lwinhttp
 
 echo ""
 echo "Готово. У $OUT:"
