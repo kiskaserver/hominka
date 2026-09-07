@@ -6,5 +6,5 @@
 // native/ — Python-коду в контейнері немає.
 #pragma once
 
-#define HOMINKA_VERSION "2.8.3"
+#define HOMINKA_VERSION "3.0.0"
 #define HOMINKA_NAME "Hominka"
