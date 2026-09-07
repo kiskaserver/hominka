@@ -5,6 +5,11 @@
 // одному файлі на півтори тисячі рядків, знайти в ньому цикл програми було
 // важче, ніж написати наново.
 //
+// БЕЗ АРГУМЕНТІВ ЗАПУСКАЄТЬСЯ САМА ПРОГРАМА. Це не дрібниця: цей .exe тепер і
+// є Hominka, і подвійний клац по ньому має відкривати чат, а не показувати
+// довідку й зникати. Саме так і сталося у 3.0.0: людина клацала — вигулькувала
+// консоль із переліком ключів і одразу закривалася.
+//
 //   --app                        сам собі програма: свій config.json, свої
 //                                канали, вікно чату, налаштування й редактор
 //                                теми. Python не потрібен (app/overlay.cpp).
@@ -24,6 +29,7 @@
 // розмітку поруч зі знімком), --backdrop none (знімок без темного тла).
 
 #include <windows.h>
+#include <shellapi.h>
 
 #include <cstdio>
 #include <cstdlib>
@@ -60,10 +66,7 @@ void narrow(const wchar_t* src, char* dst, int cap) {
     WideCharToMultiByte(CP_UTF8, 0, src, -1, dst, cap - 1, nullptr, nullptr);
 }
 
-}  // namespace
-}  // namespace hominka
-
-int wmain(int argc, wchar_t** argv) {
+int run(int argc, wchar_t** argv) {
     AddVectoredExceptionHandler(1, hominka::crash_veh);
     CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
 
@@ -77,6 +80,23 @@ int wmain(int argc, wchar_t** argv) {
                    !wcscmp(argv[i + 1], L"none")) {
             hominka::g_backdrop = false;
         }
+    }
+
+    // Ключів немає — це звичайний запуск програми.
+    if (argc < 2) {
+        const int rc = hominka::run_overlay(0, /*standalone=*/true);
+        CoUninitialize();
+        return rc;
+    }
+
+    // Далі — режими командного рядка, і їм потрібна консоль. Програма зібрана
+    // віконною (щоб подвійний клац не блимав чорним вікном), тож консоль треба
+    // позичити в того, хто нас запустив.
+    if (AttachConsole(ATTACH_PARENT_PROCESS)) {
+        FILE* f = nullptr;
+        freopen_s(&f, "CONOUT$", "w", stdout);
+        freopen_s(&f, "CONOUT$", "w", stderr);
+        freopen_s(&f, "CONIN$", "r", stdin);
     }
 
     int rc = 1;
@@ -117,5 +137,28 @@ int wmain(int argc, wchar_t** argv) {
     }
 
     CoUninitialize();
+    return rc;
+}
+
+}  // namespace
+}  // namespace hominka
+
+// Точка входу — WinMain, а не wmain, і це не примха.
+//
+// Програма зібрана віконною: подвійний клац не має блимати чорною консоллю.
+// Віконна підсистема починає з WinMainCRTStartup, а той кличе WinMain. Спроба
+// лишити wmain і переставити точку входу ключем -municode на цьому наборі
+// компіляторів мовчки не спрацьовує: ld не знаходить wmainCRTStartup, ставить
+// точкою входу початок коду — і .exe завершується нулем, нічого не зробивши.
+// Тобто замість консолі, що блимала у 3.0.0, вийшло б вікно, яке взагалі
+// не з'являється, — те саме «не відкривається», лише мовчки.
+//
+// Аргументи беремо з GetCommandLineW, а не з __wargv: останній заповнює
+// юнікодний запуск CRT, якого тут якраз і немає.
+int WINAPI WinMain(HINSTANCE, HINSTANCE, LPSTR, int) {
+    int argc = 0;
+    wchar_t** argv = CommandLineToArgvW(GetCommandLineW(), &argc);
+    const int rc = hominka::run(argc, argv);
+    if (argv) LocalFree(argv);
     return rc;
 }

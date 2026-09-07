@@ -1,0 +1,44 @@
+// Значок і властивості файлу для Windows.
+//
+// Без цього .exe виглядає як чужа безіменна програма: порожні «Опис»,
+// «Версія», «Назва продукту» у властивостях і стандартний значок замість
+// нашого. У збірці на PyInstaller це давав version_info.txt; нативна збірка
+// мала лишитися без нього — тепер не лишається.
+//
+// Значок лежить поруч навмисно: збірка бачить лише теку native/, і взяти його
+// з кореня програми не змогла б.
+#include "core/version.h"
+
+1 ICON "hominka.ico"
+
+1 VERSIONINFO
+FILEVERSION    HOMINKA_VER_MAJOR, HOMINKA_VER_MINOR, HOMINKA_VER_PATCH, 0
+PRODUCTVERSION HOMINKA_VER_MAJOR, HOMINKA_VER_MINOR, HOMINKA_VER_PATCH, 0
+FILEFLAGSMASK  0x3fL
+FILEFLAGS      0x0L
+FILEOS         0x40004L
+FILETYPE       0x1L
+FILESUBTYPE    0x0L
+BEGIN
+    BLOCK "StringFileInfo"
+    BEGIN
+        // 0409 04B0 — англійська (США) і кодова сторінка Unicode. Та сама
+        // пара, що була в PyInstaller-збірці: міняти її означало б, що
+        // властивості файлу «поїхали» відносно попередніх випусків.
+        BLOCK "040904B0"
+        BEGIN
+            VALUE "CompanyName",      "Mykyta Vinnyk"
+            VALUE "FileDescription",  "Hominka - chat overlay (invisible to OBS)"
+            VALUE "FileVersion",      HOMINKA_VERSION
+            VALUE "InternalName",     "Hominka"
+            VALUE "LegalCopyright",   "\xa9 Mykyta Vinnyk"
+            VALUE "OriginalFilename", "Hominka.exe"
+            VALUE "ProductName",      "Hominka"
+            VALUE "ProductVersion",   HOMINKA_VERSION
+        END
+    END
+    BLOCK "VarFileInfo"
+    BEGIN
+        VALUE "Translation", 0x409, 1200
+    END
+END

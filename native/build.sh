@@ -152,20 +152,32 @@ RENDER_SRC="
     $SRC/render/src/update/updater.cpp
 "
 
-RENDER_LIBS="-L$TP/lib -limgui -llitehtml -lgumbo -lwebpdemux -lwebp -lsharpyuv
+# Значок і властивості файлу. windres проганяє .rc через препроцесор, тож
+# номер версії береться просто з core/version.h — окремо його ніде дублювати
+# не треба.
+echo ">> x64: ресурс версії та значка"
+x86_64-w64-mingw32-windres -I "$SRC/render/include" -I "$SRC/render"     "$SRC/render/hominka.rc" -O coff -o /tmp/hominka-res.o
+
+RENDER_LIBS="/tmp/hominka-res.o -L$TP/lib -limgui -llitehtml -lgumbo -lwebpdemux -lwebp -lsharpyuv
     -lixwebsocket -lmbedtls -lmbedx509 -lmbedcrypto -lmonocypher
     -ld2d1 -ldwrite -lwindowscodecs -ld3d11 -ldxgi -ldcomp
     -ld3dcompiler_47 -lgdi32 -ldwmapi -lole32 -luuid -lws2_32 -lcrypt32
-    -lshlwapi -lbcrypt -lwinhttp"
+    -lshlwapi -lbcrypt -lwinhttp -lshell32"
 
+# -mwindows: програма ВІКОННА, а не консольна. Інакше подвійний клац по .exe
+# блимає чорним вікном - саме це й побачили у 3.0.0. Точка входу при цьому
+# WinMainCRTStartup, тож у app/main.cpp живе WinMain, а аргументи він бере з
+# GetCommandLineW. Ключ -municode тут НЕ ставимо: на цьому наборі компіляторів
+# він мовчки не міняє стартовий об'єкт, ld не знаходить wmainCRTStartup - і
+# .exe виходить порожнім, завершується нулем, не виконавши жодного рядка.
 echo ">> x64: hominka-render.exe (нативний рендер чату)"
-x86_64-w64-mingw32-g++-posix $COMMON -municode -std=c++17 $RENDER_INC     $RENDER_SRC -o "$OUT/hominka-render-x64.exe" $RENDER_LIBS
+x86_64-w64-mingw32-g++-posix $COMMON -mwindows -std=c++17 $RENDER_INC $RENDER_SRC -o "$OUT/hominka-render-x64.exe" $RENDER_LIBS
 
 # Та сама програма, але з символами й без -s: коли рендер падає, VEH друкує
 # зсув від початку модуля, а addr2line по ЦЬОМУ файлу перетворює його на
 # «файл:рядок». У випуск не входить — лише поруч у dist для розбору.
 echo ">> x64: hominka-render.debug.exe (символи для addr2line)"
-x86_64-w64-mingw32-g++-posix -O1 -g -static -static-libgcc -static-libstdc++     -municode -std=c++17 $RENDER_INC     $RENDER_SRC -o "$OUT/hominka-render.debug.exe" $RENDER_LIBS
+x86_64-w64-mingw32-g++-posix -O1 -g -static -static-libgcc -static-libstdc++     -mwindows -std=c++17 $RENDER_INC     $RENDER_SRC -o "$OUT/hominka-render.debug.exe" $RENDER_LIBS
 
 echo ""
 echo "Готово. У $OUT:"

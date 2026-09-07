@@ -6,5 +6,12 @@
 // native/ — Python-коду в контейнері немає.
 #pragma once
 
-#define HOMINKA_VERSION "3.0.0"
+#define HOMINKA_VERSION "3.0.1"
 #define HOMINKA_NAME "Hominka"
+
+// Ті самі числа окремо — для ресурсу версії Windows: у VERSIONINFO номер
+// мусить бути чотирма числами, а не рядком, і розібрати рядок засобами
+// windres не можна.
+#define HOMINKA_VER_MAJOR 3
+#define HOMINKA_VER_MINOR 0
+#define HOMINKA_VER_PATCH 1

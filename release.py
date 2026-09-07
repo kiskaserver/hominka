@@ -203,6 +203,12 @@ def stamp_version(version: str):
     src = open(p, encoding="utf-8").read()
     src = re.sub(r'#define HOMINKA_VERSION "[^"]*"',
                  '#define HOMINKA_VERSION "%s"' % version, src, count=1)
+    # Ті самі числа окремо: ресурс VERSIONINFO у .exe вимагає їх цифрами, а не
+    # рядком. Забути про них означає, що у властивостях файлу стоятиме версія
+    # позаминулого випуску, і помітить це лише той, хто відкриє «Подробиці».
+    for name, num in zip(("MAJOR", "MINOR", "PATCH"), nums):
+        src = re.sub(r"#define HOMINKA_VER_%s +\d+" % name,
+                     "#define HOMINKA_VER_%s %s" % (name, num), src, count=1)
     open(p, "w", encoding="utf-8", newline="\n").write(src)
 
     p = os.path.join(HERE, "version_info.txt")
