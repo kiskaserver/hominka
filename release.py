@@ -199,7 +199,7 @@ def stamp_version(version: str):
     # Нативна частина бачить лише теку native/, тож номер їй доводиться
     # копіювати. Робимо це ТУТ, поруч із рештою: інакше нативне вікно «про
     # програму» показувало б версію позаминулого випуску, і ніхто б не помітив.
-    p = os.path.join(HERE, "native", "render", "version.h")
+    p = os.path.join(HERE, "native", "render", "include", "core", "version.h")
     src = open(p, encoding="utf-8").read()
     src = re.sub(r'#define HOMINKA_VERSION "[^"]*"',
                  '#define HOMINKA_VERSION "%s"' % version, src, count=1)

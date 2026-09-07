@@ -154,6 +154,7 @@ Motion motion_of(const std::string& name) {
 // Глядачі одним рядком для смужки вікна. Порожньо — коли показувати нічого:
 // або вимкнено в налаштуваннях, або жодна площадка ще не відповіла.
 std::string viewers_line(const Viewers& v, const Config& cfg) {
+    if (!cfg.viewers_show) return "";
     const Viewers::Count tw = cfg.viewers_twitch ? v.twitch() : Viewers::Count();
     const Viewers::Count kk = cfg.viewers_kick ? v.kick() : Viewers::Count();
     const Viewers::Count yt = cfg.viewers_youtube ? v.youtube() : Viewers::Count();

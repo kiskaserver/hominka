@@ -143,6 +143,7 @@ void Config::load() {
 
     const json& vw = raw_.value("viewers", json::object());
     if (vw.is_object()) {
+        viewers_show = flag(vw, "show", viewers_show);
         viewers_twitch = flag(vw, "twitch", viewers_twitch);
         viewers_kick = flag(vw, "kick", viewers_kick);
         viewers_youtube = flag(vw, "youtube", viewers_youtube);
@@ -188,7 +189,8 @@ void Config::flush(bool force) {
     raw_["chatLayout"] = layout;
     raw_["chatDelay"] = chat_delay;
     raw_["animatedEmotes"] = motion;
-    raw_["viewers"] = {{"twitch", viewers_twitch},
+    raw_["viewers"] = {{"show", viewers_show},
+                       {"twitch", viewers_twitch},
                        {"kick", viewers_kick},
                        {"youtube", viewers_youtube},
                        {"sum", viewers_sum}};

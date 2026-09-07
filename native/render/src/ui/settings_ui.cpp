@@ -157,9 +157,13 @@ bool toggle(const char* label, bool* on, const char* what = nullptr) {
     dl->AddCircleFilled(ImVec2(*on ? p.x + w - r - 2.0f : p.x + r + 2.0f, p.y + h * 0.5f),
                         r, IM_COL32(255, 255, 255, 235));
 
-    ImGui::SameLine(0, 10);
-    ImGui::AlignTextToFramePadding();
-    ImGui::TextUnformatted(label);
+    // Підпис, що починається з «##», — це лише ідентифікатор: сам перемикач
+    // стоїть у ряду, де підписує його сусід ліворуч.
+    if (label[0] != '#' || label[1] != '#') {
+        ImGui::SameLine(0, 10);
+        ImGui::AlignTextToFramePadding();
+        ImGui::TextUnformatted(label);
+    }
     if (what) {
         ImGui::Indent(w + 10.0f);
         dim_wrapped(what);
@@ -277,28 +281,36 @@ void page_channels(SettingsState* st, Config* cfg, const std::vector<SourceView>
     field_label("Глядачі");
     ImGui::SameLine(LABEL_W);
     {
-        // Усе в один рядок: кого рахувати й як показувати. Окремого «показувати
-        // взагалі» немає навмисно — жодної площадки не вибрано, і лічильника
-        // немає. Один перемикач замість двох, і плутати нічого.
+        // Спершу вимикач, і лише потім — кого рахувати. Вимкнений лічильник
+        // лишає вибір площадок як був: повернути його з тими самими площадками
+        // — звичайна річ, і складати їх щоразу наново було б безглуздо.
+        if (toggle("##viewers", &cfg->viewers_show)) ev->changed = true;
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip(cfg->viewers_show ? "Не показувати глядачів"
+                                                : "Показувати глядачів");
+
+        // Поки вимкнено — решта ряду сіра й не натискається: видно, що вона є,
+        // але зараз ні на що не впливає.
+        ImGui::BeginDisabled(!cfg->viewers_show);
         struct Item { const char* name; bool* on; };
         const Item items[] = {{"Twitch", &cfg->viewers_twitch},
                               {"Kick", &cfg->viewers_kick},
                               {"YouTube", &cfg->viewers_youtube}};
         for (int i = 0; i < 3; ++i) {
-            if (i) ImGui::SameLine(0, 5);
+            ImGui::SameLine(0, i ? 5 : 10);
             const bool on = *items[i].on;
             ImGui::PushStyleColor(ImGuiCol_Button, on ? col(ACCENT) : ImVec4(1, 1, 1, 0.06f));
             ImGui::PushStyleColor(ImGuiCol_ButtonHovered,
                                   on ? col(ACCENT) : ImVec4(1, 1, 1, 0.16f));
             ImGui::PushStyleColor(ImGuiCol_ButtonActive, col(ACCENT));
-            if (ImGui::Button(items[i].name, ImVec2(76, 0))) {
+            if (ImGui::Button(items[i].name, ImVec2(72, 0))) {
                 *items[i].on = !on;
                 ev->changed = true;
             }
             ImGui::PopStyleColor(3);
         }
-        ImGui::SameLine(0, 12);
-        if (ghost(cfg->viewers_sum ? "разом" : "окремо", 76.0f)) {
+        ImGui::SameLine(0, 10);
+        if (ghost(cfg->viewers_sum ? "разом" : "окремо", 72.0f)) {
             cfg->viewers_sum = !cfg->viewers_sum;
             ev->changed = true;
         }
@@ -306,6 +318,7 @@ void page_channels(SettingsState* st, Config* cfg, const std::vector<SourceView>
             ImGui::SetTooltip(cfg->viewers_sum
                                   ? "Одне число з усіх площадок."
                                   : "Кожна окремо, з літерою площадки.");
+        ImGui::EndDisabled();
     }
     ImGui::Indent(LABEL_W);
     dim_wrapped("Число видно у смужці вікна чату.");
