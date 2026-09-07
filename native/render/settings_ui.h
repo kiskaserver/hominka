@@ -22,6 +22,7 @@ struct SettingsState {
     char youtube[256] = {0};
     char twitch[128] = {0};
     char kick[128] = {0};
+    char site[256] = {0};
     bool synced = false;      // текст уже взято з налаштувань
 
     void sync(const Config& cfg);

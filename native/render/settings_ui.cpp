@@ -140,6 +140,7 @@ void SettingsState::sync(const Config& cfg) {
     copy_to(youtube, sizeof youtube, cfg.youtube);
     copy_to(twitch, sizeof twitch, cfg.twitch);
     copy_to(kick, sizeof kick, cfg.kick);
+    copy_to(site, sizeof site, cfg.site_url);
     synced = true;
 }
 
@@ -252,6 +253,20 @@ SettingsEvents draw_settings(SettingsState* st, Config* cfg, const std::string& 
             cfg->youtube = st->youtube;
             ev.changed = ev.sources_changed = true;
         }
+
+        field_label("Свій чат за посиланням");
+        ImGui::SetNextItemWidth(field_w);
+        if (ImGui::InputTextWithHint("##site", "не обов'язково — сторінка вашого чату",
+                                     st->site, sizeof st->site,
+                                     ImGuiInputTextFlags_EnterReturnsTrue) ||
+            ImGui::IsItemDeactivatedAfterEdit()) {
+            cfg->site_url = st->site;
+            ev.changed = ev.sources_changed = true;
+        }
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("Якщо у вас свій сайт зі своїм чатом — вставте сюди\n"
+                              "посилання на сторінку чату. Читаємо ми не сторінку,\n"
+                              "а той самий websocket, яким користується вона сама.");
 
         ImGui::Dummy(ImVec2(0, 2));
         dim_text(status.c_str());

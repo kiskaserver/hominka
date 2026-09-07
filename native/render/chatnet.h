@@ -26,6 +26,7 @@ namespace hominka {
 class TwitchSource;
 class KickSource;
 class YouTubeSource;
+class SiteSource;
 
 class ChatNet {
 public:
@@ -57,8 +58,9 @@ private:
     std::unique_ptr<TwitchSource> twitch_;
     std::unique_ptr<KickSource> kick_;
     std::unique_ptr<YouTubeSource> youtube_;
+    std::unique_ptr<SiteSource> site_;
 
-    std::string twitch_name_, kick_name_, youtube_name_;
+    std::string twitch_name_, kick_name_, youtube_name_, site_url_;
     int delay_ms_ = 0;
 
     mutable std::mutex mx_;

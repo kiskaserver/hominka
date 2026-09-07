@@ -7,6 +7,7 @@
 #include <thread>
 
 #include "src_kick.h"
+#include "src_site.h"
 #include "src_twitch.h"
 #include "src_youtube.h"
 
@@ -89,13 +90,21 @@ int nettest(const std::string& platform, const std::string& channel, int seconds
         return rc;
     }
 
+    if (platform == "site") {
+        SiteSource src;
+        printf("сокет: %s\n", site_ws_url(channel).c_str());
+        fflush(stdout);
+        return watch([&](ChatSink s) { return src.start(channel, {}, std::move(s)); },
+                     [&] { src.stop(); }, [&] { return src.error(); }, seconds, &count);
+    }
+
     if (platform == "youtube") {
         YouTubeSource src;
         return watch([&](ChatSink s) { return src.start(channel, std::move(s)); },
                      [&] { src.stop(); }, [&] { return src.error(); }, seconds, &count);
     }
 
-    fprintf(stderr, "невідома площадка: %s (треба twitch, kick або youtube)\n",
+    fprintf(stderr, "невідома площадка: %s (треба twitch, kick, youtube або site)\n",
             platform.c_str());
     return 1;
 }

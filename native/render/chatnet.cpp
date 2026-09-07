@@ -2,8 +2,10 @@
 
 #include <chrono>
 #include <cstring>
+#include <set>
 
 #include "src_kick.h"
+#include "src_site.h"
 #include "src_twitch.h"
 #include "src_youtube.h"
 
@@ -74,6 +76,23 @@ void ChatNet::apply(const Config& cfg) {
             kick_->start(kk, [this](const ChatEvent& ev) { push(ev); });
         }
     }
+    // Чат сайту йде останнім навмисно: йому треба знати, які площадки ми вже
+    // читаємо самі. Сервер мостить чужі чати у свій, і без цього кожне таке
+    // повідомлення з'являлося б у стрічці двічі.
+    const std::string site = cfg.site_url;
+    if (site != site_url_) {
+        if (site_) { site_->stop(); site_.reset(); }
+        site_url_ = site;
+        if (!site.empty()) {
+            std::set<std::string> skip;
+            if (!tw.empty()) skip.insert("twitch");
+            if (!kk.empty()) skip.insert("kick");
+            if (!yt.empty()) skip.insert("youtube");
+            site_.reset(new SiteSource());
+            site_->start(site, skip, [this](const ChatEvent& ev) { push(ev); });
+        }
+    }
+
     if (yt != youtube_name_) {
         if (youtube_) { youtube_->stop(); youtube_.reset(); }
         youtube_name_ = yt;
@@ -138,6 +157,10 @@ std::string ChatNet::status() const {
         add("Kick: " + (kick_->connected() ? "читаємо"
                                            : (kick_->error().empty() ? "під'єднуюся…"
                                                                      : kick_->error())));
+    if (site_)
+        add("Сайт: " + (site_->connected() ? "читаємо"
+                                           : (site_->error().empty() ? "під'єднуюся…"
+                                                                     : site_->error())));
     if (youtube_)
         add("YouTube: " + (youtube_->connected()
                                ? "читаємо"
@@ -150,6 +173,8 @@ void ChatNet::stop() {
     if (twitch_) { twitch_->stop(); twitch_.reset(); }
     if (kick_) { kick_->stop(); kick_.reset(); }
     if (youtube_) { youtube_->stop(); youtube_.reset(); }
+    if (site_) { site_->stop(); site_.reset(); }
+    site_url_.clear();
     twitch_name_.clear();
     kick_name_.clear();
     youtube_name_.clear();
