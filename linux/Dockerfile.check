@@ -1,0 +1,30 @@
+# Перевірка готового AppImage на ЧИСТІЙ системі.
+#
+# Навіщо окремий образ. Той, у якому ми збирали, має все: компілятор, Qt-devel,
+# шрифти, cmake. Якщо перевіряти там, будь-яка забута залежність лишиться
+# непоміченою — і виявиться вже в людини, яка просто завантажила файл. Тут же
+# стоїть рівно те, що є на звичайному робочому столі: X-бібліотеки, шрифти й
+# нічого понад.
+#
+# Xvfb і x11-utils — не «залежності програми», а спосіб перевірки: без екрана
+# вікно нема де показати.
+FROM ubuntu:22.04
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        xvfb x11-utils procps \
+        libgl1 libegl1 libglib2.0-0 libdbus-1-3 \
+        libxkbcommon0 libxkbcommon-x11-0 libxcb-cursor0 libxcb-icccm4 \
+        libxcb-image0 libxcb-keysyms1 libxcb-randr0 libxcb-render-util0 \
+        libxcb-shape0 libxcb-xinerama0 libxcb-xkb1 libxcb-shm0 libxcb-sync1 \
+        libx11-xcb1 libsm6 libice6 libxrender1 libfontconfig1 libfreetype6 \
+        libxext6 libxi6 libxtst6 \
+        fonts-noto-core fonts-noto-color-emoji \
+    && rm -rf /var/lib/apt/lists/*
+
+# FUSE в контейнері немає — просимо AppImage розпакуватися й запуститися без неї.
+ENV APPIMAGE_EXTRACT_AND_RUN=1
+
+COPY linux/check_appimage.sh /check.sh
+CMD ["/bin/bash", "/check.sh"]

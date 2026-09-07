@@ -26,7 +26,38 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         libatk-bridge2.0-0 libxcb-cursor0 libxcb-icccm4 libxcb-image0 \
         libxcb-keysyms1 libxcb-randr0 libxcb-render-util0 libxcb-shape0 \
         libxcb-xinerama0 libasound2 \
+        g++ make cmake git patch ca-certificates pkg-config \
+        libfreetype-dev libfontconfig1-dev libx11-dev libxext-dev \
+        fonts-noto-core fonts-noto-color-emoji \
+        file desktop-file-utils wget \
     && rm -rf /var/lib/apt/lists/*
+
+# Нативний рендер чату збирається ТУТ, а не в образі native/: там Debian
+# bookworm із glibc 2.36, а зібране на новішій glibc не запуститься на
+# старішій. Уся програма орієнтується на 22.04, отже й рендер має бути
+# зібраний на ній — інакше архів виглядав би готовим, а на 22.04 рендер
+# мовчки не стартував би, і чат лишився б порожнім.
+#
+# Окремим шаром і ДО requirements: правка нашого коду не має перезбирати
+# Blend2D (а це хвилини).
+# CMake з 22.04 — 3.22, а Blend2D вимагає 3.24. Беремо колесо з pip: тягти
+# сторонній APT-репозиторій заради однієї програми ні до чого, а версія з
+# колеса та сама офіційна.
+RUN python3 -m pip install --no-cache-dir "cmake>=3.28"  && cmake --version | head -1
+
+ENV TPL=/tpl
+COPY native/thirdparty_linux.sh /tmp/thirdparty_linux.sh
+COPY native/patches /tmp/patches
+RUN sh /tmp/thirdparty_linux.sh $TPL /tmp/patches
+
+# appimagetool — сам AppImage; усередині контейнера FUSE немає, тож просимо
+# його розпакуватися й запуститися без неї.
+ENV APPIMAGE_EXTRACT_AND_RUN=1
+# AppImageKit заархівовано, інструмент переїхав у AppImage/appimagetool —
+# старе посилання на реліз 13 віддає 404.
+RUN wget -qO /usr/local/bin/appimagetool \
+      https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-x86_64.AppImage \
+ && chmod +x /usr/local/bin/appimagetool
 
 WORKDIR /src
 COPY requirements.txt /src/requirements.txt

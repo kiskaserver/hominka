@@ -82,13 +82,13 @@ def run(cmd, **kw):
 
 
 def build_linux(version: str) -> str:
-    """Збирає Linux-версію в контейнері й повертає шлях до архіву.
+    """Збирає Linux-версію в контейнері й повертає шлях до AppImage.
 
     Робиться в тому ж випуску, що й Windows, і за замовчуванням — саме щоб
     версії не розходилися. Розійдуться вони тихо: людина на Linux просто
     лишиться на старій, не знаючи, що вийшла нова.
     """
-    out = os.path.join(DIST, "Hominka-%s-linux64.zip" % version)
+    out = os.path.join(DIST, "Hominka-%s-linux64.AppImage" % version)
     run(["docker", "build", "-q", "-t", "hominka-linux", "-f", "linux/Dockerfile", "."], cwd=HERE)
     run(["docker", "run", "--rm", "-v", "%s:/src" % HERE.replace("\\", "/"), "hominka-linux"], cwd=HERE)
     if not os.path.isfile(out):
@@ -309,7 +309,8 @@ def main():
     ap.add_argument("--no-native", action="store_true",
                     help="не вкладати інжектор навіть у тестовий канал")
     ap.add_argument("--linux-zip", default="",
-                    help="готовий архів для Linux; за замовчуванням збираємо самі в контейнері")
+                    help="готовий AppImage для Linux; за замовчуванням збираємо "
+                         "самі в контейнері (назва ключа лишилася від часів zip)")
     ap.add_argument("--no-linux", action="store_true",
                     help="випустити без Linux-збірки (версії розійдуться — лише якщо інакше ніяк)")
     ap.add_argument("--reuse", action="store_true",
