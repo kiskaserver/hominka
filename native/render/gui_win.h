@@ -29,7 +29,11 @@ class GuiWindow {
 public:
     ~GuiWindow();
 
-    bool create(const wchar_t* cls, const wchar_t* title, int w, int h);
+    // resizable — рамка, за яку вікно тягнеться (редакторові теми це треба,
+    // панелі налаштувань — ні: її висоту задає сам вміст).
+    // mono — довантажити моноширинний шрифт для коду.
+    bool create(const wchar_t* cls, const wchar_t* title, int w, int h,
+                bool resizable = false, bool mono = false);
     void destroy();
 
     // Показує вікно поруч із прямокутником anchor (вікном чату), не вилазячи
@@ -62,10 +66,12 @@ public:
     // Знімок того, що зараз у задньому буфері. Потрібен тому ж, чому й у вікна
     // чату: панель прихована від захоплення екрана, і звичайний скриншот її не
     // бачить — перевірити вигляд інакше нічим.
-    bool capture(std::vector<uint8_t>* bgra);
+    // Розмір повертає сам: у вікна з рамкою клієнтська частина менша за саме
+    // вікно, і читати буфер за розміром вікна означає вийти за його межі.
+    bool capture(std::vector<uint8_t>* bgra, int* w, int* h);
 
 private:
-    bool init_gfx();
+    bool init_gfx(bool mono);
     void release_rtv();
     bool ensure_size(int w, int h);
     static LRESULT CALLBACK wnd_proc(HWND h, UINT m, WPARAM w, LPARAM l);

@@ -23,6 +23,8 @@
 
 #include "look.h"
 
+struct ImGuiContext;
+
 namespace hominka {
 
 // Look і ChromeEvents — спільні з Linux-рамкою (look.h): набір значень і
@@ -58,6 +60,10 @@ public:
 
 private:
     bool ready_ = false;
+    // Свій контекст ImGui. У процесі їх тепер троє (рамка чату, налаштування,
+    // редактор теми), і кожен виклик ImGui треба робити саме у своєму: інакше
+    // «згорни рамку» згортає чуже вікно, а те падає на найближчому кадрі.
+    ImGuiContext* ctx_ = nullptr;
     bool hovered_ = false;
     POINT mouse_ = {0, 0};        // курсор у координатах вікна
     // Перетягування за смужку: тримаємо, звідки взялися, щоб вікно не

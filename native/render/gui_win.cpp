@@ -50,7 +50,8 @@ LRESULT CALLBACK GuiWindow::wnd_proc(HWND h, UINT m, WPARAM w, LPARAM l) {
     return DefWindowProcW(h, m, w, l);
 }
 
-bool GuiWindow::create(const wchar_t* cls, const wchar_t* title, int w, int h) {
+bool GuiWindow::create(const wchar_t* cls, const wchar_t* title, int w, int h,
+                       bool resizable, bool mono) {
     HINSTANCE inst = GetModuleHandleW(nullptr);
     WNDCLASSEXW wc = {sizeof(wc)};
     wc.lpfnWndProc = wnd_proc;
@@ -64,10 +65,23 @@ bool GuiWindow::create(const wchar_t* cls, const wchar_t* title, int w, int h) {
     // Без рамки: заголовок і хрестик малюємо самі — так само, як це робила
     // Qt-панель, і так вікно виглядає однією річчю з чатом, а не гостем із
     // системного оформлення.
-    hwnd_ = CreateWindowExW(WS_EX_TOOLWINDOW | WS_EX_TOPMOST, cls, title, WS_POPUP,
+    // WS_THICKFRAME без заголовка — це саме «рамка, за яку тягнуть»: розміром
+    // керує система, а виглядом вікна далі керуємо ми.
+    hwnd_ = CreateWindowExW(WS_EX_TOOLWINDOW | WS_EX_TOPMOST, cls, title,
+                            WS_POPUP | (resizable ? WS_THICKFRAME : 0),
                             100, 100, w, h, nullptr, nullptr, inst, nullptr);
     if (!hwnd_) return false;
     SetWindowLongPtrW(hwnd_, GWLP_USERDATA, (LONG_PTR)this);
+    // Далі всюди йдеться про КЛІЄНТСЬКУ частину: саме її розкладає ImGui і саме
+    // такий свопчейн робить DXGI. У вікна з рамкою вона менша за саме вікно, і
+    // сплутати їх означає малювати повз екран, а читати — повз буфер.
+    {
+        RECT rc = {0, 0, 0, 0};
+        if (GetClientRect(hwnd_, &rc)) {
+            width_ = rc.right - rc.left;
+            height_ = rc.bottom - rc.top;
+        }
+    }
     // OBS не бачить і вікно налаштувань: показувати глядачам, як крутять
     // повзунки, ні до чого.
     SetWindowDisplayAffinity(hwnd_, WDA_EXCLUDEFROMCAPTURE);
@@ -78,10 +92,10 @@ bool GuiWindow::create(const wchar_t* cls, const wchar_t* title, int w, int h) {
         DwmSetWindowAttribute(hwnd_, 33 /*DWMWA_WINDOW_CORNER_PREFERENCE*/,
                               &kRound, sizeof kRound);
     }
-    return init_gfx();
+    return init_gfx(mono);
 }
 
-bool GuiWindow::init_gfx() {
+bool GuiWindow::init_gfx(bool mono) {
     DXGI_SWAP_CHAIN_DESC sd = {};
     sd.BufferCount = 2;
     sd.BufferDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
@@ -112,6 +126,7 @@ bool GuiWindow::init_gfx() {
     io.IniFilename = nullptr;      // оверлей не лишає файлів там, звідки його запустили
     io.LogFilename = nullptr;
     load_ui_font(16.0f);
+    if (mono) load_mono_font(15.0f);
     settings_style();
     const bool ok = ImGui_ImplWin32_Init(hwnd_) && ImGui_ImplDX11_Init(dev_, ctx_);
     ImGui::SetCurrentContext(prev);
@@ -217,14 +232,18 @@ void GuiWindow::present() {
     if (swap_) swap_->Present(1, 0);
 }
 
-bool GuiWindow::capture(std::vector<uint8_t>* bgra) {
-    if (!swap_ || !dev_ || !ctx_ || width_ <= 0 || height_ <= 0) return false;
+bool GuiWindow::capture(std::vector<uint8_t>* bgra, int* out_w, int* out_h) {
+    if (!swap_ || !dev_ || !ctx_) return false;
     ID3D11Texture2D* back = nullptr;
     if (FAILED(swap_->GetBuffer(0, __uuidof(ID3D11Texture2D), (void**)&back)) || !back)
         return false;
 
     D3D11_TEXTURE2D_DESC desc = {};
     back->GetDesc(&desc);
+    // Розмір беремо з САМОГО буфера, а не з нашого уявлення про вікно.
+    const int bw = (int)desc.Width, bh = (int)desc.Height;
+    *out_w = bw;
+    *out_h = bh;
     desc.Usage = D3D11_USAGE_STAGING;
     desc.BindFlags = 0;
     desc.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
@@ -236,13 +255,13 @@ bool GuiWindow::capture(std::vector<uint8_t>* bgra) {
         ctx_->CopyResource(staging, back);
         D3D11_MAPPED_SUBRESOURCE m = {};
         if (SUCCEEDED(ctx_->Map(staging, 0, D3D11_MAP_READ, 0, &m))) {
-            bgra->assign((size_t)width_ * height_ * 4, 0);
-            for (int y = 0; y < height_; ++y) {
+            bgra->assign((size_t)bw * bh * 4, 0);
+            for (int y = 0; y < bh; ++y) {
                 const uint8_t* src = (const uint8_t*)m.pData + (size_t)y * m.RowPitch;
-                uint8_t* dst = bgra->data() + (size_t)y * width_ * 4;
+                uint8_t* dst = bgra->data() + (size_t)y * bw * 4;
                 // Буфер тут RGBA (на відміну від вікна чату) — переставляємо
                 // канали, бо PNG ми пишемо як BGRA.
-                for (int x = 0; x < width_; ++x) {
+                for (int x = 0; x < bw; ++x) {
                     dst[x * 4 + 0] = src[x * 4 + 2];
                     dst[x * 4 + 1] = src[x * 4 + 1];
                     dst[x * 4 + 2] = src[x * 4 + 0];

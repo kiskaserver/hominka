@@ -32,6 +32,7 @@ struct SettingsEvents {
     bool sources_changed = false;  // канали інші — перепідключитися
     bool look_changed = false;     // вигляд вікна чату треба оновити
     bool close = false;
+    bool css_editor = false;       // відкрити редактор теми
     bool title_active = false;     // тягнуть за заголовок (вікно рухає платформа)
     int content_height = 0;        // скільки насправді треба висоти
 };

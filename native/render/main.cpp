@@ -41,6 +41,8 @@
 #include "chatnet.h"
 #include "chrome.h"
 #include "config.h"
+#include "csslint.h"
+#include "cssedit_ui.h"
 #include "container_d2d.h"
 #include "feed.h"
 #include "frame_writer.h"
@@ -50,6 +52,7 @@
 #include "ipc.h"
 #include "nettest.h"
 #include "page_assets.h"
+#include "samples.h"
 #include "settings_ui.h"
 
 using json = nlohmann::json;
@@ -289,12 +292,13 @@ bool dump_window_png(DCompWindow* win, const wchar_t* path) {
 
 bool dump_gui_png(GuiWindow* gui, const wchar_t* path) {
     std::vector<uint8_t> px;
-    if (!gui->capture(&px)) return false;
+    int w = 0, h = 0;
+    if (!gui->capture(&px, &w, &h)) return false;
     IWICImagingFactory* wic = nullptr;
     if (FAILED(CoCreateInstance(CLSID_WICImagingFactory, nullptr, CLSCTX_INPROC_SERVER,
                                 IID_PPV_ARGS(&wic))))
         return false;
-    const bool ok = save_png(wic, path, gui->width(), gui->height(), px);
+    const bool ok = save_png(wic, path, w, h, px);
     wic->Release();
     return ok;
 }
@@ -543,6 +547,8 @@ int run_overlay(DWORD parent_pid, bool standalone) {
     ImageFetch fetch;
     GuiWindow gui;
     SettingsState sstate;
+    GuiWindow css_win;
+    CssEditState cstate;
     if (standalone) {
         cfg.load();
         look = cfg.look;
@@ -553,6 +559,12 @@ int run_overlay(DWORD parent_pid, bool standalone) {
         net.apply(cfg);
         if (!gui.create(L"HominkaSettings", L"Hominka — налаштування", 360, 620))
             rlog("вікно налаштувань не створилося (лишаємося без нього)");
+        // Редактор теми — теж окреме вікно, і його можна тягнути за краї:
+        // код і довідник поруч у вузькому вікні не вміщаються.
+        if (!css_win.create(L"HominkaCssEditor", L"Hominka — свій CSS", 1080, 700,
+                            /*resizable=*/true, /*mono=*/true))
+            rlog("вікно редактора теми не створилося");
+        cstate.text = cfg.custom_css;
         win.move_to(cfg.x, cfg.y);
         // Замок вимикають і з клавіатури: вікно чату фокусу не бере, тож
         // єдиний спосіб — глобальне сполучення. Те саме, що було в Python.
@@ -565,7 +577,11 @@ int run_overlay(DWORD parent_pid, bool standalone) {
     // робочому режимі.
     const char* shot_prefix = standalone ? getenv("HOMINKA_UI_SHOT") : nullptr;
     const int64_t started = now_ms();
-    bool shot_done = false;
+    bool shot_settings = false;
+    // Редактор знімаємо двічі: зі списком проблем і з довідником. Довідник —
+    // це кілька сотень рядків згенерованого тексту, і подивитися на нього
+    // очима варто хоча б раз.
+    int css_shots = 0;
 
     int want_w = 430, want_h = 560;
     if (standalone) { want_w = cfg.w; want_h = cfg.h; feed.set_width(want_w); }
@@ -773,18 +789,16 @@ int run_overlay(DWORD parent_pid, bool standalone) {
                 // Знімаємо не одразу після показу: панель просить у системи
                 // свою висоту, і застосується це лише наступним кадром.
                 const bool want_shot =
-                    shot_prefix && !shot_done && now_ms() - started > 9500;
+                    shot_prefix && !shot_settings && now_ms() - started > 9500;
                 gui.end(!want_shot);
                 if (want_shot) {
-                    shot_done = true;
+                    shot_settings = true;
                     wchar_t path[512];
                     _snwprintf(path, 512, L"%hs-settings.png", shot_prefix);
                     rlog("знімок налаштувань: %d", (int)dump_gui_png(&gui, path));
                     gui.present();
                     _snwprintf(path, 512, L"%hs-chat.png", shot_prefix);
                     rlog("знімок чату: %d", (int)dump_window_png(&win, path));
-                    chrome.shutdown();
-                    return 0;
                 }
                 gui.drag(sev.title_active);
                 if (sev.content_height > 0) gui.want_height(sev.content_height);
@@ -797,7 +811,42 @@ int run_overlay(DWORD parent_pid, bool standalone) {
                     feed.set_zoom(look.zoom);
                 }
                 if (sev.sources_changed) net.apply(cfg);
+                if (sev.css_editor) css_win.show_beside(win.screen_rect());
                 if (sev.changed) cfg.save();
+            }
+
+            // Редактор теми. Правка лягає прямо в стрічку — саме тому окремого
+            // «попереднього перегляду» тут і немає: людина бачить не схожу
+            // картинку, а точно те, що побачить глядач.
+            if (css_win.begin()) {
+                const CssEditEvents cev2 =
+                    draw_css_editor(&cstate, css_win.width(), css_win.height(), now_ms());
+                const bool want_shot =
+                    shot_prefix && css_shots < 2 && now_ms() - started > 9500;
+                css_win.end(!want_shot);
+                if (want_shot) {
+                    wchar_t path[512];
+                    _snwprintf(path, 512, L"%hs-css%d.png", shot_prefix, css_shots + 1);
+                    rlog("знімок редактора %d: %d", css_shots + 1,
+                         (int)dump_gui_png(&css_win, path));
+                    css_win.present();
+                    cstate.tab = 2;               // наступний — довідник
+                    ++css_shots;
+                }
+                css_win.drag(cev2.title_active);
+                if (cev2.close) css_win.hide();
+                if (cev2.apply) {
+                    cfg.custom_css = cstate.text;
+                    feed.set_css(cfg.custom_css);
+                    cfg.save();
+                }
+                if (cev2.samples) {
+                    const int64_t t0 = now_ms();
+                    for (const ChatMessage& m : demo_messages()) {
+                        want_images(m, &images, &fetch);
+                        feed.add(m, t0);
+                    }
+                }
             }
             // Вікно посунули або розтягнули — запам'ятовуємо, де воно тепер.
             const RECT r = win.screen_rect();
@@ -811,9 +860,15 @@ int run_overlay(DWORD parent_pid, bool standalone) {
             }
             cfg.flush();
 
-            // Панель ще не показана — показуємо: знімок робиться з неї.
-            if (shot_prefix && !shot_done && !gui.visible() && now_ms() - started > 8000)
-                gui.show_beside(win.screen_rect());
+            // Вікна ще не показані — показуємо: знімок робиться саме з них.
+            if (shot_prefix && now_ms() - started > 8000) {
+                if (!gui.visible()) gui.show_beside(win.screen_rect());
+                if (!css_win.visible()) css_win.show_beside(win.screen_rect());
+            }
+            if (shot_prefix && shot_settings && css_shots >= 2) {
+                chrome.shutdown();
+                return 0;
+            }
         }
 
         // Гра в повноекранному сидить у вищому z-band — тримаємось зверху, але
@@ -1045,6 +1100,23 @@ int selftest(const wchar_t* in_path, const wchar_t* out_path, int width) {
     return 0;
 }
 
+// Перевірка теми з командного рядка: те саме, що показує редактор, але у
+// вигляді, придатному для перевірки скриптом. Розбір CSS тут свій і ручний —
+// саме такі речі й ламаються тихо, тож пастки на них ганяються окремо
+// (csslint_smoke.py).
+int css_check(const wchar_t* path) {
+    const std::string text = read_file(path);
+    if (text.empty()) {
+        fprintf(stderr, "порожній або не прочитався файл\n");
+        return 2;
+    }
+    for (const CssProblem& p : validate_css(text))
+        printf("error %d %s\n", p.line, p.text.c_str());
+    for (const CssProblem& p : lint_css(text))
+        printf("warn %d %s\n", p.line, p.text.c_str());
+    return 0;
+}
+
 // Найпростіша перевірка: розібрати тривіальну сторінку НАШИМ контейнером.
 // Ділить навпіл: якщо падає і тут — річ у контейнері, а не в розмітці чату.
 int probe_litehtml() {
@@ -1076,6 +1148,7 @@ void usage() {
              L"  hominka-render-x64.exe --run <pid Hominka>\n"
              L"  hominka-render-x64.exe --preview <pid Hominka>\n"
              L"  hominka-render-x64.exe --nettest <площадка> <канал> [сек]\n"
+             L"  hominka-render-x64.exe --csslint <тема.css>\n"
              L"  hominka-render-x64.exe --probe\n");
 }
 
@@ -1112,6 +1185,8 @@ int wmain(int argc, wchar_t** argv) {
         rc = hominka::run_preview((DWORD)_wtoi(argv[2]));
     } else if (argc >= 3 && !wcscmp(argv[1], L"--run")) {
         rc = hominka::run_overlay((DWORD)_wtoi(argv[2]), false);
+    } else if (argc >= 3 && !wcscmp(argv[1], L"--csslint")) {
+        rc = hominka::css_check(argv[2]);
     } else if (argc >= 2 && !wcscmp(argv[1], L"--app")) {
         rc = hominka::run_overlay(0, true);
     } else if (argc >= 4 && !wcscmp(argv[1], L"--selftest")) {

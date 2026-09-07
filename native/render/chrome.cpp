@@ -32,9 +32,17 @@ D2D1_COLOR_F d2d_color(float r, float g, float b, float a) {
 
 }  // namespace
 
+namespace {
+// Контекст рамки — окремо, для статичного обробника повідомлень: «себе» він не
+// має, а повідомлення вікна чату мусять потрапити саме сюди.
+ImGuiContext* g_chrome_ctx = nullptr;
+}  // namespace
+
 bool Chrome::init(HWND hwnd, ID3D11Device* dev, ID3D11DeviceContext* ctx) {
     IMGUI_CHECKVERSION();
-    ImGui::CreateContext();
+    ctx_ = ImGui::CreateContext();
+    g_chrome_ctx = ctx_;
+    ImGui::SetCurrentContext(ctx_);
     ImGuiIO& io = ImGui::GetIO();
     // Ані ini, ані log: оверлей не має лишати файлів у теці, звідки його
     // запустили.
@@ -64,23 +72,33 @@ bool Chrome::init(HWND hwnd, ID3D11Device* dev, ID3D11DeviceContext* ctx) {
 
 void Chrome::shutdown() {
     if (!ready_) return;
+    ImGui::SetCurrentContext(ctx_);
     ImGui_ImplDX11_Shutdown();
     ImGui_ImplWin32_Shutdown();
-    ImGui::DestroyContext();
+    ImGui::DestroyContext(ctx_);
+    ctx_ = nullptr;
+    g_chrome_ctx = nullptr;
     ready_ = false;
 }
 
 LRESULT Chrome::msg_hook(HWND h, UINT m, WPARAM w, LPARAM l, bool* handled) {
     *handled = false;
-    if (!ImGui::GetCurrentContext()) return 0;
+    if (!g_chrome_ctx) return 0;
+    ImGuiContext* prev = ImGui::GetCurrentContext();
+    ImGui::SetCurrentContext(g_chrome_ctx);
     const LRESULT r = ImGui_ImplWin32_WndProcHandler(h, m, w, l);
+    ImGui::SetCurrentContext(prev);
     if (r) *handled = true;
     return r;
 }
 
 bool Chrome::wants_mouse() const {
-    if (!ready_ || !ImGui::GetCurrentContext()) return false;
-    return ImGui::GetIO().WantCaptureMouse || dragging_ || resizing_;
+    if (!ready_ || !ctx_) return false;
+    ImGuiContext* prev = ImGui::GetCurrentContext();
+    ImGui::SetCurrentContext(ctx_);
+    const bool want = ImGui::GetIO().WantCaptureMouse;
+    ImGui::SetCurrentContext(prev);
+    return want || dragging_ || resizing_;
 }
 
 void Chrome::draw_backdrop(ID2D1DeviceContext* d2d, int w, int h, const Look& look) const {
@@ -130,6 +148,7 @@ ChromeEvents Chrome::draw_controls(int w, int h, Look* look, HWND hwnd) {
     ChromeEvents ev;
     if (!ready_) return ev;
 
+    ImGui::SetCurrentContext(ctx_);
     ImGui_ImplDX11_NewFrame();
     ImGui_ImplWin32_NewFrame();
 

@@ -108,6 +108,10 @@ x86_64-w64-mingw32-g++-posix $COMMON -municode -std=c++17 \
     "$SRC/render/uifont.cpp" \
     "$SRC/render/gui_win.cpp" \
     "$SRC/render/settings_ui.cpp" \
+    "$SRC/render/cssedit_ui.cpp" \
+    "$SRC/render/csslint.cpp" \
+    "$SRC/render/cssref.cpp" \
+    "$SRC/render/samples.cpp" \
     "$SRC/render/src_youtube.cpp" \
     "$SRC/render/badges.cpp" \
     "$SRC/render/nettest.cpp" \
@@ -139,6 +143,10 @@ x86_64-w64-mingw32-g++-posix -O1 -g -static -static-libgcc -static-libstdc++ \
     "$SRC/render/uifont.cpp" \
     "$SRC/render/gui_win.cpp" \
     "$SRC/render/settings_ui.cpp" \
+    "$SRC/render/cssedit_ui.cpp" \
+    "$SRC/render/csslint.cpp" \
+    "$SRC/render/cssref.cpp" \
+    "$SRC/render/samples.cpp" \
     "$SRC/render/src_youtube.cpp" \
     "$SRC/render/badges.cpp" \
     "$SRC/render/nettest.cpp" \

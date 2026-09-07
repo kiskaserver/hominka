@@ -323,11 +323,10 @@ SettingsEvents draw_settings(SettingsState* st, Config* cfg, const std::string& 
         ImGui::Dummy(ImVec2(0, 4));
         if (toggle("Тримати вікно поверх усіх", &cfg->keep_top)) ev.changed = true;
 
-        // Редактора CSS тут поки немає — і кнопки, яка нічого не робить, теж:
-        // обіцянка, за якою нічого немає, гірша за її відсутність. Тему поки
-        // беремо з config.json, як і раніше.
-        ImGui::Dummy(ImVec2(0, 4));
-        dim_text("Свій CSS чату береться з config.json (customCss).");
+        // Свій CSS — окремим вікном: у полі на три сантиметри код не пишуть.
+        ImGui::Dummy(ImVec2(0, 6));
+        if (ghost("Свій CSS для чату…", ImGui::GetContentRegionAvail().x - CARD_PAD))
+            ev.css_editor = true;
         card.end();
     }
 

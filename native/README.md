@@ -91,7 +91,21 @@ litehtml замість Chromium узято заради ТЕМ: сторінк�
   спільне зі старим `dcomp_overlay.exe`.
 - `frame_writer.h` — кадр у спільну память для overlay.dll (лише коли інжект
   увімкнено).
-- `main.cpp` — три режими: `--selftest`, `--run`, `--probe`.
+- `net_http.{h,cpp}`, `src_twitch/src_kick/src_youtube.{h,cpp}`, `chatnet.{h,cpp}`,
+  `emotes.{h,cpp}`, `badges.{h,cpp}`, `imgfetch.{h,cpp}` — мережа: чат трьох
+  площадок, сторонні емоути, значки й качання картинок. Python для цього більше
+  не потрібен.
+- `config.{h,cpp}` — той самий `config.json`, що й у Python: те саме місце, ті
+  самі ключі, чужі ключі не переписуються.
+- `gui_win.{h,cpp}` — звичайне вікно з ImGui (панель налаштувань і редактор
+  теми). Окреме, бо вікно чату створене з `WS_EX_NOACTIVATE` і клавіатури не
+  отримує взагалі.
+- `settings_ui.{h,cpp}` — панель налаштувань; `cssedit_ui.{h,cpp}` — редактор
+  теми; `csslint.{h,cpp}` — помилки CSS і «рушій цього не вміє»;
+  `cssref.cpp` — довідник класів, згенерований `make_cssref.py` із
+  `hominka/cssui/catalog.py`.
+- `main.cpp` — режими: `--app` (програма сама собі), `--selftest`, `--run`,
+  `--preview`, `--nettest`, `--csslint`, `--probe`.
 
 Перевірка (саме вона й ділить «працює» від «схоже»):
 
@@ -158,6 +172,28 @@ python native/render/compare.py native/render/ref.png native/render/out.png nati
 знати і колір, і розмиття. Так само зроблено з `transform`. Обмеження: тінь не
 малюється для `display: inline` — litehtml там не проходить через
 `draw_background`.
+
+### Самостійний режим
+
+`--app` — програма без Python зовсім: читає свій `config.json`, під'єднується
+до Twitch, Kick і YouTube сама, качає емоути й значки, показує вікно чату,
+панель налаштувань і редактор теми.
+
+```powershell
+native/dist/hominka-render-x64.exe --app
+```
+
+Обидва вікна інтерфейсу приховані від захоплення екрана, тож звичайним
+скриншотом їх не перевіриш. `HOMINKA_UI_SHOT=<префікс>` знімає їх просто з
+заднього буфера (до `Present`, інакше в flip-моделі туди потрапить не той
+кадр) і виходить: `<префікс>-chat.png`, `-settings.png`, `-css1.png`, `-css2.png`.
+
+Перевірка розбору CSS — окремо, бо він свій і ручний:
+
+```powershell
+native/dist/hominka-render-x64.exe --csslint тема.css
+python native/render/csslint_smoke.py
+```
 
 ### Робочий режим
 

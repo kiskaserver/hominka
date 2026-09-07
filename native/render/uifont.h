@@ -10,9 +10,17 @@
 // дописуємо поіменно: інакше на їх місці порожні прямокутники.
 #pragma once
 
+struct ImFont;
+
 namespace hominka {
 
 // Кличеться після ImGui::CreateContext() і до першого кадру.
 void load_ui_font(float size);
+
+// Моноширинний, під код. Окремо, бо потрібен лише редакторові CSS: у чужому
+// коді пропорційний шрифт зводить нанівець будь-яке вирівнювання.
+// Повертає nullptr, якщо не завантажували, — тоді малюємо звичайним.
+void load_mono_font(float size);
+ImFont* mono_font();
 
 }  // namespace hominka
