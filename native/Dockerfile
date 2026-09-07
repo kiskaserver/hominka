@@ -22,6 +22,14 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         ca-certificates \
         libvulkan-dev \
         glslang-tools \
+        g++ \
+        libfreetype-dev \
+        libfontconfig1-dev \
+        libx11-dev \
+        libxext-dev \
+        libxrender-dev \
+        fonts-dejavu-core \
+        fonts-noto-color-emoji \
     && rm -rf /var/lib/apt/lists/*
 
 # Сторонні бібліотеки рендера чату — ОКРЕМИМ шаром, ДО копіювання наших джерел.
@@ -36,6 +44,13 @@ ENV TP=/tp
 COPY thirdparty.sh /tmp/thirdparty.sh
 COPY patches /tmp/patches
 RUN sh /tmp/thirdparty.sh $TP /tmp/patches
+
+# Те саме, але для НАТИВНОЇ Linux-збірки рендера. Окремим шаром і після
+# віконного: правка Linux-частини не має перезбирати те, що вже зібрано під
+# Windows, і навпаки.
+ENV TPL=/tpl
+COPY thirdparty_linux.sh /tmp/thirdparty_linux.sh
+RUN sh /tmp/thirdparty_linux.sh $TPL /tmp/patches
 
 ENV SRC=/src
 COPY . /src

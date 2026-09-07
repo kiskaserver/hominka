@@ -1,0 +1,37 @@
+# Швидка перевірка Linux-збірки рендера.
+#
+# Навіщо окремо від головного Dockerfile: той збирає ВСЕ (дві розрядності
+# overlay.dll, інжектор, шар Vulkan, шейдери, рендер під Windows) і йде
+# хвилини. Тут потрібне інше — переконатися, що Linux-частина компілюється й
+# лінкується, і зробити це за секунди.
+#
+# Береться готовий hominka-native: сторонні бібліотеки в ньому вже зібрані,
+# тож новий шар — це рівно наші файли.
+#
+# Збирати ТРЕБА з кореня chat-overlay:
+#     docker build -f native/Dockerfile.linux -t hominka-lin .
+FROM hominka-native
+
+# Шрифти для дослідів із метриками: DejaVu (типовий у Debian) помітно ширший за
+# Segoe UI, і рядки через це переносяться раніше, ніж на Windows.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        fonts-liberation2 fonts-noto-core fonts-wqy-microhei \
+        xvfb x11-apps x11-utils python3-minimal python3-pip xdotool \
+        libgl1 libegl1 libxkbcommon-x11-0 libdbus-1-3 libglib2.0-0 \
+        libx11-xcb1 libxcb-glx0 libxcb-sync1 libxcb-shm0 libsm6 libice6 \
+        libxcb-cursor0 libxcb-icccm4 libxcb-keysyms1 libxcb-shape0 \
+        libxcb-randr0 libxcb-render-util0 libxcb-xinerama0 libxcb-xkb1 \
+    && rm -rf /var/lib/apt/lists/*
+
+# Контекст збірки — корінь chat-overlay, а не native: сюди треба покласти й
+# hominka/, щоб перевірити СПРАВЖНІЙ Python-клієнт, а не його переказ.
+# PySide6 цілком — так само, як записано в requirements.txt. Спершу стояв
+# лише -Essentials (без браузера: на Linux чат малює нативний рендер), але
+# програмі потрібен ще й QtWebSockets — ним працює чат Kick, — а це Add-on.
+RUN pip3 install --no-cache-dir --break-system-packages "PySide6==6.8.1"
+
+COPY native/render /src/render
+COPY native/common /src/common
+COPY native/build_linux.sh /src/build_linux.sh
+COPY hominka /src/hominka
+RUN sh /src/build_linux.sh /out
