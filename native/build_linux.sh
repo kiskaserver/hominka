@@ -28,9 +28,11 @@ g++ $COMMON $INC \
     "$SRC/render/container_bl.cpp" \
     "$SRC/render/fontstore.cpp" \
     "$SRC/render/cssbits.cpp" \
-    "$SRC/render/net_probe.cpp" \
-    "$SRC/render/net_http.cpp" \
+    "$SRC/render/src_twitch.cpp" \
     "$SRC/render/badges.cpp" \
+    "$SRC/render/nettest.cpp" \
+    "$SRC/render/src_kick.cpp" \
+    "$SRC/render/net_http.cpp" \
     "$SRC/render/emotes.cpp" \
     "$SRC/render/chat_doc.cpp" \
     "$SRC/render/imgcache.cpp" \

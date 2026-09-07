@@ -44,7 +44,7 @@
 #include "frame_writer.h"
 #include "imgcache.h"
 #include "ipc.h"
-#include "net_probe.h"
+#include "nettest.h"
 #include "page_assets.h"
 
 using json = nlohmann::json;
@@ -856,21 +856,6 @@ int selftest(const wchar_t* in_path, const wchar_t* out_path, int width) {
     return 0;
 }
 
-// Перша перевірка мережі в C++ — див. net_probe.h.
-int nettest(const std::string& channel, int seconds) {
-    printf("під'єднуюся до #%s на %d с…\n", channel.c_str(), seconds);
-    const int n = net_probe_twitch(channel, seconds, [](const ProbeMessage& m) {
-        printf("  %-20s %s\n", m.name.c_str(), m.text.c_str());
-        fflush(stdout);
-    });
-    if (n < 0) {
-        fprintf(stderr, "не під'єдналося\n");
-        return 1;
-    }
-    printf("прочитано повідомлень: %d\n", n);
-    return 0;
-}
-
 // Найпростіша перевірка: розібрати тривіальну сторінку НАШИМ контейнером.
 // Ділить навпіл: якщо падає і тут — річ у контейнері, а не в розмітці чату.
 int probe_litehtml() {
@@ -900,6 +885,7 @@ void usage() {
              L"  hominka-render-x64.exe --selftest <вхід.json> <вихід.png> [--width N]\n"
              L"  hominka-render-x64.exe --run <pid Hominka>\n"
              L"  hominka-render-x64.exe --preview <pid Hominka>\n"
+             L"  hominka-render-x64.exe --nettest <площадка> <канал> [сек]\n"
              L"  hominka-render-x64.exe --probe\n");
 }
 
@@ -926,11 +912,12 @@ int wmain(int argc, wchar_t** argv) {
     if (argc >= 2 && !wcscmp(argv[1], L"--probe")) {
         hominka::g_draw_trace = true;
         rc = hominka::probe_litehtml();
-    } else if (argc >= 3 && !wcscmp(argv[1], L"--nettest")) {
-        // Ім'я каналу з широких символів у вузькі: воно завжди латиниця.
-        char ch[128] = {0};
-        WideCharToMultiByte(CP_UTF8, 0, argv[2], -1, ch, sizeof ch - 1, nullptr, nullptr);
-        rc = hominka::nettest(ch, argc >= 4 ? _wtoi(argv[3]) : 20);
+    } else if (argc >= 4 && !wcscmp(argv[1], L"--nettest")) {
+        // Площадка й канал із широких символів у вузькі: це завжди латиниця.
+        char plat[32] = {0}, ch[128] = {0};
+        WideCharToMultiByte(CP_UTF8, 0, argv[2], -1, plat, sizeof plat - 1, nullptr, nullptr);
+        WideCharToMultiByte(CP_UTF8, 0, argv[3], -1, ch, sizeof ch - 1, nullptr, nullptr);
+        rc = hominka::nettest(plat, ch, argc >= 5 ? _wtoi(argv[4]) : 20);
     } else if (argc >= 3 && !wcscmp(argv[1], L"--preview")) {
         rc = hominka::run_preview((DWORD)_wtoi(argv[2]));
     } else if (argc >= 3 && !wcscmp(argv[1], L"--run")) {
