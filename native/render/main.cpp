@@ -38,14 +38,19 @@
 
 #include "../common/dcomp_window.h"
 #include "chat_doc.h"
+#include "chatnet.h"
 #include "chrome.h"
+#include "config.h"
 #include "container_d2d.h"
 #include "feed.h"
 #include "frame_writer.h"
+#include "gui_win.h"
 #include "imgcache.h"
+#include "imgfetch.h"
 #include "ipc.h"
 #include "nettest.h"
 #include "page_assets.h"
+#include "settings_ui.h"
 
 using json = nlohmann::json;
 
@@ -282,6 +287,18 @@ bool dump_window_png(DCompWindow* win, const wchar_t* path) {
     return ok;
 }
 
+bool dump_gui_png(GuiWindow* gui, const wchar_t* path) {
+    std::vector<uint8_t> px;
+    if (!gui->capture(&px)) return false;
+    IWICImagingFactory* wic = nullptr;
+    if (FAILED(CoCreateInstance(CLSID_WICImagingFactory, nullptr, CLSCTX_INPROC_SERVER,
+                                IID_PPV_ARGS(&wic))))
+        return false;
+    const bool ok = save_png(wic, path, gui->width(), gui->height(), px);
+    wic->Release();
+    return ok;
+}
+
 // --- робочий режим ----------------------------------------------------------
 
 // Застосовує один кадр із каналу. Повертає true, якщо картинку варто
@@ -417,7 +434,59 @@ void report_chrome(IpcServer* ipc, const ChromeEvents& ev, const Look& look,
     }
 }
 
-int run_overlay(DWORD parent_pid) {
+// --- самостійний режим ------------------------------------------------------
+//
+// «Самостійний» означає рівно одне: Python не потрібен. Канали, картинки й
+// налаштування програма веде сама, а вікно налаштувань — це друге вікно того
+// самого процесу. Старий режим (--run <pid>) поки лишається поруч: доки все не
+// перевірено в бою, ламати робочий шлях зарано.
+
+// Картинки, яких ще немає, — у чергу качання. Значки й емоути приходять
+// адресами, а не байтами, тож поки їх немає, рядок показує свій запасний
+// текст — і перемальовується сам, щойно картинка приїде.
+void want_images(const ChatMessage& m, ImageCache* images, ImageFetch* fetch) {
+    for (const auto& e : m.emotes)
+        if (!e.url.empty() && !images->known(e.url)) fetch->want(e.url);
+    for (const auto& b : m.badge_icons)
+        if (!b.url.empty() && !images->known(b.url)) fetch->want(b.url);
+}
+
+// Події з площадок → стрічка.
+bool pump_chat(ChatNet* net, Feed* feed, ImageCache* images, ImageFetch* fetch, int64_t t) {
+    bool changed = false;
+    ChatEvent ev;
+    // Не більше жмені за кадр: на бурхливому каналі суцільний потік інакше
+    // з'їв би кадр цілком, і чат перестав би малюватися взагалі.
+    for (int i = 0; i < 32 && net->take(&ev); ++i) {
+        switch (ev.type) {
+        case ChatEvent::Type::Message:
+            want_images(ev.msg, images, fetch);
+            feed->add(ev.msg, t);
+            break;
+        case ChatEvent::Type::Delete: feed->remove_id(ev.id); break;
+        case ChatEvent::Type::Purge: feed->purge_nick(ev.nick); break;
+        }
+        changed = true;
+    }
+    return changed;
+}
+
+// Докачані картинки → кеш. Розбираємо саме тут, у потоці малювання: кеш
+// спільний із розкладкою, і робити його потокобезпечним заради кількох
+// емоутів на секунду означало б платити блокуванням у найгарячішому місці.
+bool pump_images(ImageFetch* fetch, ImageCache* images, Feed* feed) {
+    bool changed = false;
+    std::string url;
+    std::vector<uint8_t> data;
+    for (int i = 0; i < 8 && fetch->take(&url, &data); ++i) {
+        images->put(url, data.data(), data.size());
+        feed->on_image_arrived(url);
+        changed = true;
+    }
+    return changed;
+}
+
+int run_overlay(DWORD parent_pid, bool standalone) {
     rlog("старт, батько pid=%lu", (unsigned long)parent_pid);
 
     // Стежимо за Hominka й виходимо, коли вона зникла (навіть якщо впала):
@@ -460,14 +529,51 @@ int run_overlay(DWORD parent_pid) {
     Look look;
 
     IpcServer ipc;
-    if (!ipc.start(parent_pid)) {
-        rlog("канал не створився — вихід");
-        return 4;
+    if (!standalone) {
+        if (!ipc.start(parent_pid)) {
+            rlog("канал не створився — вихід");
+            return 4;
+        }
+        rlog("готово, чекаю на %s", ipc.name().c_str());
     }
-    rlog("готово, чекаю на %s", ipc.name().c_str());
+
+    // Самостійний режим: налаштування, канали й картинки — наші.
+    Config cfg;
+    ChatNet net;
+    ImageFetch fetch;
+    GuiWindow gui;
+    SettingsState sstate;
+    if (standalone) {
+        cfg.load();
+        look = cfg.look;
+        feed.set_zoom(look.zoom);
+        feed.set_css(cfg.custom_css);
+        if (!cfg.layout.empty()) feed.set_layout(cfg.layout);
+        fetch.start();
+        net.apply(cfg);
+        if (!gui.create(L"HominkaSettings", L"Hominka — налаштування", 360, 620))
+            rlog("вікно налаштувань не створилося (лишаємося без нього)");
+        win.move_to(cfg.x, cfg.y);
+        // Замок вимикають і з клавіатури: вікно чату фокусу не бере, тож
+        // єдиний спосіб — глобальне сполучення. Те саме, що було в Python.
+        RegisterHotKey(nullptr, 1, MOD_CONTROL | MOD_ALT, VK_SPACE);
+        rlog("самостійний режим: %s", net.status().c_str());
+    }
+
+    // Перевірка вигляду: обидва вікна приховані від захоплення екрана, тож
+    // знімок робимо самі — і виходимо. Той самий спосіб, що й «shot» у
+    // робочому режимі.
+    const char* shot_prefix = standalone ? getenv("HOMINKA_UI_SHOT") : nullptr;
+    const int64_t started = now_ms();
+    bool shot_done = false;
 
     int want_w = 430, want_h = 560;
-    bool enabled = true, bye = false, logged_first = false, blanked = false;
+    if (standalone) { want_w = cfg.w; want_h = cfg.h; feed.set_width(want_w); }
+    // blanked у самостійному режимі починається з «так»: тоді перший же кадр
+    // намалюється, і вікно видно ще до першого повідомлення. Інакше свіжо
+    // встановлена програма не показала б узагалі нічого — і не було б на що
+    // навести, щоб дістатися налаштувань.
+    bool enabled = true, bye = false, logged_first = false, blanked = standalone;
     std::string shot_path;
     // Розмір вікна веде Python, АЛЕ поки його тягнуть за куточок — веде рука.
     // Інакше кожен «config» смикав би вікно назад під час розтягування.
@@ -484,6 +590,11 @@ int run_overlay(DWORD parent_pid) {
     for (;;) {
         while (PeekMessageW(&msg, nullptr, 0, 0, PM_REMOVE)) {
             if (msg.message == WM_QUIT) { rlog("WM_QUIT"); chrome.shutdown(); return 0; }
+            if (standalone && msg.message == WM_HOTKEY) {
+                look.locked = !look.locked;
+                cfg.look.locked = look.locked;
+                cfg.save();
+            }
             TranslateMessage(&msg);
             DispatchMessageW(&msg);
         }
@@ -493,19 +604,30 @@ int run_overlay(DWORD parent_pid) {
             return 0;
         }
 
-        frames.clear();
-        ipc.poll(&frames);
         bool changed = false;
-        for (const auto& fr : frames)
-            changed |= apply_frame(fr, &feed, &images, &look, &inject, &want_w, &want_h,
-                                   &enabled, &bye, &shot_path);
+        if (standalone) {
+            changed |= pump_chat(&net, &feed, &images, &fetch, now_ms());
+            changed |= pump_images(&fetch, &images, &feed);
+        } else {
+            frames.clear();
+            ipc.poll(&frames);
+            for (const auto& fr : frames)
+                changed |= apply_frame(fr, &feed, &images, &look, &inject, &want_w, &want_h,
+                                       &enabled, &bye, &shot_path);
+        }
         if (bye) {
             rlog("Hominka попросила завершитися");
             chrome.shutdown();
             return 0;
         }
 
-        if (!enabled || feed.size() == 0) {
+        chrome.poll_hover(win.hwnd());
+
+        // Порожня стрічка — показувати нічого. Але в самостійному режимі вікно
+        // чату це єдиний шлях до налаштувань: не малювати його зовсім означало
+        // б показати свіжо встановлену програму порожнім екраном без жодної
+        // кнопки.
+        if (!enabled || (feed.size() == 0 && !standalone)) {
             // Показувати нічого. Чистимо ОДИН раз і далі GPU не чіпаємо: саме
             // безумовний Present щокадру колись відбирав відеокарту в гри.
             if (win.shown() && !blanked) { win.present_transparent(); blanked = true; }
@@ -565,7 +687,19 @@ int run_overlay(DWORD parent_pid) {
             // Поки тягнуть — розмір веде рука; відпустили (geometry_changed) —
             // знову веде Python.
             if (chrome.wants_mouse()) user_sizing = true;
-            report_chrome(&ipc, cev, look, win, &user_sizing, &feed);
+            if (standalone) {
+                // Правда про налаштування тепер тут, а не в Python: те, що
+                // покрутили в рамці, лягає в той самий config.json.
+                if (cev.look_changed || cev.lock_changed) {
+                    feed.set_zoom(look.zoom);
+                    cfg.look = look;
+                    cfg.save();
+                }
+                if (cev.geometry_changed) user_sizing = false;
+                if (cev.open_settings) gui.show_beside(win.screen_rect());
+            } else {
+                report_chrome(&ipc, cev, look, win, &user_sizing, &feed);
+            }
 
             // Кадр для оверлея, вкладеного в гру. Читання з відеокарти
             // коштує грошей, тому робимо його ЛИШЕ коли інжект увімкнено — і
@@ -628,9 +762,64 @@ int run_overlay(DWORD parent_pid) {
         }
         inject_was_on = inject.on;
 
+        // Панель налаштувань — друге вікно того самого процесу, тож і кадр її
+        // малюється тут же, після чату.
+        if (standalone) {
+            if (gui.begin()) {
+                const SettingsEvents sev =
+                    draw_settings(&sstate, &cfg, net.status(), gui.width(), gui.height());
+                // Знімок — ДО показу: у flip-моделі після Present задній буфер
+                // уже інший, і в PNG потрапила б порожнеча.
+                // Знімаємо не одразу після показу: панель просить у системи
+                // свою висоту, і застосується це лише наступним кадром.
+                const bool want_shot =
+                    shot_prefix && !shot_done && now_ms() - started > 9500;
+                gui.end(!want_shot);
+                if (want_shot) {
+                    shot_done = true;
+                    wchar_t path[512];
+                    _snwprintf(path, 512, L"%hs-settings.png", shot_prefix);
+                    rlog("знімок налаштувань: %d", (int)dump_gui_png(&gui, path));
+                    gui.present();
+                    _snwprintf(path, 512, L"%hs-chat.png", shot_prefix);
+                    rlog("знімок чату: %d", (int)dump_window_png(&win, path));
+                    chrome.shutdown();
+                    return 0;
+                }
+                gui.drag(sev.title_active);
+                if (sev.content_height > 0) gui.want_height(sev.content_height);
+                if (sev.close) gui.hide();
+                if (sev.look_changed) {
+                    look.opacity = cfg.look.opacity;
+                    look.bg_alpha = cfg.look.bg_alpha;
+                    look.zoom = cfg.look.zoom;
+                    look.frameless = cfg.look.frameless;
+                    feed.set_zoom(look.zoom);
+                }
+                if (sev.sources_changed) net.apply(cfg);
+                if (sev.changed) cfg.save();
+            }
+            // Вікно посунули або розтягнули — запам'ятовуємо, де воно тепер.
+            const RECT r = win.screen_rect();
+            if (r.left != cfg.x || r.top != cfg.y ||
+                (int)(r.right - r.left) != cfg.w || (int)(r.bottom - r.top) != cfg.h) {
+                cfg.x = r.left;
+                cfg.y = r.top;
+                cfg.w = r.right - r.left;
+                cfg.h = r.bottom - r.top;
+                cfg.save();
+            }
+            cfg.flush();
+
+            // Панель ще не показана — показуємо: знімок робиться з неї.
+            if (shot_prefix && !shot_done && !gui.visible() && now_ms() - started > 8000)
+                gui.show_beside(win.screen_rect());
+        }
+
         // Гра в повноекранному сидить у вищому z-band — тримаємось зверху, але
-        // не щокадру: раз на ~250 мс досить.
-        if ((tick++ % 16) == 0) win.keep_topmost();
+        // не щокадру: раз на ~250 мс досить. У рідкісних старих іграх це дає
+        // мерехтіння — на цей випадок є перемикач у налаштуваннях.
+        if ((tick++ % 16) == 0 && (!standalone || cfg.keep_top)) win.keep_topmost();
         Sleep(16);
     }
 }
@@ -883,6 +1072,7 @@ void usage() {
     fwprintf(stderr,
              L"Використання:\n"
              L"  hominka-render-x64.exe --selftest <вхід.json> <вихід.png> [--width N]\n"
+             L"  hominka-render-x64.exe --app                (сам собі програма)\n"
              L"  hominka-render-x64.exe --run <pid Hominka>\n"
              L"  hominka-render-x64.exe --preview <pid Hominka>\n"
              L"  hominka-render-x64.exe --nettest <площадка> <канал> [сек]\n"
@@ -921,7 +1111,9 @@ int wmain(int argc, wchar_t** argv) {
     } else if (argc >= 3 && !wcscmp(argv[1], L"--preview")) {
         rc = hominka::run_preview((DWORD)_wtoi(argv[2]));
     } else if (argc >= 3 && !wcscmp(argv[1], L"--run")) {
-        rc = hominka::run_overlay((DWORD)_wtoi(argv[2]));
+        rc = hominka::run_overlay((DWORD)_wtoi(argv[2]), false);
+    } else if (argc >= 2 && !wcscmp(argv[1], L"--app")) {
+        rc = hominka::run_overlay(0, true);
     } else if (argc >= 4 && !wcscmp(argv[1], L"--selftest")) {
         int width = 430;                       // типова ширина вікна чату
         for (int i = 4; i + 1 < argc; ++i)
