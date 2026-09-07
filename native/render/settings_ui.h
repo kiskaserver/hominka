@@ -10,6 +10,7 @@
 #pragma once
 
 #include <string>
+#include <vector>
 
 #include "config.h"
 
@@ -39,6 +40,19 @@ struct UpdateView {
     bool mandatory = false;    // критичне: наполягаємо
 };
 
+// Чат поверх гри — очима панелі. Вікна й інжектор живуть у gamewin.h, який
+// суто віконний і Windows-only; сюди приходить уже готовий список.
+struct GameView {
+    bool supported = false;         // на цій системі це взагалі є
+    bool injector = false;          // поруч лежать injector.exe і overlay.dll
+    std::vector<std::string> windows;   // «назва — exe» по одному рядку
+    int picked = 0;
+    std::string status;
+    bool fso_off = false;           // у вибраної гри вже знято оптимізацію
+    bool restorable = false;        // є вікно, якому можна повернути рамку
+    bool injected = false;          // чат у грі зараз малюється
+};
+
 // Що людина зробила.
 struct SettingsEvents {
     bool changed = false;          // налаштування змінилися — зберегти
@@ -49,6 +63,13 @@ struct SettingsEvents {
     bool check_update = false;
     bool start_download = false;
     bool do_install = false;
+    bool refresh_games = false;
+    bool make_borderless = false;
+    bool restore_window = false;
+    bool toggle_fso = false;
+    bool inject = false;
+    bool stop_inject = false;
+    int  pick_game = -1;            // обрали інший рядок у списку
     bool title_active = false;     // тягнуть за заголовок (вікно рухає платформа)
     int content_height = 0;        // скільки насправді треба висоти
 };
@@ -58,6 +79,6 @@ void settings_style();
 
 // Малює панель шириною w. Значення міняє прямо в cfg.
 SettingsEvents draw_settings(SettingsState* st, Config* cfg, const std::string& status,
-                             const UpdateView& upd, int w, int h);
+                             const UpdateView& upd, const GameView& game, int w, int h);
 
 }  // namespace hominka

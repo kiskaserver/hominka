@@ -46,6 +46,7 @@
 #include "container_d2d.h"
 #include "feed.h"
 #include "frame_writer.h"
+#include "gamewin.h"
 #include "gui_win.h"
 #include "imgcache.h"
 #include "imgfetch.h"
@@ -523,6 +524,34 @@ UpdateView update_view(const Updater& up) {
     return v;
 }
 
+// Те, що панель показує в розділі «чат поверх гри». Список вікон тримаємо тут,
+// бо перелічувати їх щокадру ні до чого: він міняється, коли людина запускає
+// гру, а не шістдесят разів на секунду.
+struct GameState {
+    std::vector<GameWindow> windows;
+    int picked = 0;
+    std::string status;
+    bool injected = false;
+    unsigned injected_pid = 0;
+};
+
+GameView game_view(const GameState& gs) {
+    GameView v;
+    v.supported = true;
+    v.injector = injector_available();
+    for (const GameWindow& w : gs.windows) {
+        std::string title = w.title.size() > 40 ? w.title.substr(0, 40) + "…" : w.title;
+        v.windows.push_back(title + " — " + w.exe);
+    }
+    v.picked = gs.picked;
+    v.status = gs.status;
+    v.injected = gs.injected;
+    v.restorable = borderless_window() != nullptr;
+    if (!gs.windows.empty() && gs.picked < (int)gs.windows.size())
+        v.fso_off = fso_disabled(game_exe_path(gs.windows[(size_t)gs.picked].hwnd));
+    return v;
+}
+
 bool pump_images(ImageFetch* fetch, ImageCache* images, Feed* feed) {
     bool changed = false;
     std::string url;
@@ -596,6 +625,7 @@ int run_overlay(DWORD parent_pid, bool standalone) {
     CssEditState cstate;
     Updater updater;
     bool update_asked = false;
+    GameState games;
     if (standalone) {
         cfg.load();
         look = cfg.look;
@@ -615,6 +645,7 @@ int run_overlay(DWORD parent_pid, bool standalone) {
         // Архіви минулих оновлень — двісті мегабайтів кожен, а %TEMP% Windows
         // сама не чистить.
         Updater::cleanup_downloads();
+        games.windows = list_windows();
         win.move_to(cfg.x, cfg.y);
         // Замок вимикають і з клавіатури: вікно чату фокусу не бере, тож
         // єдиний спосіб — глобальне сполучення. Те саме, що було в Python.
@@ -834,7 +865,7 @@ int run_overlay(DWORD parent_pid, bool standalone) {
             if (gui.begin()) {
                 const SettingsEvents sev =
                     draw_settings(&sstate, &cfg, net.status(), update_view(updater),
-                                  gui.width(), gui.height());
+                                  game_view(games), gui.width(), gui.height());
                 // Знімок — ДО показу: у flip-моделі після Present задній буфер
                 // уже інший, і в PNG потрапила б порожнеча.
                 // Знімаємо не одразу після показу: панель просить у системи
@@ -863,6 +894,53 @@ int run_overlay(DWORD parent_pid, bool standalone) {
                 }
                 if (sev.sources_changed) net.apply(cfg);
                 if (sev.css_editor) css_win.show_beside(win.screen_rect());
+                if (sev.pick_game >= 0) {
+                    games.picked = sev.pick_game;
+                    games.status.clear();
+                }
+                if (sev.refresh_games) {
+                    games.windows = list_windows();
+                    games.picked = 0;
+                    games.status.clear();
+                }
+                GameWindow* target =
+                    games.picked < (int)games.windows.size() && !games.windows.empty()
+                        ? &games.windows[(size_t)games.picked]
+                        : nullptr;
+                if (sev.toggle_fso && target) {
+                    const std::string exe = game_exe_path(target->hwnd);
+                    const bool off = fso_disabled(exe);
+                    games.status = set_fso_disabled(exe, !off)
+                                       ? (off ? "Повноекранну оптимізацію повернено як було."
+                                              : "Готово. Перезапустіть гру — і чат буде видно "
+                                                "в бою.")
+                                       : "Не вдалося змінити налаштування гри.";
+                }
+                if (sev.make_borderless && target)
+                    games.status = make_borderless(target->hwnd)
+                                       ? "Готово: вікно гри тепер безрамкове."
+                                       : "Не вдалося змінити це вікно (уже безрамкове або "
+                                         "зникло).";
+                if (sev.restore_window)
+                    games.status = restore_window(borderless_window())
+                                       ? "Повернули вікну гри те, що в нього було."
+                                       : "Нема чого повертати.";
+                if (sev.inject && target) {
+                    const InjectResult r = inject_into(target->hwnd);
+                    games.status = r.message;
+                    games.injected = r.ok;
+                    games.injected_pid = r.pid;
+                    inject.on = r.ok;
+                    inject.pid = r.pid;
+                }
+                if (sev.stop_inject) {
+                    games.injected = false;
+                    inject.on = false;
+                    games.status = "Чат у грі вимкнено.";
+                }
+                inject.opacity = (uint32_t)cfg.game_opacity;
+                inject.hide_obs = cfg.game_hide_obs;
+
                 if (sev.check_update) updater.check(cfg.channel, HOMINKA_VERSION, "");
                 if (sev.start_download) updater.download();
                 if (sev.do_install) {

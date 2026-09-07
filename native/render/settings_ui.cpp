@@ -175,7 +175,7 @@ void settings_style() {
 }
 
 SettingsEvents draw_settings(SettingsState* st, Config* cfg, const std::string& status,
-                             const UpdateView& upd, int w, int h) {
+                             const UpdateView& upd, const GameView& game, int w, int h) {
     SettingsEvents ev;
     if (!st->synced) st->sync(*cfg);
 
@@ -327,6 +327,92 @@ SettingsEvents draw_settings(SettingsState* st, Config* cfg, const std::string& 
         ImGui::Dummy(ImVec2(0, 6));
         if (ghost("Свій CSS для чату…", ImGui::GetContentRegionAvail().x - CARD_PAD))
             ev.css_editor = true;
+        card.end();
+    }
+
+    // Чат поверх гри ----------------------------------------------------------
+    if (game.supported) {
+        Card card;
+        card.begin("ЧАТ ПОВЕРХ ГРИ");
+
+        dim_text("Це вікно й так видно поверх майже будь-якої гри — і OBS його не "
+                 "знімає. Нижче — те, що потрібно, коли гра забирає екран собі.");
+
+        ImGui::Dummy(ImVec2(0, 6));
+        field_label("Гра");
+        const float row_w = ImGui::GetContentRegionAvail().x - CARD_PAD;
+        ImGui::SetNextItemWidth(row_w - 76.0f);
+        const char* current = game.windows.empty()
+                                  ? "Немає відкритих ігор — запустіть гру й оновіть"
+                                  : game.windows[(size_t)game.picked].c_str();
+        if (ImGui::BeginCombo("##game", current)) {
+            for (size_t i = 0; i < game.windows.size(); ++i) {
+                const bool on = (int)i == game.picked;
+                if (ImGui::Selectable(game.windows[i].c_str(), on)) ev.pick_game = (int)i;
+                if (on) ImGui::SetItemDefaultFocus();
+            }
+            ImGui::EndCombo();
+        }
+        ImGui::SameLine(0, 6);
+        // Підпис словом, а не значком: стрілка-кільце є не в кожному шрифті,
+        // і замість неї виходила порожня плитка.
+        if (ghost("Оновити", 70.0f)) ev.refresh_games = true;
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("Оновити список вікон");
+
+        ImGui::Dummy(ImVec2(0, 4));
+        if (!game.windows.empty()) {
+            if (ghost(game.fso_off ? "Повернути повноекранну оптимізацію"
+                                   : "Прибрати повноекранну оптимізацію",
+                      row_w))
+                ev.toggle_fso = true;
+            if (ImGui::IsItemHovered())
+                ImGui::SetTooltip("Найнадійніше, коли чат видно в меню, а в бою зникає.\n"
+                                  "Діє з наступного запуску гри; у гру нічого не "
+                                  "вкладається.");
+
+            const float half = (row_w - 6.0f) / 2.0f;
+            if (ghost("Зробити безрамковою", game.restorable ? half : row_w))
+                ev.make_borderless = true;
+            if (game.restorable) {
+                ImGui::SameLine(0, 6);
+                if (ghost("Повернути", half)) ev.restore_window = true;
+            }
+        }
+
+        // Інжект — окремо й наприкінці: це найпотужніше й найризикованіше, і
+        // натрапити на нього випадково не можна.
+        if (game.injector) {
+            ImGui::Dummy(ImVec2(0, 8));
+            ImGui::Separator();
+            ImGui::Dummy(ImVec2(0, 6));
+            ImGui::PushStyleColor(ImGuiCol_Text, col(IM_COL32(252, 211, 77, 255)));
+            ImGui::TextWrapped("Для досвідчених");
+            ImGui::PopStyleColor();
+            dim_text("Вкладає бібліотеку в процес гри й малює чат усередині кадру — "
+                     "навіть у виключному повноекранному. Потрібне рідко. "
+                     "В ОНЛАЙН-іграх з античитом так робити НЕ можна.");
+            ImGui::Dummy(ImVec2(0, 4));
+            if (!game.windows.empty() &&
+                ghost(game.injected ? "Показати ще раз" : "Показати чат у грі", row_w))
+                ev.inject = true;
+            if (game.injected) {
+                ImGui::Dummy(ImVec2(0, 4));
+                if (ghost("Прибрати чат із гри", row_w)) ev.stop_inject = true;
+                ImGui::Dummy(ImVec2(0, 4));
+                field_label("Прозорість чату в грі");
+                float op = (float)cfg->game_opacity;
+                if (slider_pct("##gop", &op, 30.0f, 255.0f, "%.0f")) {
+                    cfg->game_opacity = (int)(op + 0.5f);
+                    ev.changed = true;
+                }
+                if (toggle("Ховати чат від OBS", &cfg->game_hide_obs)) ev.changed = true;
+            }
+        }
+
+        if (!game.status.empty()) {
+            ImGui::Dummy(ImVec2(0, 4));
+            dim_text(game.status.c_str());
+        }
         card.end();
     }
 
