@@ -17,6 +17,7 @@
 #include "gfx/imgcache.h"
 #include "net/chatnet.h"
 #include "net/imgfetch.h"
+#include "net/viewers.h"
 #include "platform/frame_writer.h"
 #include "platform/gamewin.h"
 #include "platform/ipc.h"
@@ -143,6 +144,39 @@ GameView game_view(const GameState& gs) {
     return v;
 }
 
+// Налаштування «анімовані емоути» → режим кеша картинок.
+Motion motion_of(const std::string& name) {
+    if (name == "freeze") return Motion::Freeze;
+    if (name == "hide") return Motion::Hide;
+    return Motion::Play;
+}
+
+// Глядачі одним рядком для смужки вікна. Порожньо — коли показувати нічого:
+// або вимкнено в налаштуваннях, або жодна площадка ще не відповіла.
+std::string viewers_line(const Viewers& v, const Config& cfg) {
+    const Viewers::Count tw = cfg.viewers_twitch ? v.twitch() : Viewers::Count();
+    const Viewers::Count kk = cfg.viewers_kick ? v.kick() : Viewers::Count();
+    const Viewers::Count yt = cfg.viewers_youtube ? v.youtube() : Viewers::Count();
+
+    if (cfg.viewers_sum) {
+        int n = 0;
+        bool known = false;
+        for (const Viewers::Count* c : {&tw, &kk, &yt})
+            if (c->known) { known = true; n += c->n; }
+        return known ? group_digits(n) : std::string();
+    }
+    // Окремо — з літерою площадки: без неї три числа поспіль ні про що.
+    std::string out;
+    const std::pair<const char*, const Viewers::Count*> parts[] = {
+        {"T", &tw}, {"K", &kk}, {"Y", &yt}};
+    for (const auto& p : parts) {
+        if (!p.second->known) continue;
+        if (!out.empty()) out += " · ";
+        out += std::string(p.first) + " " + group_digits(p.second->n);
+    }
+    return out;
+}
+
 // Стан джерел очима панелі. Просто перекладаємо — панель не має знати ні про
 // ChatNet, ні про те, скільки там потоків.
 // Рядок «Зараз» для розділу «Про програму». Памʼять беремо в системи: саме це
@@ -163,7 +197,7 @@ std::string about_facts(const ChatNet& net, const DCompWindow& win) {
     return buf;
 }
 
-std::vector<SourceView> source_view(const ChatNet& net) {
+std::vector<SourceView> source_view(const ChatNet& net, const Viewers& viewers) {
     std::vector<SourceView> out;
     for (const ChatNet::SourceInfo& s : net.sources()) {
         SourceView v;
@@ -171,6 +205,14 @@ std::vector<SourceView> source_view(const ChatNet& net) {
         v.configured = s.configured;
         v.connected = s.connected;
         v.note = s.note;
+
+        const std::string n = v.name;
+        const Viewers::Count c = n == "Twitch"    ? viewers.twitch()
+                                 : n == "Kick"    ? viewers.kick()
+                                 : n == "YouTube" ? viewers.youtube()
+                                                  : Viewers::Count();
+        v.viewers_known = c.known;
+        if (c.known) v.viewers = group_digits(c.n);
         out.push_back(v);
     }
     return out;
@@ -251,6 +293,7 @@ int run_overlay(DWORD parent_pid, bool standalone) {
     GuiWindow css_win;
     CssEditState cstate;
     Updater updater;
+    Viewers viewers;
     bool update_asked = false;
     GameState games;
     if (standalone) {
@@ -259,8 +302,10 @@ int run_overlay(DWORD parent_pid, bool standalone) {
         feed.set_zoom(look.zoom);
         feed.set_css(cfg.custom_css);
         if (!cfg.layout.empty()) feed.set_layout(cfg.layout);
+        images.set_motion(motion_of(cfg.motion));
         fetch.start();
         net.apply(cfg);
+        viewers.configure(cfg.twitch, cfg.kick, cfg.youtube);
         cstate.text = cfg.custom_css;
         // Архіви минулих оновлень — двісті мегабайтів кожен, а %TEMP% Windows
         // сама не чистить.
@@ -277,10 +322,15 @@ int run_overlay(DWORD parent_pid, bool standalone) {
     // знімок робимо самі — і виходимо. Той самий спосіб, що й «shot» у
     // робочому режимі.
     const char* shot_prefix = standalone ? getenv("HOMINKA_UI_SHOT") : nullptr;
+    // Скільки чекати перед знімками. За замовчуванням досить, щоб під'єднатися;
+    // жвавому чату дають більше — інакше в кадрі порожня стрічка.
+    const char* shot_wait_env = getenv("HOMINKA_UI_WAIT");
+    const int64_t shot_wait = shot_wait_env ? (int64_t)atoi(shot_wait_env) * 1000 : 9500;
     const int64_t started = now_ms();
     // Панель знімаємо по розділах: побачити треба кожен, а не лише той, що
     // відкрився першим.
     int settings_shots = 0;
+    bool shot_chat = false;
     // Редактор знімаємо двічі: зі списком проблем і з довідником. Довідник —
     // це кілька сотень рядків згенерованого тексту, і подивитися на нього
     // очима варто хоча б раз.
@@ -408,8 +458,9 @@ int run_overlay(DWORD parent_pid, bool standalone) {
             // поверх усього.
             ID3D11RenderTargetView* rtv = win.rtv();
             if (rtv) win.d3d_ctx()->OMSetRenderTargets(1, &rtv, nullptr);
-            const ChromeEvents cev = chrome.draw_controls(win.width(), win.height(),
-                                                          &look, win.hwnd());
+            const ChromeEvents cev =
+                chrome.draw_controls(win.width(), win.height(), &look, win.hwnd(),
+                                     standalone ? viewers_line(viewers, cfg) : std::string());
             // Поки тягнуть — розмір веде рука; відпустили (geometry_changed) —
             // знову веде Python.
             if (chrome.wants_mouse()) user_sizing = true;
@@ -498,7 +549,8 @@ int run_overlay(DWORD parent_pid, bool standalone) {
         if (standalone) {
             if (gui.begin()) {
                 const SettingsEvents sev =
-                    draw_settings(&sstate, &cfg, source_view(net), update_view(updater),
+                    draw_settings(&sstate, &cfg, source_view(net, viewers),
+                                  update_view(updater),
                                   game_view(games), about_facts(net, win),
                                   gui.width(), gui.height());
                 // Знімок — ДО показу: у flip-моделі після Present задній буфер
@@ -506,7 +558,7 @@ int run_overlay(DWORD parent_pid, bool standalone) {
                 // Знімаємо не одразу після показу: панель просить у системи
                 // свою висоту, і застосується це лише наступним кадром.
                 const bool want_shot =
-                    shot_prefix && settings_shots < 5 && now_ms() - started > 9500;
+                    shot_prefix && settings_shots < 5 && now_ms() - started > shot_wait;
                 gui.end(!want_shot);
                 if (want_shot) {
                     wchar_t path[512];
@@ -516,8 +568,8 @@ int run_overlay(DWORD parent_pid, bool standalone) {
                          (int)dump_gui_png(&gui, path));
                     gui.present();
                     if (settings_shots == 0) {
-                        _snwprintf(path, 512, L"%hs-chat.png", shot_prefix);
-                        rlog("знімок чату: %d", (int)dump_window_png(&win, path));
+                        _snwprintf(path, 512, L"%hs-chrome.png", shot_prefix);
+                        rlog("знімок рамки: %d", (int)dump_window_png(&win, path));
                     }
                     ++settings_shots;
                     sstate.page = settings_shots;      // наступний розділ
@@ -531,7 +583,18 @@ int run_overlay(DWORD parent_pid, bool standalone) {
                     look.frameless = cfg.look.frameless;
                     feed.set_zoom(look.zoom);
                 }
-                if (sev.sources_changed) net.apply(cfg);
+                if (sev.sources_changed) {
+                    net.apply(cfg);
+                    viewers.configure(cfg.twitch, cfg.kick, cfg.youtube);
+                }
+                if (sev.motion_changed) {
+                    images.set_motion(motion_of(cfg.motion));
+                    // Повернення руху чистить кеш — картинки треба попросити
+                    // знову, інакше на їх місці лишиться код емоута до першого
+                    // нового повідомлення.
+                    fetch.forget();
+                    for (const std::string& u : feed.animated_in_use()) fetch.want(u);
+                }
                 if (sev.css_editor) {
                     // Редактор теми — окреме вікно, і його можна тягнути за
                     // краї: код і довідник поруч у вузькому не вміщаються.
@@ -615,7 +678,7 @@ int run_overlay(DWORD parent_pid, bool standalone) {
                 const CssEditEvents cev2 =
                     draw_css_editor(&cstate, css_win.width(), css_win.height(), now_ms());
                 const bool want_shot =
-                    shot_prefix && css_shots < 2 && now_ms() - started > 9500;
+                    shot_prefix && css_shots < 2 && now_ms() - started > shot_wait;
                 css_win.end(!want_shot);
                 if (want_shot) {
                     wchar_t path[512];
@@ -661,10 +724,16 @@ int run_overlay(DWORD parent_pid, bool standalone) {
             }
 
             // Вікна ще не показані — показуємо: знімок робиться саме з них.
-            if (shot_prefix && now_ms() - started > 8000) {
-                // Рамку вікна чату видно, лише коли на нього наведено, — тож
-                // для знімка ставимо курсор на смужку. Інакше перевіряти її
-                // вигляд нічим: у кадрі був би самий чат.
+            if (shot_prefix && now_ms() - started > shot_wait - 1500) {
+                // Спершу — сам чат, без рамки: саме так його бачить глядач.
+                if (!shot_chat) {
+                    shot_chat = true;
+                    wchar_t path[512];
+                    _snwprintf(path, 512, L"%hs-chat.png", shot_prefix);
+                    rlog("знімок чату: %d", (int)dump_window_png(&win, path));
+                }
+                // А вже потім наводимо курсор: рамку видно, лише коли на вікно
+                // наведено, і перевіряти її вигляд інакше нічим.
                 {
                     const RECT r = win.screen_rect();
                     SetCursorPos((r.left + r.right) / 2, r.top + 10);

@@ -148,7 +148,7 @@ int Image::ms_to_next(int64_t t_ms) const {
     return (int)(total_ms - at);
 }
 
-void ImageCache::finish(Image* img) {
+void ImageCache::finish(Image* img) const {
     img->total_ms = 0;
     img->bytes = 0;
     for (ImageFrame& f : img->frames) {
@@ -163,10 +163,13 @@ void ImageCache::finish(Image* img) {
     if (img->frames.size() < 2) img->total_ms = 0;
 
     // Завеликій анімації лишаємо самий перший кадр (див. ANIM_MAX_IMAGE_BYTES).
-    if (img->bytes > ANIM_MAX_IMAGE_BYTES && img->frames.size() > 1) {
-        img->frames.resize(1);
-        img->bytes = img->frames[0].bgra.size();
-        img->total_ms = 0;
+    // Те саме робить і режим «нерухомі», просто за іншим приводом.
+    if (motion_ == Motion::Freeze || img->bytes > ANIM_MAX_IMAGE_BYTES) {
+        if (img->frames.size() > 1) {
+            img->frames.resize(1);
+            img->bytes = img->frames[0].bgra.size();
+            img->total_ms = 0;
+        }
     }
 }
 
@@ -230,10 +233,42 @@ bool ImageCache::put(const std::string& url, const uint8_t* data, size_t len) {
     return ok;
 }
 
+// Приховані анімовані картинки поводяться так, ніби їх ще немає: розмітка
+// сама підставить на їх місце код емоута — той самий шлях, що й для емоута,
+// який не докачався. Нічого окремого вигадувати не довелося.
+bool ImageCache::hidden(const Image& img) const {
+    return motion_ == Motion::Hide && img.animated();
+}
+
+void ImageCache::set_motion(Motion m) {
+    if (m == motion_) return;
+    const bool was_frozen = motion_ == Motion::Freeze;
+    motion_ = m;
+
+    if (m == Motion::Freeze) {
+        // Зупинити можна на місці: зайві кадри просто викидаємо.
+        for (auto& kv : items_) freeze(kv.first, &kv.second);
+        return;
+    }
+    // Повернути рух після «зупинити» можна лише перекачавши: самих байтів ми
+    // не тримаємо. Кеш чистимо, картинки приїдуть знову.
+    if (was_frozen) clear();
+}
+
+void ImageCache::freeze(const std::string& url, Image* img) {
+    if (img->frames.size() < 2) return;
+    // Стрічка тримає текстури кадрів — після обрізання їх більше немає.
+    if (evict_) evict_(url);
+    img->frames.resize(1);
+    img->bytes = img->frames[0].bgra.size();
+    img->total_ms = 0;
+}
+
 const Image* ImageCache::get(const std::string& url) {
     auto it = items_.find(url);
     if (it != items_.end()) {
         it->second.used = ++tick_;
+        if (hidden(it->second)) return nullptr;
         return it->second.ok() ? &it->second : nullptr;
     }
 
@@ -243,7 +278,8 @@ const Image* ImageCache::get(const std::string& url) {
         if (decode_data_url(url, &bytes, &mime) && !bytes.empty()) {
             put(url, bytes.data(), bytes.size());
             auto it2 = items_.find(url);
-            if (it2 != items_.end() && it2->second.ok()) return &it2->second;
+            if (it2 != items_.end() && it2->second.ok() && !hidden(it2->second))
+                return &it2->second;
         }
         items_[url] = Image{};      // щоб не розбирати те саме щоразу
     }

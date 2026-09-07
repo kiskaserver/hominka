@@ -146,7 +146,8 @@ bool Chrome::poll_hover(HWND hwnd) {
     return hovered_;
 }
 
-ChromeEvents Chrome::draw_controls(int w, int h, Look* look, HWND hwnd) {
+ChromeEvents Chrome::draw_controls(int w, int h, Look* look, HWND hwnd,
+                                   const std::string& viewers) {
     ChromeEvents ev;
     if (!ready_) return ev;
 
@@ -275,6 +276,18 @@ ChromeEvents Chrome::draw_controls(int w, int h, Look* look, HWND hwnd) {
         }
 
         ImGui::PopStyleColor(3);
+
+        // Глядачі — праворуч від шестерні. Саме тут, а не в налаштуваннях:
+        // дивитися на це число хочуть під час ефіру, а не тоді, коли щось
+        // налаштовують.
+        if (!viewers.empty()) {
+            ImGui::SameLine(0, 10);
+            ImGui::AlignTextToFramePadding();
+            ImGui::PushStyleColor(ImGuiCol_Text, ImGui::ColorConvertU32ToFloat4(TEXT_DIM));
+            ImGui::TextUnformatted(viewers.c_str());
+            ImGui::PopStyleColor();
+            if (ImGui::IsItemHovered()) ImGui::SetTooltip("Глядачів зараз");
+        }
 
         // Смужка перетягування — уся вільна частина зверху.
         const float used = ImGui::GetCursorPosX();

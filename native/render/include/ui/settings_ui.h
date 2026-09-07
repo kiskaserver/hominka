@@ -46,6 +46,10 @@ struct SourceView {
     bool configured = false;
     bool connected = false;
     std::string note;
+    // Глядачі: «немає числа» і «нуль глядачів» — різні речі, тому окремий
+    // прапорець, а не -1.
+    bool viewers_known = false;
+    std::string viewers;       // уже з пробілами між тисячами
 };
 
 // Стан оновлення. Сам оновлювач сюди не заглядає: він Windows-only, а панель
@@ -78,6 +82,7 @@ struct SettingsEvents {
     bool changed = false;          // налаштування змінилися — зберегти
     bool sources_changed = false;  // канали інші — перепідключитися
     bool look_changed = false;     // вигляд вікна чату треба оновити
+    bool motion_changed = false;   // анімовані емоути тепер поводяться інакше
     bool close = false;
     bool css_editor = false;
     bool title_active = false;     // тягнуть за заголовок

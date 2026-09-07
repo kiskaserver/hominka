@@ -25,6 +25,11 @@
 
 namespace hominka {
 
+// Сторінка «канал у прямому ефірі» як текст. Потрібна не лише чату: звідти ж
+// читається кількість глядачів (net/viewers.h), а будувати адресу каналу
+// вдруге означало б розійтися в дрібницях на кшталт «@нік проти UC-id».
+std::string youtube_live_page(const std::string& channel);
+
 class YouTubeSource {
 public:
     ~YouTubeSource();

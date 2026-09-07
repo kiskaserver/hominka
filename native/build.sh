@@ -133,6 +133,7 @@ RENDER_SRC="
     $SRC/render/src/net/src_site.cpp
     $SRC/render/src/net/src_twitch.cpp
     $SRC/render/src/net/src_youtube.cpp
+    $SRC/render/src/net/viewers.cpp
 
     $SRC/render/src/platform/gamewin.cpp
     $SRC/render/src/platform/ipc.cpp

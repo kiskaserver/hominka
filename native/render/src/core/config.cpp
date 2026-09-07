@@ -131,12 +131,22 @@ void Config::load() {
     site_url = str(raw_, "siteChatUrl");
     custom_css = str(raw_, "customCss");
     chat_delay = inum(raw_, "chatDelay", chat_delay);
+    const std::string m = str(raw_, "animatedEmotes");
+    if (m == "play" || m == "freeze" || m == "hide") motion = m;
 
     auto lay = raw_.find("chatLayout");
     if (lay != raw_.end() && lay->is_array()) {
         std::vector<std::string> l;
         for (const auto& s : *lay) if (s.is_string()) l.push_back(s.get<std::string>());
         layout = clean_layout(l);
+    }
+
+    const json& vw = raw_.value("viewers", json::object());
+    if (vw.is_object()) {
+        viewers_twitch = flag(vw, "twitch", viewers_twitch);
+        viewers_kick = flag(vw, "kick", viewers_kick);
+        viewers_youtube = flag(vw, "youtube", viewers_youtube);
+        viewers_sum = flag(vw, "sum", viewers_sum);
     }
 
     const json& go = raw_.value("gameOverlay", json::object());
@@ -177,6 +187,11 @@ void Config::flush(bool force) {
     raw_["customCss"] = custom_css;
     raw_["chatLayout"] = layout;
     raw_["chatDelay"] = chat_delay;
+    raw_["animatedEmotes"] = motion;
+    raw_["viewers"] = {{"twitch", viewers_twitch},
+                       {"kick", viewers_kick},
+                       {"youtube", viewers_youtube},
+                       {"sum", viewers_sum}};
     raw_["gameOverlay"] = {{"opacity", game_opacity}, {"hideFromObs", game_hide_obs}};
     raw_["channel"] = channel;
     raw_["autoUpdate"] = auto_update;

@@ -68,12 +68,15 @@ void field_label(const char* s) {
 
 // Кольорова крапка стану. Малюємо самі, бо ані значка, ані картинки для цього
 // не треба — коло є коло.
-void dot(ImU32 color, float radius = 4.0f) {
+//
+// line_h — висота, ПО ЯКІЙ центруємо. Це не дрібниця: у рядку каналу поруч
+// стоїть поле вводу, і крапка, вирівняна по висоті тексту, висіла на сім
+// пікселів вище за сусідній напис.
+void dot(ImU32 color, float radius, float line_h) {
     const ImVec2 p = ImGui::GetCursorScreenPos();
-    const float h = ImGui::GetTextLineHeight();
     ImGui::GetWindowDrawList()->AddCircleFilled(
-        ImVec2(p.x + radius, p.y + h * 0.5f), radius, color);
-    ImGui::Dummy(ImVec2(radius * 2.0f, h));
+        ImVec2(p.x + radius, p.y + line_h * 0.5f), radius, color);
+    ImGui::Dummy(ImVec2(radius * 2.0f, line_h));
 }
 
 ImU32 dot_color(const SourceView& s) {
@@ -182,7 +185,7 @@ bool rail_item(const char* label, bool active, bool badge) {
         dl->AddRectFilled(p, ImVec2(p.x + w, p.y + h),
                           IM_COL32(255, 255, 255, active ? 20 : 10));
     if (active)
-        dl->AddRectFilled(ImVec2(p.x, p.y + 6), ImVec2(p.x + 3, p.y + h - 6), ACCENT, 1.5f);
+        dl->AddRectFilled(ImVec2(p.x, p.y), ImVec2(p.x + 3, p.y + h), ACCENT);
 
     dl->AddText(ImVec2(p.x + 18, p.y + (h - ImGui::GetTextLineHeight()) * 0.5f),
                 active ? TEXT : IM_COL32(170, 170, 180, 255), label);
@@ -216,15 +219,20 @@ bool channel_row(const char* label, const char* hint, char* buf, size_t cap,
 
     ImGui::SameLine(0, 10);
     if (src) {
-        ImGui::AlignTextToFramePadding();
-        dot(dot_color(*src));
+        dot(dot_color(*src), 4.0f, ImGui::GetFrameHeight());
         ImGui::SameLine(0, 7);
         ImGui::AlignTextToFramePadding();
         if (!src->configured) text_col(TEXT_DIM, "вимкнено");
+        else if (src->viewers_known) text_col(TEXT, src->viewers.c_str());
         else if (src->connected) text_col(TEXT_DIM, "читаємо");
         else text_col(TEXT_DIM, "…");
-        if (ImGui::IsItemHovered() && !src->note.empty())
-            ImGui::SetTooltip("%s", src->note.c_str());
+        if (ImGui::IsItemHovered()) {
+            if (src->viewers_known)
+                ImGui::SetTooltip("глядачів зараз%s%s", src->note.empty() ? "" : " · ",
+                                  src->note.c_str());
+            else if (!src->note.empty())
+                ImGui::SetTooltip("%s", src->note.c_str());
+        }
     }
     ImGui::PopID();
     return done;
@@ -264,6 +272,45 @@ void page_channels(SettingsState* st, Config* cfg, const std::vector<SourceView>
     dim_wrapped("Читаємо не сторінку, а той самий websocket, яким користується вона сама.");
     ImGui::Unindent(LABEL_W);
 
+    ImGui::Dummy(ImVec2(0, 12));
+    ImGui::AlignTextToFramePadding();
+    field_label("Глядачі");
+    ImGui::SameLine(LABEL_W);
+    {
+        // Усе в один рядок: кого рахувати й як показувати. Окремого «показувати
+        // взагалі» немає навмисно — жодної площадки не вибрано, і лічильника
+        // немає. Один перемикач замість двох, і плутати нічого.
+        struct Item { const char* name; bool* on; };
+        const Item items[] = {{"Twitch", &cfg->viewers_twitch},
+                              {"Kick", &cfg->viewers_kick},
+                              {"YouTube", &cfg->viewers_youtube}};
+        for (int i = 0; i < 3; ++i) {
+            if (i) ImGui::SameLine(0, 5);
+            const bool on = *items[i].on;
+            ImGui::PushStyleColor(ImGuiCol_Button, on ? col(ACCENT) : ImVec4(1, 1, 1, 0.06f));
+            ImGui::PushStyleColor(ImGuiCol_ButtonHovered,
+                                  on ? col(ACCENT) : ImVec4(1, 1, 1, 0.16f));
+            ImGui::PushStyleColor(ImGuiCol_ButtonActive, col(ACCENT));
+            if (ImGui::Button(items[i].name, ImVec2(76, 0))) {
+                *items[i].on = !on;
+                ev->changed = true;
+            }
+            ImGui::PopStyleColor(3);
+        }
+        ImGui::SameLine(0, 12);
+        if (ghost(cfg->viewers_sum ? "разом" : "окремо", 76.0f)) {
+            cfg->viewers_sum = !cfg->viewers_sum;
+            ev->changed = true;
+        }
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip(cfg->viewers_sum
+                                  ? "Одне число з усіх площадок."
+                                  : "Кожна окремо, з літерою площадки.");
+    }
+    ImGui::Indent(LABEL_W);
+    dim_wrapped("Число видно у смужці вікна чату.");
+    ImGui::Unindent(LABEL_W);
+
     ImGui::Dummy(ImVec2(0, 14));
     ImGui::AlignTextToFramePadding();
     field_label("Затримка");
@@ -274,8 +321,7 @@ void page_channels(SettingsState* st, Config* cfg, const std::vector<SourceView>
         ev->changed = ev->sources_changed = true;
     }
     ImGui::Indent(LABEL_W);
-    dim_wrapped("Тримає повідомлення й видає їх по одному — коли пишуть швидше, ніж "
-                "читаєш, стрічка перестає бути кашею. 0 — без затримки.");
+    dim_wrapped("Видає повідомлення по одному, коли пишуть швидше, ніж читаєш.");
     ImGui::Unindent(LABEL_W);
 }
 
@@ -320,6 +366,34 @@ void page_look(Config* cfg, SettingsEvents* ev) {
     if (ghost("A+", 40.0f)) {
         cfg->look.zoom = cfg->look.zoom + 0.1f > 3.0f ? 3.0f : cfg->look.zoom + 0.1f;
         ev->changed = ev->look_changed = true;
+    }
+
+    ImGui::Dummy(ImVec2(0, 12));
+    ImGui::AlignTextToFramePadding();
+    field_label("Анімація");
+    ImGui::SameLine(LABEL_W);
+    {
+        static const char* kIds[] = {"play", "freeze", "hide"};
+        static const char* kNames[] = {"Грає", "Нерухомі", "Приховати"};
+        static const char* kHints[] = {
+            "Як задумав автор емоута.",
+            "Лишається перший кадр. Менше памʼяті й жодного перемальовування.",
+            "Анімованих емоутів не видно зовсім — у рядку лишається їх код.",
+        };
+        for (int i = 0; i < 3; ++i) {
+            if (i) ImGui::SameLine(0, 6);
+            const bool on = cfg->motion == kIds[i];
+            ImGui::PushStyleColor(ImGuiCol_Button, on ? col(ACCENT) : ImVec4(1, 1, 1, 0.06f));
+            ImGui::PushStyleColor(ImGuiCol_ButtonHovered,
+                                  on ? col(ACCENT) : ImVec4(1, 1, 1, 0.16f));
+            ImGui::PushStyleColor(ImGuiCol_ButtonActive, col(ACCENT));
+            if (ImGui::Button(kNames[i], ImVec2(96, 0))) {
+                cfg->motion = kIds[i];
+                ev->changed = ev->motion_changed = true;
+            }
+            ImGui::PopStyleColor(3);
+            if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", kHints[i]);
+        }
     }
 
     ImGui::Dummy(ImVec2(0, 10));
@@ -646,7 +720,7 @@ SettingsEvents draw_settings(SettingsState* st, Config* cfg,
         if (!s.configured) continue;
         if (!first) ImGui::SameLine(0, 16);
         first = false;
-        dot(dot_color(s), 3.5f);
+        dot(dot_color(s), 3.5f, ImGui::GetTextLineHeight());
         ImGui::SameLine(0, 7);
         text_col(s.connected ? TEXT : TEXT_DIM, s.name.c_str());
         if (ImGui::IsItemHovered() && !s.note.empty())

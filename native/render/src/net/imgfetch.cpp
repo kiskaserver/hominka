@@ -45,6 +45,11 @@ bool ImageFetch::take(std::string* url, std::vector<uint8_t>* data) {
     return true;
 }
 
+void ImageFetch::forget() {
+    std::lock_guard<std::mutex> lock(mx_);
+    asked_.clear();
+}
+
 size_t ImageFetch::pending() const {
     std::lock_guard<std::mutex> lock(mx_);
     return queue_.size();

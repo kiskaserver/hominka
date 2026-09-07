@@ -105,10 +105,26 @@ static const size_t ANIM_MAX_IMAGE_BYTES = 8u * 1024 * 1024;
 // Сховище «URL → картинка». Живе стільки ж, скільки процес: емоути того самого
 // каналу повторюються в кожному другому повідомленні, і декодувати їх щоразу —
 // марна робота.
+// Що робити з анімованими картинками. Анімація в чаті — це не лише смак: саме
+// вона з'їдає і памʼять (кадри лежать розібраними), і кадри малювання (рядок
+// перемальовується щоразу, коли емоут змінює картинку).
+enum class Motion {
+    Play,      // як задумано автором емоута
+    Freeze,    // лишається самий перший кадр
+    Hide,      // емоут не показуємо зовсім — у рядку лишається його код
+};
+
 class ImageCache {
 public:
     ImageCache();
     ~ImageCache();
+
+    // Перемикання коштує по-різному, і це видно в коді: «зупинити» лише
+    // викидає зайві кадри, «приховати» взагалі нічого не чіпає (це фільтр на
+    // видачі), а от повернути рух після «зупинити» можна тільки перекачавши —
+    // самих байтів ми не тримаємо, лише розібрані кадри.
+    void set_motion(Motion m);
+    Motion motion() const { return motion_; }
 
     // Покласти байти, які прислав Python. Декодуємо одразу: краще витратити
     // мілісекунду тут, ніж під час розкладки повідомлення.
@@ -153,6 +169,11 @@ private:
     static bool decode_data_url(const std::string& url, std::vector<uint8_t>* out,
                                 std::string* mime);
 
+    bool hidden(const Image& img) const;
+    // Лишає самий перший кадр. url потрібен, щоб сказати стрічці забути
+    // кадрові текстури саме цієї картинки.
+    void freeze(const std::string& url, Image* img);
+
     bool decode(const uint8_t* data, size_t len, Image* out);
 #ifdef _WIN32
     bool decode_wic(const uint8_t* data, size_t len, Image* out);
@@ -163,13 +184,14 @@ private:
     bool decode_svg(const uint8_t* data, size_t len, Image* out);
 
     // Дорахувати те, що залежить від кадрів: тривалість оберту й вагу.
-    static void finish(Image* img);
+    void finish(Image* img) const;
 
 #ifdef _WIN32
     IWICImagingFactory* wic_ = nullptr;
 #endif
     std::map<std::string, Image> items_;
     EvictHook evict_;
+    Motion motion_ = Motion::Play;
     int64_t tick_ = 0;              // лічильник звернень, він же «час» для LRU
 };
 

@@ -35,6 +35,17 @@ struct Config {
     std::string custom_css;
     std::vector<std::string> layout; // порядок частин рядка
     int chat_delay = 0;              // секунди
+    // Анімовані емоути: «play» | «freeze» | «hide». Рядком, а не числом, — це
+    // ключ у config.json, і його читають люди.
+    std::string motion = "play";
+
+    // Глядачі: кого рахувати й показувати одним числом чи окремо. Видно їх у
+    // смужці вікна чату — там, де на них дивляться під час ефіру. Окремого
+    // «показувати взагалі» немає: жодної площадки не вибрано — і числа немає.
+    bool viewers_twitch = true;
+    bool viewers_kick = true;
+    bool viewers_youtube = true;
+    bool viewers_sum = true;
 
     // Чат у грі
     int game_opacity = 235;

@@ -335,9 +335,8 @@ void parse_actions(const json& actions, const std::string& channel_id,
     }
 }
 
-// Канал → id трансляції, що ЗАРАЗ в ефірі. Порожньо, якщо ефіру немає: це
-// звичайний стан, а не помилка.
-std::string find_live_video(const std::string& channel) {
+// Канал → адреса сторінки «зараз в ефірі».
+std::string live_url(const std::string& channel) {
     std::string url;
     if (channel.size() == 24 && channel.compare(0, 2, "UC") == 0) {
         url = "https://www.youtube.com/channel/" + channel + "/live?hl=en";
@@ -357,6 +356,15 @@ std::string find_live_video(const std::string& channel) {
         }
         url = "https://www.youtube.com/@" + lstrip_at(channel) + "/live?hl=en";
     }
+    return url;
+}
+
+// Канал → id трансляції, що ЗАРАЗ в ефірі. Порожньо, якщо ефіру немає: це
+// звичайний стан, а не помилка.
+std::string find_live_video(const std::string& channel) {
+    const std::string url = live_url(channel);
+    // Посилання на саму трансляцію: id у ньому вже є, шукати нічого.
+    if (url.size() == 11) return url;
 
     const json data = extract_json(page(url), "ytInitialData");
     if (!data.is_object()) return "";
@@ -462,6 +470,14 @@ bool poll_once(const std::string& key, const std::string& ver, const std::string
 }
 
 }  // namespace
+
+std::string youtube_live_page(const std::string& channel) {
+    const std::string url = live_url(channel);
+    // Коли вписали посилання на саму трансляцію, live_url повертає її id —
+    // сторінку тоді складаємо самі.
+    return page(url.size() == 11 ? "https://www.youtube.com/watch?v=" + url + "&hl=en"
+                                 : url);
+}
 
 YouTubeSource::~YouTubeSource() { stop(); }
 
