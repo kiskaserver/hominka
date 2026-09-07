@@ -4,6 +4,8 @@
 #include "imgui/imgui_impl_dx11.h"
 #include "imgui/imgui_impl_win32.h"
 
+#include "uifont.h"
+
 extern IMGUI_IMPL_API LRESULT ImGui_ImplWin32_WndProcHandler(HWND hWnd, UINT msg,
                                                              WPARAM wParam, LPARAM lParam);
 
@@ -42,17 +44,8 @@ bool Chrome::init(HWND hwnd, ID3D11Device* dev, ID3D11DeviceContext* ctx) {
     // не забирати фокус у гри, а отже й клавіш воно не отримує.
     io.ConfigFlags |= ImGuiConfigFlags_NoMouseCursorChange;
 
-    // Шрифт із системи: вбудований у ImGui має лише латиницю, і будь-яка
-    // підказка українською перетворюється на «??????». Беремо Segoe UI — той
-    // самий, яким набрано й сам чат. Не знайшовся — лишається вбудований:
-    // краще латиниця, ніж жодного інтерфейсу.
-    {
-        char path[MAX_PATH];
-        if (GetWindowsDirectoryA(path, MAX_PATH)) {
-            lstrcatA(path, "\\Fonts\\segoeui.ttf");
-            io.Fonts->AddFontFromFileTTF(path, 15.0f);
-        }
-    }
+    // Шрифт із системи, з кирилицею — див. uifont.h.
+    load_ui_font(15.0f);
 
     ImGui::StyleColorsDark();
     ImGuiStyle& st = ImGui::GetStyle();
@@ -112,18 +105,37 @@ void Chrome::draw_backdrop(ID2D1DeviceContext* d2d, int w, int h, const Look& lo
     brush->Release();
 }
 
+// Наведення рахуємо САМІ, а не питаємо ImGui.
+//
+// Поки вікно клік-крізь (WS_EX_TRANSPARENT), воно не отримує жодного
+// повідомлення миші, а вбудований у ImGui шлях бере позицію лише у
+// сфокусованого вікна — наше ж фокусу не бере ніколи (WS_EX_NOACTIVATE).
+// Інакше курсор для ImGui назавжди лишався б «у нескінченності»: рамка не
+// з'явилася б, клік-крізь не вимкнувся — і вікном не можна було б
+// скористатися взагалі.
+bool Chrome::poll_hover(HWND hwnd) {
+    POINT cur;
+    RECT wr;
+    if (!GetCursorPos(&cur) || !GetWindowRect(hwnd, &wr)) {
+        hovered_ = false;
+        return false;
+    }
+    mouse_.x = cur.x - wr.left;
+    mouse_.y = cur.y - wr.top;
+    hovered_ = PtInRect(&wr, cur) != FALSE;
+    return hovered_;
+}
+
 ChromeEvents Chrome::draw_controls(int w, int h, Look* look, HWND hwnd) {
     ChromeEvents ev;
     if (!ready_) return ev;
 
     ImGui_ImplDX11_NewFrame();
     ImGui_ImplWin32_NewFrame();
-    ImGui::NewFrame();
 
-    // Чи миша над вікном. ImGui знає її позицію навіть коли вона поза вікном
-    // (тоді координати «нескінченні»), тож перевіряємо саме межі.
-    const ImVec2 mouse = ImGui::GetIO().MousePos;
-    hovered_ = mouse.x >= 0 && mouse.y >= 0 && mouse.x < (float)w && mouse.y < (float)h;
+    // Позицію курсора віддаємо ImGui самі — див. poll_hover().
+    ImGui::GetIO().AddMousePosEvent((float)mouse_.x, (float)mouse_.y);
+    ImGui::NewFrame();
 
     // Поки вікно замкнене (клік-крізь) або миші немає — керувати нічим:
     // постійна смужка поверх гри це шум, а не зручність.
