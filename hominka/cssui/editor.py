@@ -5,14 +5,13 @@ import os
 import random
 import re
 
-from PySide6.QtCore import Qt, QTimer, QUrl
-from PySide6.QtGui import QColor, QIcon, QTextCursor
+from PySide6.QtCore import Qt, QTimer
+from PySide6.QtGui import QColor, QIcon, QImage, QPixmap, QTextCursor
 from PySide6.QtWidgets import (
     QAbstractItemView, QFileDialog, QHBoxLayout, QLabel, QListWidget,
     QListWidgetItem, QMainWindow, QPushButton, QSizeGrip, QSplitter, QTabWidget,
     QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget,
 )
-from PySide6.QtWebEngineWidgets import QWebEngineView
 
 from .. import feed as chatfeed
 from ..paths import resource_path
@@ -20,7 +19,7 @@ from ..version import APP_ICON
 from .catalog import RECIPES, SAMPLES, SELECTORS
 from .codeedit import CodeEdit
 from .styles import EDITOR_CSS
-from .validator import validate_css
+from .validator import lint_css, validate_css
 
 class CssEditor(QMainWindow):
     """Вікно «свій CSS»: редактор, приклад і довідник в одному місці."""
@@ -60,11 +59,13 @@ class CssEditor(QMainWindow):
         self._grip = QSizeGrip(root)
         self._grip.setFixedSize(16, 16)
 
-        # Перегляд оновлюємо не на кожну літеру: перемальовувати сторінку в
-        # такт набору — і моргання, і марна робота.
+        # Перегляд оновлюємо не на кожну літеру: розбирати CSS і перескладати
+        # кожен рядок у такт набору — марна робота. 120 мс — це вже «одразу» на
+        # око, але між двома швидкими натисканнями перемальовування не буде.
+        # Раніше стояло 350: браузеру потрібна була фора, нативному рендеру ні.
         self._debounce = QTimer(self)
         self._debounce.setSingleShot(True)
-        self._debounce.setInterval(350)
+        self._debounce.setInterval(120)
         self._debounce.timeout.connect(self.apply_preview)
         self.editor.textChanged.connect(self._debounce.start)
 
@@ -84,10 +85,56 @@ class CssEditor(QMainWindow):
 
         self.editor.setPlainText(win.custom_css or "")
         self._preview_ready = False
-        self.preview.loadFinished.connect(self._on_preview_loaded)
-        self.preview.setHtml(chatfeed.page_html(win.custom_css or ""),
-                             QUrl("https://stream.svitix.com/"))
+        self._start_preview()
         self.validate()
+
+    def _start_preview(self):
+        """Піднімає процес перегляду й підписується на кадри."""
+        from ..nativerender import NativeRenderer
+        self._render = NativeRenderer(self, preview=True)
+        if not self._render.available() or not self._render.start():
+            # Бінаря немає — перегляд лишається порожнім, але редагувати CSS це
+            # не заважає: правила зберігаються й діють у самому чаті.
+            self._render = None
+            self.preview.setText("перегляд недоступний:\nнемає нативного рендера")
+            return
+        self._render.frame.connect(self._on_frame)
+        self._preview_ready = True
+        self._render.set_layout(getattr(self.win, "chat_layout", []) or [])
+        self._render.set_css(self.win.custom_css or "")
+        self._sync_preview_size()
+        self.fill_preview()
+
+    def _sync_preview_size(self):
+        """Розмір кадру = розмір місця під нього. Рендер малює рівно стільки."""
+        if self._render is None:
+            return
+        self._render.set_config(zoom=getattr(self.win, "zoom", 1.0) or 1.0,
+                                width=max(160, self.preview.width()),
+                                height=max(120, self.preview.height()))
+
+    def _on_frame(self, w: int, h: int, data: bytes):
+        """Пікселі з рендера → картинка у QLabel.
+
+        Format_ARGB32_Premultiplied, а не ARGB32: рендер віддає премножені
+        пікселі (їх чекає композитор), і якби ми оголосили їх звичайними, усе
+        напівпрозоре потемніло б.
+        """
+        if w <= 0 or h <= 0 or len(data) < w * h * 4:
+            return
+        img = QImage(data, w, h, w * 4, QImage.Format_ARGB32_Premultiplied)
+        # copy(): байти належать тимчасовому об'єкту, а QImage їх не володіє.
+        self.preview.setPixmap(QPixmap.fromImage(img.copy()))
+
+    def resizeEvent(self, e):
+        super().resizeEvent(e)
+        self._sync_preview_size()
+
+    def closeEvent(self, e):
+        if getattr(self, "_render", None) is not None:
+            self._render.stop()
+            self._render = None
+        super().closeEvent(e)
 
     # --- своя смужка вікна ---
     def _titlebar(self) -> QHBoxLayout:
@@ -187,6 +234,7 @@ class CssEditor(QMainWindow):
         tabs.addTab(self._order(), "Порядок")
         tabs.addTab(self._reference(), "Класи")
         tabs.addTab(self._recipes(), "Приклади")
+        tabs.addTab(self._limits(), "Що не працює")
         lay.addWidget(tabs, 1)
 
         self.errors = QListWidget(box)
@@ -295,7 +343,7 @@ class CssEditor(QMainWindow):
             self.order_list.blockSignals(False)
             parts = self.layout_parts()
         if getattr(self, "_preview_ready", False):
-            self.preview.page().runJavaScript(chatfeed.apply_layout_js(parts))
+            self._render.set_layout(parts)
             self.fill_preview()
 
     def _reference(self) -> QWidget:
@@ -331,6 +379,32 @@ class CssEditor(QMainWindow):
         tree.itemDoubleClicked.connect(self._insert_snippet)
         return tree
 
+    def _limits(self) -> QWidget:
+        """Чого рушій не вміє — і чим це замінити.
+
+        Окрема вкладка, а не рядок у довідці, бо саме сюди йдуть із питанням
+        «чому в браузері працювало, а тут ні». Список той самий, що й у
+        попередженнях редактора (cssui/limits.py) — щоб вони не розійшлися.
+        """
+        from .limits import UNSUPPORTED, UNSUPPORTED_AT
+        tree = QTreeWidget(self)
+        tree.setColumnCount(3)
+        tree.setHeaderLabels(["Властивість", "Що буде", "Чим замінити"])
+        tree.setRootIsDecorated(False)
+        rows = [(name, what, instead) for name, what, instead in UNSUPPORTED]
+        rows += [("@" + at, what, instead)
+                 for at, (what, instead) in sorted(UNSUPPORTED_AT.items())]
+        for name, what, instead in rows:
+            item = QTreeWidgetItem([name, what, instead])
+            tip = "%s\n\n%s\n\nЗамість: %s" % (name, what, instead)
+            for col in range(3):
+                item.setToolTip(col, tip)
+            item.setForeground(0, QColor("#fcd34d"))
+            tree.addTopLevelItem(item)
+        tree.setColumnWidth(0, 150)
+        tree.setColumnWidth(1, 300)
+        return tree
+
     # --- права половина: живий перегляд ---
     def _right(self) -> QWidget:
         box = QWidget(self)
@@ -342,12 +416,15 @@ class CssEditor(QMainWindow):
         cap.setObjectName("hint")
         lay.addWidget(cap)
 
-        self.preview = QWebEngineView(box)
+        # Перегляд малює ТОЙ САМИЙ рендер, що й чат поверх гри, — окремим
+        # процесом (--preview), який шле сюди готові пікселі. Раніше тут стояв
+        # другий браузер, і він показував не те, що побачить глядач: розкладку
+        # й підтримку CSS у litehtml і Chromium ніхто не звіряв. Тепер
+        # перегляд — це буквально кадр із того ж рушія.
+        self.preview = QLabel(box)
         self.preview.setMinimumWidth(320)
-        # Прозорий фон, як у справжньому вікні чату: інакше під повідомленнями
-        # біле полотно, і людина підбирає кольори до фону, якого в кадрі немає.
+        self.preview.setAlignment(Qt.AlignBottom | Qt.AlignLeft)
         self.preview.setAttribute(Qt.WA_TranslucentBackground, True)
-        self.preview.page().setBackgroundColor(Qt.transparent)
         # Шахівка під прозорим фоном: у OBS чат лежить поверх картинки, і
         # суцільно чорна підкладка обманювала б щодо прозорості.
         holder = QWidget(box)
@@ -396,15 +473,30 @@ class CssEditor(QMainWindow):
 
     def validate(self) -> bool:
         errors = validate_css(self.css())
+        # Попередження — не помилки, і плутати їх не можна: правило написане
+        # правильно, просто нативний рушій його не вміє. Тому вони йдуть НИЖЧЕ
+        # помилок і іншим кольором, і на «зберегти» не впливають.
+        warns = lint_css(self.css())
         self.errors.clear()
         for line, message in errors:
             item = QListWidgetItem("рядок %d: %s" % (line, message))
             item.setData(Qt.UserRole, line)
             item.setForeground(QColor("#fca5a5"))
             self.errors.addItem(item)
+        for line, message in warns:
+            item = QListWidgetItem("рядок %d: %s" % (line, message))
+            item.setData(Qt.UserRole, line)
+            item.setForeground(QColor("#fcd34d"))
+            self.errors.addItem(item)
         if errors:
             self.status.setText("%d помилк%s" % (len(errors), "а" if len(errors) == 1 else "и"))
             self.status.setStyleSheet("background:#7f1d1d; color:#fff;")
+        elif warns:
+            # Не помилка, але й не «все гаразд»: правила діяти не будуть, і
+            # мовчати про це — саме той випадок, коли людина потім гадає,
+            # чому в браузері працювало, а тут ні.
+            self.status.setText("%d не спрацює" % len(warns))
+            self.status.setStyleSheet("background:#78350f; color:#fde68a;")
         elif self.css().strip():
             self.status.setText("синтаксис у порядку")
             self.status.setStyleSheet("background:#14532d; color:#dcfce7;")
@@ -421,13 +513,13 @@ class CssEditor(QMainWindow):
         """
         self.validate()
         if self._preview_ready:
-            self.preview.page().runJavaScript(chatfeed.apply_css_js(self.css()))
+            self._render.set_css(self.css())
 
     def fill_preview(self):
         """Очистити перегляд і пустити потік прикладів спочатку."""
         if not self._preview_ready:
             return
-        self.preview.page().runJavaScript("window.fts&&fts.clear()")
+        self._render.clear()
         self._stream_pool = list(SAMPLES)
         random.shuffle(self._stream_pool)
         self._stream_i = 0
@@ -448,8 +540,7 @@ class CssEditor(QMainWindow):
             self._stream_i = 0
         event = self._stream_pool[self._stream_i]
         self._stream_i += 1
-        self.preview.page().runJavaScript(
-            "window.fts&&fts.add(%s)" % json.dumps(event, ensure_ascii=False))
+        self._render.message(event)
 
     def _toggle_stream(self):
         self._stream_paused = not self._stream_paused
@@ -469,14 +560,6 @@ class CssEditor(QMainWindow):
     def hideEvent(self, e):
         super().hideEvent(e)
         self._stream.stop()
-
-    def _on_preview_loaded(self, ok: bool):
-        self._preview_ready = bool(ok)
-        if ok:
-            self.preview.page().runJavaScript(
-                chatfeed.apply_layout_js(self.layout_parts()))
-            self.apply_preview()
-            self.fill_preview()
 
     def _flash(self, text: str, bg: str, fg: str, ms: int = 2600):
         """Показати повідомлення в смужці стану й за ms повернути звичайний вигляд."""
