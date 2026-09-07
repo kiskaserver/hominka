@@ -68,10 +68,14 @@ def drag():
     import subprocess
     def x(*a):
         subprocess.run(["xdotool"] + list(a), check=False)
-    x("mousemove", "100", "200")       # усередині вікна (40,40 розміром 430x300)
+    # Саме за СМУЖКУ, і саме в її вільну частину. Вікно стоїть у (40,40),
+    # смужка — рядки 2..24, а кнопки й повзунок прозорості займають 5..21.
+    # Посередині смужки по висоті лежить повзунок, і натискання туди тягло б
+    # його, а не вікно; беремо нижній край смужки.
+    x("mousemove", "150", "62")
     x("mousedown", "1")
     for step in range(1, 6):
-        x("mousemove", str(100 + step * 12), str(200 + step * 6))
+        x("mousemove", str(150 + step * 12), str(62 + step * 4))
         time.sleep(0.05)
     x("mouseup", "1")
 
@@ -132,6 +136,12 @@ def main():
     # перевіряємо саме перетягуванням: підробляємо мишу через XTest (xdotool).
     # Так проходить увесь шлях — подія X, наш цикл, сокет, клієнт.
     got.clear()
+    import subprocess as _sp
+    geo = _sp.run(["xwininfo", "-root", "-tree"], capture_output=True,
+                  text=True).stdout
+    for line in geo.splitlines():
+        if "chat overlay" in line:
+            print("   вікно рендера: %s" % line.strip()[:90])
     drag()
     time.sleep(1.0)
     moves = [e for e in got if e.get("t") == "geometry"]

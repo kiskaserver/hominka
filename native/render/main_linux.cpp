@@ -326,37 +326,44 @@ int run(pid_t parent_pid) {
         for (const auto& fr : frames) changed |= apply(fr, &feed, &images, &st);
         if (st.bye) break;
 
-        const X11Event ev = win.poll_events();
-        if (ev.closed) break;
+        // Події — по одній: рішення про драг має ухвалюватися ПІСЛЯ кожної,
+        // інакше рух, що прийшов разом із натисканням, обробиться раніше.
+        X11Event ev;
+        bool closed = false;
+        while (win.poll_event(&ev)) {
+            if (ev.closed) { closed = true; break; }
 
-        // Миша: спершу рамка (вона знає про кнопки), потім вікно.
-        if (ev.motion) { chrome.on_motion(ev.mx, ev.my); changed = true; }
-        if (ev.leave) { chrome.on_leave(); changed = true; }
-        if (ev.press) {
-            chrome.on_button(ev.mx, ev.my, true);
-            switch (chrome.hit(ev.mx, ev.my, win.width(), win.height())) {
-            case ChromeBL::Hit::Strip: win.start_drag(ev.mx, ev.my); break;
-            case ChromeBL::Hit::Grip:  win.start_resize(ev.mx, ev.my); break;
-            default: break;            // кнопка чи порожнє місце — рамці видніше
+            // Спершу рамка (вона знає про кнопки), потім вікно.
+            if (ev.motion) { chrome.on_motion(ev.mx, ev.my); changed = true; }
+            if (ev.leave) { chrome.on_leave(); changed = true; }
+            if (ev.press) {
+                chrome.on_button(ev.mx, ev.my, true);
+                switch (chrome.hit(ev.mx, ev.my, win.width(), win.height())) {
+                case ChromeBL::Hit::Strip: win.start_drag(ev.mx, ev.my); break;
+                case ChromeBL::Hit::Grip:  win.start_resize(ev.mx, ev.my); break;
+                default: break;        // кнопка чи порожнє місце — рамці видніше
+                }
+                changed = true;
             }
-            changed = true;
-        }
-        if (ev.release) { chrome.on_button(ev.mx, ev.my, false); changed = true; }
+            if (ev.release) { chrome.on_button(ev.mx, ev.my, false); changed = true; }
 
-        if (ev.moved) {
-            // Людина перетягнула вікно — правда про геометрію лишається в
-            // Python, тож просто розповідаємо, що сталося.
-            char buf[160];
-            snprintf(buf, sizeof buf,
-                     "{\"t\":\"geometry\",\"x\":%d,\"y\":%d,\"w\":%d,\"h\":%d}",
-                     win.x(), win.y(), win.width(), win.height());
-            ipc.send(buf);
-            st.want_x = win.x();
-            st.want_y = win.y();
-            st.want_w = win.width();
-            st.want_h = win.height();
-            feed.set_width(st.want_w);
+            if (ev.moved) {
+                // Людина перетягнула вікно — правда про геометрію лишається в
+                // Python, тож просто розповідаємо, що сталося.
+                char buf[160];
+                snprintf(buf, sizeof buf,
+                         "{\"t\":\"geometry\",\"x\":%d,\"y\":%d,\"w\":%d,\"h\":%d}",
+                         win.x(), win.y(), win.width(), win.height());
+                ipc.send(buf);
+                st.want_x = win.x();
+                st.want_y = win.y();
+                st.want_w = win.width();
+                st.want_h = win.height();
+                feed.set_width(st.want_w);
+                changed = true;
+            }
         }
+        if (closed) break;
 
         if (st.want_w != win.width() || st.want_h != win.height() ||
             st.want_x != win.x() || st.want_y != win.y()) {

@@ -189,78 +189,76 @@ void X11Window::end_drag() {
     resizing_ = false;
 }
 
-X11Event X11Window::poll_events() {
-    X11Event out;
-    if (!ok()) return out;
+bool X11Window::poll_event(X11Event* out) {
+    if (!ok() || !out || !XPending(dpy_)) return false;
+    *out = X11Event();
 
-    while (XPending(dpy_)) {
-        XEvent e;
-        XNextEvent(dpy_, &e);
-        switch (e.type) {
-        case ButtonPress:
-            if (e.xbutton.button == Button1) {
-                out.press = true;
-                out.mx = e.xbutton.x;
-                out.my = e.xbutton.y;
-            }
-            break;
-        case ButtonRelease:
-            if (e.xbutton.button == Button1) {
-                out.release = true;
-                out.mx = e.xbutton.x;
-                out.my = e.xbutton.y;
-                end_drag();
-            }
-            break;
-        case EnterNotify:
-            out.motion = true;
-            out.mx = e.xcrossing.x;
-            out.my = e.xcrossing.y;
-            break;
-        case LeaveNotify:
-            out.leave = true;
-            break;
-        case MotionNotify:
-            out.motion = true;
-            out.mx = e.xmotion.x;
-            out.my = e.xmotion.y;
-            if (dragging_) {
-                // Тягнемо за смужку: курсор має лишатися в тій самій точці
-                // вікна, інакше воно «стрибне» під нього першим же рухом.
-                const int nx = e.xmotion.x_root - drag_dx_;
-                const int ny = e.xmotion.y_root - drag_dy_;
-                if (nx != x_ || ny != y_) {
-                    x_ = nx;
-                    y_ = ny;
-                    XMoveWindow(dpy_, win_, x_, y_);
-                    out.moved = true;
-                }
-            } else if (resizing_) {
-                const int nw = resize_w_ + (e.xmotion.x - drag_dx_);
-                const int nh = resize_h_ + (e.xmotion.y - drag_dy_);
-                const int cw = nw < 160 ? 160 : nw;
-                const int ch = nh < 120 ? 120 : nh;
-                if (cw != w_ || ch != h_) {
-                    set_geometry(x_, y_, cw, ch);
-                    out.moved = true;
-                }
-            }
-            break;
-        case ConfigureNotify:
-            if (e.xconfigure.width != w_ || e.xconfigure.height != h_) {
-                w_ = e.xconfigure.width;
-                h_ = e.xconfigure.height;
-                out.moved = true;
-            }
-            break;
-        case ClientMessage:
-            if ((Atom)e.xclient.data.l[0] == wm_delete_) out.closed = true;
-            break;
-        default:
-            break;
+    XEvent e;
+    XNextEvent(dpy_, &e);
+    switch (e.type) {
+    case ButtonPress:
+        if (e.xbutton.button == Button1) {
+            out->press = true;
+            out->mx = e.xbutton.x;
+            out->my = e.xbutton.y;
         }
+        break;
+    case ButtonRelease:
+        if (e.xbutton.button == Button1) {
+            out->release = true;
+            out->mx = e.xbutton.x;
+            out->my = e.xbutton.y;
+            end_drag();
+        }
+        break;
+    case EnterNotify:
+        out->motion = true;
+        out->mx = e.xcrossing.x;
+        out->my = e.xcrossing.y;
+        break;
+    case LeaveNotify:
+        out->leave = true;
+        break;
+    case MotionNotify:
+        out->motion = true;
+        out->mx = e.xmotion.x;
+        out->my = e.xmotion.y;
+        if (dragging_) {
+            // Тягнемо за смужку: курсор має лишатися в тій самій точці вікна,
+            // інакше воно «стрибне» під нього першим же рухом.
+            const int nx = e.xmotion.x_root - drag_dx_;
+            const int ny = e.xmotion.y_root - drag_dy_;
+            if (nx != x_ || ny != y_) {
+                x_ = nx;
+                y_ = ny;
+                XMoveWindow(dpy_, win_, x_, y_);
+                out->moved = true;
+            }
+        } else if (resizing_) {
+            const int nw = resize_w_ + (e.xmotion.x - drag_dx_);
+            const int nh = resize_h_ + (e.xmotion.y - drag_dy_);
+            const int cw = nw < 160 ? 160 : nw;
+            const int ch = nh < 120 ? 120 : nh;
+            if (cw != w_ || ch != h_) {
+                set_geometry(x_, y_, cw, ch);
+                out->moved = true;
+            }
+        }
+        break;
+    case ConfigureNotify:
+        if (e.xconfigure.width != w_ || e.xconfigure.height != h_) {
+            w_ = e.xconfigure.width;
+            h_ = e.xconfigure.height;
+            out->moved = true;
+        }
+        break;
+    case ClientMessage:
+        if ((Atom)e.xclient.data.l[0] == wm_delete_) out->closed = true;
+        break;
+    default:
+        break;
     }
-    return out;
+    return true;
 }
 
 }  // namespace hominka

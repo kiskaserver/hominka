@@ -244,3 +244,6 @@ def count_colour(png, want):
                     and abs(line[x + 2] - want[2]) <= 12):
                 found += 1
     return found
+
+if __name__ == "__main__":
+    sys.exit(main())

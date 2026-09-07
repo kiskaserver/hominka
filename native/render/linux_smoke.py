@@ -99,8 +99,11 @@ def main():
     print("канал відкрито")
 
     s.sendall(frame({"t": "layout", "layout": ["ico", "badges", "name", "text"]}))
+    # opacity=1.0 просимо явно: типове значення вигляду — 0.94 (як у
+    # config.json), і воно зсуває колір на 6%. Ми тут перевіряємо ДОСТАВКУ
+    # пікселів у вікно, а не прозорість, тож прибираємо зайву змінну.
     s.sendall(frame({"t": "config", "width": 430, "height": 300, "zoom": 1.0,
-                     "x": 40, "y": 40}))
+                     "x": 40, "y": 40, "opacity": 1.0}))
     # Тло рядка — саме той прикметний колір, який шукатимемо на екрані.
     s.sendall(frame({"t": "css", "css": ".m{background:rgb(255,0,128)}"}))
     for i in range(4):
