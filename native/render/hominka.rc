@@ -11,6 +11,12 @@
 
 1 ICON "hominka.ico"
 
+// Маніфест. Тип 24 — RT_MANIFEST, номер 1 — CREATEPROCESS_MANIFEST_RESOURCE_ID,
+// тобто «маніфест самої програми». Без нього Windows вважає .exe написаним під
+// давню версію системи й тихо вмикає режими сумісності, а SmartScreen і
+// антивірусні евристики бачать ще одну ознаку «зібрано на коліні».
+1 24 "hominka.manifest"
+
 1 VERSIONINFO
 FILEVERSION    HOMINKA_VER_MAJOR, HOMINKA_VER_MINOR, HOMINKA_VER_PATCH, 0
 PRODUCTVERSION HOMINKA_VER_MAJOR, HOMINKA_VER_MINOR, HOMINKA_VER_PATCH, 0

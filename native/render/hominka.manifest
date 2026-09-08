@@ -1,0 +1,57 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<!--
+  Маніфест програми.
+
+  Навіщо він тут. .exe без маніфесту для Windows — це «щось, зібране на
+  коліні»: SmartScreen і антивірусні евристики дивляться саме на такі ознаки,
+  бо справжні дропери маніфестів теж не мають. Разом із ресурсом версії та
+  значком (hominka.rc) це найдешевше, що можна зробити для довіри системи, не
+  маючи сертифіката.
+
+  Друга причина важливіша за першу: без маніфесту Windows не знає, під яку
+  версію системи програму писали, і вмикає режими сумісності — зокрема бреше
+  про версію ОС.
+
+  Чого тут навмисно НЕМАЄ:
+
+  * dpiAware. Програма поки не масштабує свою розкладку: розміри смужки,
+    рейки й відступів задані в пікселях. Оголосити її DPI-свідомою означало б
+    зробити її різкою й на третину дрібнішою на екрані зі 125% — гірше, ніж
+    зараз. Це окрема робота, і робити її треба цілком.
+
+  * requestedExecutionLevel вище за asInvoker. Права адміністратора програмі
+    не потрібні ніде: чат читається з мережі, налаштування лежать у теці
+    користувача. Просити більше, ніж треба, — і зайвий привід для підозри, і
+    зайве вікно UAC на кожен запуск.
+-->
+<assembly xmlns="urn:schemas-microsoft-com:asm.v1" manifestVersion="1.0">
+
+  <trustInfo xmlns="urn:schemas-microsoft-com:asm.v3">
+    <security>
+      <requestedPrivileges>
+        <requestedExecutionLevel level="asInvoker" uiAccess="false"/>
+      </requestedPrivileges>
+    </security>
+  </trustInfo>
+
+  <compatibility xmlns="urn:schemas-microsoft-com:compatibility.v1">
+    <application>
+      <!-- Windows 10 і 11 -->
+      <supportedOS Id="{8e0f7a12-bfb3-4fe8-b9a5-48fd50a15a9a}"/>
+      <!-- Windows 8.1 -->
+      <supportedOS Id="{1f676c76-80e1-4239-95bb-83d0f6d0da78}"/>
+    </application>
+  </compatibility>
+
+  <application xmlns="urn:schemas-microsoft-com:asm.v3">
+    <windowsSettings>
+      <!-- Довгі шляхи: тека програми може лежати як завгодно глибоко, а свій
+           CSS людина зберігає туди, куди звикла. -->
+      <longPathAware xmlns="http://schemas.microsoft.com/SMI/2016/WindowsSettings">true</longPathAware>
+      <!-- UTF-8 як кодова сторінка процесу: назви каналів і шляхи з
+           кирилицею проходять через вузькі функції Windows без каліцтва. -->
+      <activeCodePage xmlns="http://schemas.microsoft.com/SMI/2019/WindowsSettings">UTF-8</activeCodePage>
+    </windowsSettings>
+  </application>
+
+</assembly>
