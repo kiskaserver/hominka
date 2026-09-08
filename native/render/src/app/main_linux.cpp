@@ -41,6 +41,7 @@
 #include "ui/chrome_bl.h"
 #include <SDL.h>
 
+#include "ui/cssedit_ui.h"
 #include "ui/gui_win_sdl.h"
 #include "ui/settings_ui.h"
 
@@ -660,6 +661,9 @@ int run_app() {
 
     GuiWindowSDL gui;
     SettingsState sstate;
+    GuiWindowSDL css_win;
+    CssEditState cstate;
+    cstate.text = cfg.custom_css;
 
     BLImage canvas;
     BLContext ctx;
@@ -804,7 +808,38 @@ int run_app() {
                 images.set_motion(motion_of(cfg.motion));
                 changed = true;
             }
+            if (sev.css_editor) {
+                if (!css_win.created() &&
+                    !css_win.create("Hominka — свій CSS", 1080, 700, /*resizable=*/true,
+                                    /*mono=*/true))
+                    trace("редактор теми НЕ створився: %s", SDL_GetError());
+                css_win.show_beside(win.x(), win.y(), win.width(), win.height());
+            }
             if (sev.changed) cfg.save();
+        }
+
+        // Редактор теми. Правка лягає просто в стрічку — саме тому окремого
+        // «попереднього перегляду» тут немає: людина бачить не схожу картинку,
+        // а точно те, що побачить глядач.
+        if (css_win.begin()) {
+            const CssEditEvents cev = draw_css_editor(&cstate, css_win.width(),
+                                                      css_win.height(), t);
+            css_win.end();
+            css_win.drag(cev.title_active);
+            if (cev.close) css_win.hide();
+            if (cev.reset) {
+                cstate.text.clear();
+                cfg.custom_css.clear();
+                feed.set_css("");
+                cfg.save();
+                changed = true;
+            }
+            if (cev.apply) {
+                cfg.custom_css = cstate.text;
+                feed.set_css(cfg.custom_css);
+                cfg.save();
+                changed = true;
+            }
         }
 
         // Прибирання анімованих емоутів — раз на секунду.

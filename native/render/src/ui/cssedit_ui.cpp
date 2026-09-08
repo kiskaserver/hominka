@@ -166,35 +166,54 @@ CssEditEvents draw_css_editor(CssEditState* st, int w, int h, int64_t now_ms) {
         dl->AddLine(ImVec2(p.x, p.y + TITLE_H), ImVec2(p.x + w, p.y + TITLE_H),
                     IM_COL32(168, 85, 247, 90));
 
-        ImGui::SetCursorPos(ImVec2(PAD, 11));
+        ImGui::SetCursorPos(ImVec2(PAD, (TITLE_H - ImGui::GetTextLineHeight()) * 0.5f));
         ImGui::TextUnformatted("Свій CSS для чату");
 
+        // Ряд кнопок міряємо по тексту й кладемо СПРАВА НАЛІВО.
+        //
+        // Фіксовані ширини тут не годяться: під Windows це Segoe UI, під Linux
+        // те, що дав fontconfig, і «Скинути до типових» у ньому просто ширше —
+        // кнопки вилазили за край вікна, а хрестик лягав поверх «Застосувати».
+        // Ширина від тексту цього не допускає в жодному шрифті.
+        const bool asked = st->reset_asked_ms && now_ms - st->reset_asked_ms < 5000;
+        const char* samples_label = st->samples_on ? "Прибрати зразки" : "Показати зразки";
+        const char* reset_label = asked ? "Точно скинути?" : "Скинути до типових";
+        const float pad = ImGui::GetStyle().FramePadding.x * 2.0f;
+        const float w_samples = ImGui::CalcTextSize(samples_label).x + pad;
+        const float w_reset = ImGui::CalcTextSize(reset_label).x + pad;
+        const float w_apply = ImGui::CalcTextSize("Застосувати").x + pad;
+        const float gap = 6.0f;
+
+        float x = (float)w - 8.0f - 30.0f - gap;          // ліворуч від хрестика
+        const float x_apply = x - w_apply;
+        const float x_reset = x_apply - gap - w_reset;
+        const float x_samples = x_reset - gap - w_samples;
+        const float y = (TITLE_H - ImGui::GetFrameHeight()) * 0.5f;
+
         ImGui::SetCursorPos(ImVec2(0, 0));
-        ImGui::InvisibleButton("##title", ImVec2((float)w - 468.0f, TITLE_H));
+        ImGui::InvisibleButton("##title", ImVec2(x_samples > 8.0f ? x_samples - 8.0f : 8.0f,
+                                                 TITLE_H));
         ev.title_active = ImGui::IsItemActive();
 
-        ImGui::SetCursorPos(ImVec2((float)w - 460.0f, 7));
-        if (ghost(st->samples_on ? "Прибрати зразки" : "Показати зразки", 150.0f))
-            ev.samples = true;
+        ImGui::SetCursorPos(ImVec2(x_samples, y));
+        if (ghost(samples_label, w_samples)) ev.samples = true;
         if (ImGui::IsItemHovered())
             ImGui::SetTooltip(st->samples_on
                                   ? "Зразки зникнуть зі стрічки. Вони зникають і самі,\n"
                                     "коли закрити це вікно."
                                   : "Приклади повідомлень у самій стрічці, по одному —\n"
                                     "щоб бачити тему в русі, коли чат мовчить.");
-        ImGui::SameLine(0, 6);
-        ImGui::SetCursorPosY(7);
+
         // Скидання — у два кроки. Перший клац лише перепитує; за п'ять секунд
         // питання знімається саме́. Свій CSS пишуть годинами, і одного
         // випадкового кліка для його втрати замало.
-        const bool asked = st->reset_asked_ms && now_ms - st->reset_asked_ms < 5000;
+        ImGui::SetCursorPos(ImVec2(x_reset, y));
         if (asked) {
             ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.94f, 0.27f, 0.27f, 0.85f));
             ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.94f, 0.27f, 0.27f, 1.0f));
             ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.86f, 0.15f, 0.15f, 1.0f));
         }
-        if (ImGui::Button(asked ? "Точно скинути?" : "Скинути до типових",
-                          ImVec2(asked ? 146.0f : 146.0f, 0))) {
+        if (ImGui::Button(reset_label, ImVec2(w_reset, 0))) {
             if (asked) {
                 ev.reset = true;
                 st->reset_asked_ms = 0;
@@ -206,9 +225,8 @@ CssEditEvents draw_css_editor(CssEditState* st, int w, int h, int64_t now_ms) {
         if (ImGui::IsItemHovered())
             ImGui::SetTooltip("Прибрати свій CSS — лишиться наше типове оформлення.");
 
-        ImGui::SameLine(0, 6);
-        ImGui::SetCursorPosY(7);
-        if (ghost("Застосувати", 104.0f)) { ev.apply = true; st->pending = false; }
+        ImGui::SetCursorPos(ImVec2(x_apply, y));
+        if (ghost("Застосувати", w_apply)) { ev.apply = true; st->pending = false; }
         if (close_button((float)w - 38.0f, (TITLE_H - 30.0f) * 0.5f, 30.0f)) ev.close = true;
         ImGui::SetCursorPos(ImVec2(0, TITLE_H + 6));
     }
