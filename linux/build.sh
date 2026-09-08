@@ -14,7 +14,9 @@
 set -euo pipefail
 cd /src
 
-VERSION="$(grep -oP 'APP_VERSION = "\K[^"]+' hominka/version.py)"
+# Номер беремо звідти ж, звідки його бачить сама програма: hominka/version.py
+# зник разом із Python, і єдина правда тепер у version.h.
+VERSION="$(grep -oP '#define HOMINKA_VERSION "\K[^"]+' native/render/include/core/version.h)"
 echo "[linux] версія $VERSION"
 
 # --- 1. нативний рендер чату ----------------------------------------------
