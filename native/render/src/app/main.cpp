@@ -84,10 +84,17 @@ int run(int argc, wchar_t** argv) {
     // віконною (щоб подвійний клац не блимав чорним вікном), тож консоль треба
     // позичити в того, хто нас запустив.
     if (AttachConsole(ATTACH_PARENT_PROCESS)) {
+        // Перенаправляємо ЛИШЕ те, що ще нікуди не веде.
+        //
+        // Віконна програма стандартних потоків не має, тож їх треба відкрити на
+        // консоль. Але якщо нас запустили з «> файл» або через канал, потоки вже
+        // дійсні — і freopen на CONOUT$ забрав би вивід у консоль, а файл лишив
+        // порожнім. Саме так і виходило: `--updatecheck > out.txt` не давав
+        // жодного рядка.
         FILE* f = nullptr;
-        freopen_s(&f, "CONOUT$", "w", stdout);
-        freopen_s(&f, "CONOUT$", "w", stderr);
-        freopen_s(&f, "CONIN$", "r", stdin);
+        if (!GetStdHandle(STD_OUTPUT_HANDLE)) freopen_s(&f, "CONOUT$", "w", stdout);
+        if (!GetStdHandle(STD_ERROR_HANDLE)) freopen_s(&f, "CONOUT$", "w", stderr);
+        if (!GetStdHandle(STD_INPUT_HANDLE)) freopen_s(&f, "CONIN$", "r", stdin);
     }
 
     int rc = 1;
