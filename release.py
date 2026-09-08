@@ -1,7 +1,7 @@
 """
 Випуск нової версії Hominka на update.svitix.com.
 
-Що робить: збирає .exe (за потреби), пакує теку в zip, рахує sha256 і розмір,
+Що робить: збирає програму (Windows і Linux), пакує, рахує sha256 і розмір,
 оновлює маніфест каналу разом з історією і кладе все на сервер.
 
     python release.py --version 1.1.0 --channel stable --kind minor \
@@ -38,7 +38,7 @@ import tempfile
 import zipfile
 from datetime import date
 
-from hominka import signing
+import signing
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 DIST = os.path.join(HERE, "dist")
@@ -147,76 +147,26 @@ def build_native() -> str:
     return out
 
 
-def build_splash(version: str):
-    """Перемальовує splash.png із версією в куті (напр. «2.7.1»).
-
-    ВАЖЛИВО: у картинці — лише версія, БЕЗ каналу. Інакше bета й стабільна тієї ж
-    версії давали б різні за байтами архіви з однаковим ім'ям файлу — вони
-    зіштовхувалися б на сервері (останній перезаписує), і sha в чужому маніфесті
-    вже не збігався б. Канал показуємо в РЯДКУ заставки під час запуску (беремо з
-    config.json конкретної копії — див. app.py), тож на моніторі стрімера бета й
-    стабільна однаково відрізняються, а архів лишається спільним.
-
-    Не критично: якщо перемалювати не вдалось (немає Pillow тощо), лишаємо стару
-    splash.png і йдемо далі — випуск через це зривати не варто."""
-    py = os.path.join(HERE, ".venv", "Scripts", "python.exe")
-    if not os.path.isfile(py):
-        py = sys.executable
-    try:
-        run([py, "make_splash.py", version], cwd=HERE)
-    except SystemExit:
-        print("УВАГА: не вдалося перемалювати splash.png — беру наявну")
-
-
-def build_exe():
-    """PyInstaller за Hominka_one.spec — збірка ОДНИМ файлом.
-
-    Раніше збирали текою: поруч із .exe лежала тека _internal на 340 МБ. Тепер
-    усе всередині Hominka.exe, а заставку (splash) і відкидання зайвих мовних
-    файлів описує сам spec. Версію .exe бере з version_info.txt — його
-    оновлюємо теж."""
-    py = os.path.join(HERE, ".venv", "Scripts", "python.exe")
-    if not os.path.isfile(py):
-        py = sys.executable
-    run([py, "-m", "PyInstaller", "--noconfirm", "--clean", "Hominka_one.spec"], cwd=HERE)
-
-
 def stamp_version(version: str):
-    """Проставляє версію в hominka/version.py, version_info.txt і version.h.
+    """Проставляє версію в native/render/include/core/version.h.
 
-    Одне джерело правди — аргумент --version: інакше в маніфесті одне, у вікні
-    «про програму» друге, а у властивостях .exe третє."""
+    Одне джерело правди — аргумент --version. Раніше номер жив ще у двох місцях
+    (hominka/version.py і version_info.txt для PyInstaller); обидва зникли разом
+    із Python, а властивості .exe тепер бере windres просто з version.h."""
     nums = re.findall(r"\d+", version)[:3]
     while len(nums) < 3:
         nums.append("0")
-    tup = "(%s, 0)" % ", ".join(nums)
 
-    p = os.path.join(HERE, "hominka", "version.py")
-    src = open(p, encoding="utf-8").read()
-    src = re.sub(r'APP_VERSION = "[^"]*"', 'APP_VERSION = "%s"' % version, src, count=1)
-    open(p, "w", encoding="utf-8", newline="\n").write(src)
-
-    # Нативна частина бачить лише теку native/, тож номер їй доводиться
-    # копіювати. Робимо це ТУТ, поруч із рештою: інакше нативне вікно «про
-    # програму» показувало б версію позаминулого випуску, і ніхто б не помітив.
     p = os.path.join(HERE, "native", "render", "include", "core", "version.h")
     src = open(p, encoding="utf-8").read()
     src = re.sub(r'#define HOMINKA_VERSION "[^"]*"',
                  '#define HOMINKA_VERSION "%s"' % version, src, count=1)
-    # Ті самі числа окремо: ресурс VERSIONINFO у .exe вимагає їх цифрами, а не
-    # рядком. Забути про них означає, що у властивостях файлу стоятиме версія
+    # Ті самі числа окремо: ресурс VERSIONINFO вимагає їх цифрами, а не рядком.
+    # Забути про них означає, що у властивостях файлу стоятиме версія
     # позаминулого випуску, і помітить це лише той, хто відкриє «Подробиці».
     for name, num in zip(("MAJOR", "MINOR", "PATCH"), nums):
         src = re.sub(r"#define HOMINKA_VER_%s +\d+" % name,
                      "#define HOMINKA_VER_%s %s" % (name, num), src, count=1)
-    open(p, "w", encoding="utf-8", newline="\n").write(src)
-
-    p = os.path.join(HERE, "version_info.txt")
-    src = open(p, encoding="utf-8").read()
-    src = re.sub(r"filevers=\([^)]*\)", "filevers=" + tup, src, count=1)
-    src = re.sub(r"prodvers=\([^)]*\)", "prodvers=" + tup, src, count=1)
-    src = re.sub(r"'FileVersion', '[^']*'", "'FileVersion', '%s'" % version, src, count=1)
-    src = re.sub(r"'ProductVersion', '[^']*'", "'ProductVersion', '%s'" % version, src, count=1)
     open(p, "w", encoding="utf-8", newline="\n").write(src)
     print("версію проставлено:", version)
 
@@ -237,7 +187,7 @@ def pack(version: str, exe_path: str = "", suffix: str = "win64",
     """
     exe_path = exe_path or EXE
     if not os.path.isfile(exe_path):
-        raise SystemExit("немає %s — спершу зберіть (без --no-build)" % exe_path)
+        raise SystemExit("немає %s — збірка не залишила файл" % exe_path)
     out = os.path.join(tempfile.gettempdir(), "Hominka-%s-%s.zip" % (version, suffix))
     if os.path.exists(out):
         os.remove(out)
@@ -325,13 +275,6 @@ def main():
                          "без нього береться стандартне для каналу (CHANNEL_WARNINGS)")
     ap.add_argument("--no-warning", action="store_true",
                     help="випустити без попередження, навіть якщо канал має стандартне")
-    ap.add_argument("--no-build", action="store_true", help="взяти вже зібране в dist/")
-    ap.add_argument("--native", action="store_true",
-                    help="випуск БЕЗ Python: програма — це сам нативний рендер "
-                         "(hominka-render-x64.exe під іменем Hominka.exe). "
-                         "Архів ~6 МБ замість ~200; PyInstaller не запускається")
-    ap.add_argument("--no-native", action="store_true",
-                    help="не вкладати інжектор навіть у тестовий канал")
     ap.add_argument("--linux-zip", default="",
                     help="готовий AppImage для Linux; за замовчуванням збираємо "
                          "самі в контейнері (назва ключа лишилася від часів zip)")
@@ -382,26 +325,15 @@ def main():
         linux_zip = args.linux_zip
         if not linux_zip and not args.no_linux:
             linux_zip = build_linux(args.version)
-        # Нативний випуск: PyInstaller не потрібен зовсім — програмою стає сам
-        # рендер. Заставка теж ні до чого: він відкривається миттєво, і
-        # показувати «зачекайте» нема за що.
-        if not args.no_build and not args.native:
-            build_splash(args.version)   # версія на заставці (канал — у рядку під час запуску)
-            build_exe()
-        # Інжектор («чат у грі») тепер їде в УСІ канали — це повноцінна
-        # можливість, вимкнена за замовчуванням і з попередженням. Збираємо його
-        # тим самим контейнером; --no-native дає випуск без нього.
-        native_dir = ""
-        if not args.no_native or args.native:
-            native_dir = build_native()
-        exe_path = EXE
-        if args.native:
-            # Кладемо рендер під іменем Hominka.exe: саме його шукає підмінник
-            # при оновленні, і саме його бачить людина в теці програми.
-            exe_path = os.path.join(native_dir, "Hominka.exe")
-            shutil.copy2(os.path.join(native_dir, "hominka-render-x64.exe"), exe_path)
-        win_zip = pack(args.version, exe_path, "win64", native_dir,
-                       with_render=not args.native)
+        # Інжектор («чат у грі») їде в УСІ канали — це повноцінна можливість,
+        # вимкнена за замовчуванням і з попередженням. Тим самим контейнером
+        # збирається й сам рендер, який тепер і Є програмою.
+        native_dir = build_native()
+        # Кладемо рендер під іменем Hominka.exe: саме його шукає підмінник при
+        # оновленні, і саме його бачить людина в теці програми.
+        exe_path = os.path.join(native_dir, "Hominka.exe")
+        shutil.copy2(os.path.join(native_dir, "hominka-render-x64.exe"), exe_path)
+        win_zip = pack(args.version, exe_path, "win64", native_dir, with_render=False)
         uploads.append(win_zip)
         files.append(entry(args.version, win_zip, "win64"))
         if linux_zip:

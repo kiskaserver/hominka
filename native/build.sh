@@ -107,11 +107,9 @@ RENDER_INC="-isystem $TP/include -isystem $TP/include/freetype2 -I $SRC -I $SRC/
 RENDER_SRC="
     $SRC/render/src/app/main.cpp
     $SRC/render/src/app/diag.cpp
-    $SRC/render/src/app/ipc_mode.cpp
     $SRC/render/src/app/nettest.cpp
     $SRC/render/src/app/overlay.cpp
     $SRC/render/src/app/offscreen.cpp
-    $SRC/render/src/app/preview.cpp
     $SRC/render/src/app/runtime.cpp
     $SRC/render/src/app/selftest.cpp
 
@@ -136,7 +134,6 @@ RENDER_SRC="
     $SRC/render/src/net/viewers.cpp
 
     $SRC/render/src/platform/gamewin.cpp
-    $SRC/render/src/platform/ipc.cpp
     $SRC/render/src/platform/vklayer.cpp
 
     $SRC/render/src/ui/chrome.cpp

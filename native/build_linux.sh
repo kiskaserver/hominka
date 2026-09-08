@@ -57,8 +57,6 @@ SRCS="
     $SRC/render/src/update/update_view.cpp
     $SRC/render/src/update/updater_unix.cpp
 
-    $SRC/render/src/platform/ipc.cpp
-    $SRC/render/src/platform/ipc_unix.cpp
     $SRC/render/src/platform/x11_window.cpp
 
     $SRC/render/src/ui/chrome_bl.cpp

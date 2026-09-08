@@ -10,13 +10,7 @@
 // довідку й зникати. Саме так і сталося у 3.0.0: людина клацала — вигулькувала
 // консоль із переліком ключів і одразу закривалася.
 //
-//   --app                        сам собі програма: свій config.json, свої
-//                                канали, вікно чату, налаштування й редактор
-//                                теми. Python не потрібен (app/overlay.cpp).
-//   --run <pid>                  той самий цикл, але керує ним Hominka на
-//                                Python, а повідомлення йдуть каналом.
-//   --preview <pid>              кадр у редактор CSS старої програми
-//                                (app/preview.cpp).
+//   --app                        те саме, що й без ключів: сама програма.
 //   --selftest вхід.json вихід.png [--width N]
 //                                звірка з браузером (app/selftest.cpp).
 //   --nettest <площадка> <канал> [сек]   живий чат у консоль.
@@ -38,7 +32,6 @@
 #include "app/diag.h"
 #include "app/nettest.h"
 #include "app/overlay.h"
-#include "app/preview.h"
 #include "app/runtime.h"
 #include "app/selftest.h"
 #include "gfx/cssbits.h"
@@ -50,9 +43,7 @@ void usage() {
     fwprintf(stderr,
              L"Використання:\n"
              L"  hominka-render-x64.exe --selftest <вхід.json> <вихід.png> [--width N]\n"
-             L"  hominka-render-x64.exe --app                (сам собі програма)\n"
-             L"  hominka-render-x64.exe --run <pid Hominka>\n"
-             L"  hominka-render-x64.exe --preview <pid Hominka>\n"
+             L"  hominka-render-x64.exe --app                (те саме, що без ключів)\n"
              L"  hominka-render-x64.exe --nettest <площадка> <канал> [сек]\n"
              L"  hominka-render-x64.exe --csslint <тема.css>\n"
              L"  hominka-render-x64.exe --updatecheck [канал] [версія] [--download|--install]\n"
@@ -84,7 +75,7 @@ int run(int argc, wchar_t** argv) {
 
     // Ключів немає — це звичайний запуск програми.
     if (argc < 2) {
-        const int rc = hominka::run_overlay(0, /*standalone=*/true);
+        const int rc = hominka::run_overlay();
         CoUninitialize();
         return rc;
     }
@@ -108,10 +99,6 @@ int run(int argc, wchar_t** argv) {
         hominka::narrow(argv[2], plat, sizeof plat);
         hominka::narrow(argv[3], ch, sizeof ch);
         rc = hominka::nettest(plat, ch, argc >= 5 ? _wtoi(argv[4]) : 20);
-    } else if (argc >= 3 && !wcscmp(argv[1], L"--preview")) {
-        rc = hominka::run_preview((DWORD)_wtoi(argv[2]));
-    } else if (argc >= 3 && !wcscmp(argv[1], L"--run")) {
-        rc = hominka::run_overlay((DWORD)_wtoi(argv[2]), /*standalone=*/false);
     } else if (argc >= 3 && !wcscmp(argv[1], L"--verifyrelease")) {
         rc = hominka::verify_release(argv[2]);
     } else if (argc >= 2 && !wcscmp(argv[1], L"--updatecheck")) {
@@ -127,7 +114,7 @@ int run(int argc, wchar_t** argv) {
     } else if (argc >= 3 && !wcscmp(argv[1], L"--csslint")) {
         rc = hominka::css_check(argv[2]);
     } else if (argc >= 2 && !wcscmp(argv[1], L"--app")) {
-        rc = hominka::run_overlay(0, /*standalone=*/true);
+        rc = hominka::run_overlay();
     } else if (argc >= 4 && !wcscmp(argv[1], L"--selftest")) {
         int width = 430;                       // типова ширина вікна чату
         for (int i = 4; i + 1 < argc; ++i)

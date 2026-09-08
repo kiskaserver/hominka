@@ -30,6 +30,18 @@
 
 namespace hominka {
 
+// Стан оверлея, вкладеного в гру: чи він увімкнений і як має виглядати.
+//
+// Раніше жив у app/ipc_mode.h, бо його задавала Hominka на Python. Тепер його
+// задають налаштування, а тут він тому, що саме FrameWriter і несе ці значення
+// в кадр для вкладеної DLL.
+struct InjectState {
+    bool on = false;
+    uint32_t pid = 0;          // малювати лише в цьому процесі (0 = у будь-якому)
+    uint32_t opacity = 235;
+    bool hide_obs = false;
+};
+
 class FrameWriter {
 public:
     ~FrameWriter() { close(); }

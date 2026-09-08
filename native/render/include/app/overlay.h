@@ -10,6 +10,6 @@
 
 namespace hominka {
 
-int run_overlay(DWORD parent_pid, bool standalone);
+int run_overlay();
 
 }  // namespace hominka

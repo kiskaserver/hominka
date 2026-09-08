@@ -6,7 +6,6 @@
 #include <string>
 #include <vector>
 
-#include "app/ipc_mode.h"
 #include "app/offscreen.h"
 #include "app/runtime.h"
 #include "common/dcomp_window.h"
@@ -20,7 +19,6 @@
 #include "net/viewers.h"
 #include "platform/frame_writer.h"
 #include "platform/gamewin.h"
-#include "platform/ipc.h"
 #include "ui/chrome.h"
 #include "ui/cssedit_ui.h"
 #include "ui/gui_win.h"
@@ -256,12 +254,8 @@ bool pump_images(ImageFetch* fetch, ImageCache* images, Feed* feed) {
 
 }  // namespace
 
-int run_overlay(DWORD parent_pid, bool standalone) {
-    rlog("старт, батько pid=%lu", (unsigned long)parent_pid);
-
-    // Стежимо за Hominka й виходимо, коли вона зникла (навіть якщо впала):
-    // щоб оверлей ніколи не лишався сиротою на екрані.
-    HANDLE parent = parent_pid ? OpenProcess(SYNCHRONIZE, FALSE, parent_pid) : nullptr;
+int run_overlay() {
+    rlog("старт");
 
     IDWriteFactory* dwrite = nullptr;
     if (FAILED(DWriteCreateFactory(DWRITE_FACTORY_TYPE_SHARED, __uuidof(IDWriteFactory),
@@ -299,19 +293,10 @@ int run_overlay(DWORD parent_pid, bool standalone) {
     // Перші секунди рамку видно без наведення: інакше запущена програма — це
     // темний прямокутник, який нічим себе не виказує, і людина возить мишею по
     // екрану, доки випадково на нього не натрапить.
-    if (standalone) chrome.begin_intro(7000);
+    chrome.begin_intro(7000);
     Look look;
 
-    IpcServer ipc;
-    if (!standalone) {
-        if (!ipc.start(parent_pid)) {
-            rlog("канал не створився — вихід");
-            return 4;
-        }
-        rlog("готово, чекаю на %s", ipc.name().c_str());
-    }
-
-    // Самостійний режим: налаштування, канали й картинки — наші.
+    // Налаштування, канали й картинки — наші.
     Config cfg;
     ChatNet net;
     ImageFetch fetch;
@@ -324,7 +309,7 @@ int run_overlay(DWORD parent_pid, bool standalone) {
     Viewers viewers;
     bool update_asked = false;
     GameState games;
-    if (standalone) {
+    {
         cfg.load();
         look = cfg.look;
         feed.set_zoom(look.zoom);
@@ -349,7 +334,7 @@ int run_overlay(DWORD parent_pid, bool standalone) {
     // Перевірка вигляду: обидва вікна приховані від захоплення екрана, тож
     // знімок робимо самі — і виходимо. Той самий спосіб, що й «shot» у
     // робочому режимі.
-    const char* shot_prefix = standalone ? getenv("HOMINKA_UI_SHOT") : nullptr;
+    const char* shot_prefix = getenv("HOMINKA_UI_SHOT");
     // Скільки чекати перед знімками. За замовчуванням досить, щоб під'єднатися;
     // жвавому чату дають більше — інакше в кадрі порожня стрічка.
     const char* shot_wait_env = getenv("HOMINKA_UI_WAIT");
@@ -365,12 +350,14 @@ int run_overlay(DWORD parent_pid, bool standalone) {
     int css_shots = 0;
 
     int want_w = 430, want_h = 560;
-    if (standalone) { want_w = cfg.w; want_h = cfg.h; feed.set_width(want_w); }
+    want_w = cfg.w;
+    want_h = cfg.h;
+    feed.set_width(want_w);
     // blanked у самостійному режимі починається з «так»: тоді перший же кадр
     // намалюється, і вікно видно ще до першого повідомлення. Інакше свіжо
     // встановлена програма не показала б узагалі нічого — і не було б на що
     // навести, щоб дістатися налаштувань.
-    bool enabled = true, bye = false, logged_first = false, blanked = standalone;
+    bool logged_first = false, blanked = true;
     std::string shot_path;
     // Розмір вікна веде Python, АЛЕ поки його тягнуть за куточок — веде рука.
     // Інакше кожен «config» смикав би вікно назад під час розтягування.
@@ -383,7 +370,6 @@ int run_overlay(DWORD parent_pid, bool standalone) {
     bool inject_was_on = false;
     std::vector<uint8_t> frame_px;
     unsigned tick = 0;
-    std::vector<IpcFrame> frames;
 
     MSG msg;
     for (;;) {
@@ -392,11 +378,11 @@ int run_overlay(DWORD parent_pid, bool standalone) {
                 rlog("WM_QUIT");
                 // Шар Vulkan лишати зареєстрованим після виходу ні до чого: він
                 // вантажився б у чужі Vulkan-програми, яким до нас байдуже.
-                if (standalone) vklayer_unregister();
+                vklayer_unregister();
                 chrome.shutdown();
                 return 0;
             }
-            if (standalone && msg.message == WM_HOTKEY) {
+            if (msg.message == WM_HOTKEY) {
                 look.locked = !look.locked;
                 cfg.look.locked = look.locked;
                 cfg.save();
@@ -404,29 +390,10 @@ int run_overlay(DWORD parent_pid, bool standalone) {
             TranslateMessage(&msg);
             DispatchMessageW(&msg);
         }
-        if (parent && WaitForSingleObject(parent, 0) == WAIT_OBJECT_0) {
-            rlog("Hominka зникла — виходжу");
-            chrome.shutdown();
-            return 0;
-        }
-
         bool changed = false;
-        if (standalone) {
-            changed |= pump_chat(&net, &feed, &images, &fetch, now_ms());
-            changed |= pump_images(&fetch, &images, &feed);
-            changed |= demo.tick(&feed, &images, &fetch, cfg, now_ms());
-        } else {
-            frames.clear();
-            ipc.poll(&frames);
-            for (const auto& fr : frames)
-                changed |= apply_frame(fr, &feed, &images, &look, &inject, &want_w, &want_h,
-                                       &enabled, &bye, &shot_path);
-        }
-        if (bye) {
-            rlog("Hominka попросила завершитися");
-            chrome.shutdown();
-            return 0;
-        }
+        changed |= pump_chat(&net, &feed, &images, &fetch, now_ms());
+        changed |= pump_images(&fetch, &images, &feed);
+        changed |= demo.tick(&feed, &images, &fetch, cfg, now_ms());
 
         // Курсор над нашим же вікном налаштувань чи редактора — це не
         // наведення на чат, навіть якщо він під ними. Інакше смужка чату
@@ -445,17 +412,6 @@ int run_overlay(DWORD parent_pid, bool standalone) {
         }
         chrome.poll_hover(win.hwnd(), over_our_gui);
 
-        // Порожня стрічка — показувати нічого. Але в самостійному режимі вікно
-        // чату це єдиний шлях до налаштувань: не малювати його зовсім означало
-        // б показати свіжо встановлену програму порожнім екраном без жодної
-        // кнопки.
-        if (!enabled || (feed.size() == 0 && !standalone)) {
-            // Показувати нічого. Чистимо ОДИН раз і далі GPU не чіпаємо: саме
-            // безумовний Present щокадру колись відбирав відеокарту в гри.
-            if (win.shown() && !blanked) { win.present_transparent(); blanked = true; }
-            Sleep(16);
-            continue;
-        }
 
         const int64_t t = now_ms();
         // Розмір: поки вікно тягнуть за куточок, головний тут — курсор, і
@@ -476,13 +432,13 @@ int run_overlay(DWORD parent_pid, bool standalone) {
         // кадр щоразу. Але тоді програма перестала б засинати — а нерухомий чат,
         // який не чіпає відеокарту, і був сенсом усього переносу. Тож питаємо
         // інакше: чи змінилося у смужці хоч щось із того, що на ній видно.
-        const std::string vline = standalone ? viewers_line(viewers, cfg) : std::string();
+        const std::string vline = viewers_line(viewers, cfg);
         // Питаємо стан, а не будуємо цілий UpdateView: той складає кілька рядків,
         // а тут потрібне одне «є чи немає», і потрібне воно щокадру.
         const bool upd_ready = updater.state() == Updater::State::Available ||
                                updater.state() == Updater::State::Ready;
         const bool chrome_visible =
-            chrome.visible(look.locked, standalone && cfg.header) || chrome.intro_active();
+            chrome.visible(look.locked, cfg.header) || chrome.intro_active();
         char sig[320];
         snprintf(sig, sizeof sig, "%d%d%d%d%d%d%d|%s", (int)chrome_visible,
                  (int)chrome.hovered(), (int)look.locked, (int)look.frameless,
@@ -515,7 +471,7 @@ int run_overlay(DWORD parent_pid, bool standalone) {
             feed.set_alpha(look.opacity);
             // Місце під смужку лишаємо лише тоді, коли вона там справді буде:
             // увімкнена — завжди, вимкнена — лише поки на вікно наведено.
-            const bool bar_now = chrome.visible(look.locked, standalone && cfg.header);
+            const bool bar_now = chrome.visible(look.locked, cfg.header);
             feed.set_top_pad(bar_now ? (int)Chrome::bar_height() + 2 : 0);
             win.begin_draw();
             win.d2d()->Clear(D2D1::ColorF(0, 0, 0, 0));
@@ -544,13 +500,12 @@ int run_overlay(DWORD parent_pid, bool standalone) {
             if (rtv) win.d3d_ctx()->OMSetRenderTargets(1, &rtv, nullptr);
             const ChromeEvents cev =
                 chrome.draw_controls(win.width(), win.height(), &look, win.hwnd(),
-                                     vline, /*can_close=*/standalone, feed.size() == 0,
-                                     standalone && cfg.header,
+                                     vline, /*can_close=*/true, feed.size() == 0, cfg.header,
                                      upd_ready);
             // Поки тягнуть — розмір веде рука; відпустили (geometry_changed) —
             // знову веде Python.
             if (chrome.wants_mouse()) user_sizing = true;
-            if (standalone) {
+            {
                 // Правда про налаштування тепер тут, а не в Python: те, що
                 // покрутили в рамці, лягає в той самий config.json.
                 if (cev.look_changed || cev.lock_changed) {
@@ -574,8 +529,6 @@ int run_overlay(DWORD parent_pid, bool standalone) {
                         rlog("вікно налаштувань не створилося (лишаємося без нього)");
                     gui.show_beside(win.screen_rect());
                 }
-            } else {
-                report_chrome(&ipc, cev, look, win, &user_sizing, &feed);
             }
 
             // Кадр для оверлея, вкладеного в гру. Читання з відеокарти
@@ -655,7 +608,7 @@ int run_overlay(DWORD parent_pid, bool standalone) {
 
         // Панель налаштувань — друге вікно того самого процесу, тож і кадр її
         // малюється тут же, після чату.
-        if (standalone) {
+        {
             if (gui.begin()) {
                 const SettingsEvents sev =
                     draw_settings(&sstate, &cfg, source_view(net, viewers),
@@ -890,7 +843,7 @@ int run_overlay(DWORD parent_pid, bool standalone) {
         // Гра в повноекранному сидить у вищому z-band — тримаємось зверху, але
         // не щокадру: раз на ~250 мс досить. У рідкісних старих іграх це дає
         // мерехтіння — на цей випадок є перемикач у налаштуваннях.
-        if ((tick++ % 16) == 0 && (!standalone || cfg.keep_top)) win.keep_topmost();
+        if ((tick++ % 16) == 0 && cfg.keep_top) win.keep_topmost();
         Sleep(16);
     }
 }

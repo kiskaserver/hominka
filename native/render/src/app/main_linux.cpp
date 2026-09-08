@@ -1,12 +1,10 @@
 // Нативний рендер чату під Linux.
 //
-// Два режими:
+// Режими:
+//   (без ключів) — сама програма: конфіг, канали, вікно чату, налаштування й
+//                редактор теми.
 //   --selftest — намалювати зразки в PNG. Той самий вхід, що й у віконної
 //                версії, тож картинки можна класти поруч і звіряти.
-//   --run      — робота: вікно поверх усього й канал до Hominka.
-//   --preview  — те саме БЕЗ вікна: кадр іде пікселями назад у Hominka, і
-//                вона показує його в редакторі CSS. Так предпросмотр
-//                малюється тим самим рушієм, що й справжній чат.
 //
 // Кадру ВСЕРЕДИНІ гри (інжект) тут немає: overlay.dll — річ віконна, а на
 // Linux цей шлях вимагав би окремого шару Vulkan/GL. Чат показується поверх
@@ -37,7 +35,6 @@
 #include "gfx/imgcache.h"
 #include "net/chatnet.h"
 #include "net/imgfetch.h"
-#include "platform/ipc.h"
 #include "platform/x11_window.h"
 #include "ui/chrome_bl.h"
 #include <SDL.h>
@@ -216,357 +213,6 @@ int64_t now_ms() {
 
 // Чи живий іще той, заради кого ми запустилися. Пішов — ідемо й ми: оверлей
 // без Hominka нікому не потрібен і зняти його буде нічим.
-bool parent_alive(pid_t pid) {
-    return pid > 0 && kill(pid, 0) == 0;
-}
-
-struct RunState {
-    int want_w = 430, want_h = 560;
-    int want_x = 80, want_y = 80;
-    bool enabled = true;
-    bool bye = false;
-    Look look;                        // прозорість, підкладка, кегль, замок
-    std::string shot_path;
-};
-
-// Кадр із каналу. Повертає true, якщо стрічка чи вигляд змінилися.
-bool apply(const IpcFrame& fr, Feed* feed, ImageCache* images, RunState* st) {
-    json j;
-    try {
-        j = json::parse(fr.json);
-    } catch (const std::exception& e) {
-        trace("кадр не розібрався: %s", e.what());
-        return false;
-    }
-    const std::string t = get_str(j, "t");
-
-    if (t == "msg")    { feed->add(message_from_json(j), now_ms()); return true; }
-    if (t == "delete") { feed->remove_id(get_str(j, "id")); return true; }
-    if (t == "purge")  { feed->purge_nick(get_str(j, "nick")); return true; }
-    if (t == "clear")  { feed->clear(); return true; }
-    if (t == "css")    { feed->set_css(get_str(j, "css")); return true; }
-    if (t == "bye")    { st->bye = true; return false; }
-    if (t == "shot")   { st->shot_path = get_str(j, "path"); return true; }
-
-    if (t == "layout") {
-        std::vector<std::string> layout;
-        if (j.contains("layout") && j["layout"].is_array())
-            for (const auto& v : j["layout"])
-                if (v.is_string()) layout.push_back(v.get<std::string>());
-        feed->set_layout(layout);
-        return true;
-    }
-    if (t == "enabled") {
-        st->enabled = !j.contains("on") || !j["on"].is_boolean() || j["on"].get<bool>();
-        return true;
-    }
-    if (t == "config") {
-        if (j.contains("zoom") && j["zoom"].is_number())
-            feed->set_zoom(j["zoom"].get<float>());
-        if (j.contains("width") && j["width"].is_number())
-            st->want_w = j["width"].get<int>();
-        if (j.contains("height") && j["height"].is_number())
-            st->want_h = j["height"].get<int>();
-        if (j.contains("x") && j["x"].is_number()) st->want_x = j["x"].get<int>();
-        if (j.contains("y") && j["y"].is_number()) st->want_y = j["y"].get<int>();
-        if (j.contains("opacity") && j["opacity"].is_number())
-            st->look.opacity = j["opacity"].get<float>();
-        if (j.contains("bg_alpha") && j["bg_alpha"].is_number())
-            st->look.bg_alpha = j["bg_alpha"].get<float>();
-        if (j.contains("frameless") && j["frameless"].is_boolean())
-            st->look.frameless = j["frameless"].get<bool>();
-        if (j.contains("locked") && j["locked"].is_boolean())
-            st->look.locked = j["locked"].get<bool>();
-        if (j.contains("zoom") && j["zoom"].is_number())
-            st->look.zoom = j["zoom"].get<float>();
-        return true;
-    }
-    if (t == "image") {
-        const std::string url = get_str(j, "url");
-        if (url.empty() || fr.blob.empty()) return false;
-        images->put(url, fr.blob.data(), fr.blob.size());
-        feed->on_image_arrived(url);
-        images->gc_animated(feed->animated_in_use());
-        return true;
-    }
-    return false;
-}
-
-int run(pid_t parent_pid) {
-    FontStore fonts;
-    if (!fonts.ok()) {
-        fprintf(stderr, "FreeType недоступний\n");
-        return 3;
-    }
-    ImageCache images;
-    Feed feed(&fonts, &images);
-    images.set_evict_hook([&feed](const std::string& u) { feed.forget_image(u); });
-
-    IpcServer ipc;
-    if (!ipc.start((uint32_t)parent_pid)) {
-        fprintf(stderr, "канал не створився\n");
-        return 4;
-    }
-    fprintf(stderr, "чекаю на %s\n", ipc.name().c_str());
-
-    RunState st;
-    X11Window win;
-    if (!win.create(st.want_x, st.want_y, st.want_w, st.want_h, "Hominka chat overlay")) {
-        fprintf(stderr, "вікно не створилося (X-сервер? 32-бітний візуал?)\n");
-        return 5;
-    }
-    feed.set_width(st.want_w);
-    win.show();
-
-    ChromeBL chrome;
-    chrome.set_fonts(&fonts);
-
-    // Полотно кадру. Робимо один раз на розмір: перестворювати його щокадру —
-    // це те саме викидання памʼяті, від якого ми й пішли.
-    BLImage canvas;
-    BLContext ctx;
-    int canvas_w = 0, canvas_h = 0;
-    int64_t last_gc = 0;
-    bool blanked = false;
-
-    std::vector<IpcFrame> frames;
-    for (;;) {
-        if (!parent_alive(parent_pid)) break;
-
-        frames.clear();
-        ipc.poll(&frames);
-        bool changed = false;
-        for (const auto& fr : frames) changed |= apply(fr, &feed, &images, &st);
-        if (st.bye) break;
-
-        // Події — по одній: рішення про драг має ухвалюватися ПІСЛЯ кожної,
-        // інакше рух, що прийшов разом із натисканням, обробиться раніше.
-        X11Event ev;
-        bool closed = false;
-        while (win.poll_event(&ev)) {
-            if (ev.closed) { closed = true; break; }
-
-            // Спершу рамка (вона знає про кнопки), потім вікно.
-            if (ev.motion) { chrome.on_motion(ev.mx, ev.my); changed = true; }
-            if (ev.leave) { chrome.on_leave(); changed = true; }
-            if (ev.press) {
-                chrome.on_button(ev.mx, ev.my, true);
-                switch (chrome.hit(ev.mx, ev.my, win.width(), win.height())) {
-                case ChromeBL::Hit::Strip: win.start_drag(ev.mx, ev.my); break;
-                case ChromeBL::Hit::Grip:  win.start_resize(ev.mx, ev.my); break;
-                default: break;        // кнопка чи порожнє місце — рамці видніше
-                }
-                changed = true;
-            }
-            if (ev.release) { chrome.on_button(ev.mx, ev.my, false); changed = true; }
-
-            if (ev.moved) {
-                // Людина перетягнула вікно — правда про геометрію лишається в
-                // Python, тож просто розповідаємо, що сталося.
-                char buf[160];
-                snprintf(buf, sizeof buf,
-                         "{\"t\":\"geometry\",\"x\":%d,\"y\":%d,\"w\":%d,\"h\":%d}",
-                         win.x(), win.y(), win.width(), win.height());
-                ipc.send(buf);
-                st.want_x = win.x();
-                st.want_y = win.y();
-                st.want_w = win.width();
-                st.want_h = win.height();
-                feed.set_width(st.want_w);
-                changed = true;
-            }
-        }
-        if (closed) break;
-
-        if (st.want_w != win.width() || st.want_h != win.height() ||
-            st.want_x != win.x() || st.want_y != win.y()) {
-            win.set_geometry(st.want_x, st.want_y, st.want_w, st.want_h);
-            feed.set_width(st.want_w);
-            changed = true;
-        }
-        // Клік-крізь — лише коли рамка не чекає на мишу: інакше натискання на
-        // її ж кнопку провалилося б у гру.
-        win.set_click_through(st.look.locked && !chrome.wants_mouse());
-
-        // Список бракуючих картинок забираємо, але НЕ шлемо: Hominka качає їх
-        // сама, наперед (hominka/imagefetch.py), і слухача для такого запиту в
-        // неї немає. Забрати треба однаково — інакше він ріс би без кінця.
-        feed.take_missing();
-
-        const int64_t t = now_ms();
-        if (!st.enabled) {
-            if (!blanked) { win.present_blank(); blanked = true; }
-            usleep(16000);
-            continue;
-        }
-        blanked = false;
-
-        if (changed || feed.dirty(t) || !st.shot_path.empty()) {
-            const int w = win.width(), h = win.height();
-            if (w != canvas_w || h != canvas_h) {
-                if (canvas_w) ctx.end();
-                if (canvas.create(w, h, BL_FORMAT_PRGB32) != BL_SUCCESS) {
-                    usleep(100000);
-                    continue;
-                }
-                canvas_w = w;
-                canvas_h = h;
-            }
-            if (ctx.begin(canvas) != BL_SUCCESS) { usleep(100000); continue; }
-            ctx.set_comp_op(BL_COMP_OP_SRC_COPY);
-            ctx.fill_all(BLRgba32(0x00000000));
-            ctx.set_comp_op(BL_COMP_OP_SRC_OVER);
-            if (st.look.opacity < 0.999f) ctx.set_global_alpha(st.look.opacity);
-            // Порядок той самий, що й у віконної рамки: підкладка, чат, керування.
-            chrome.draw_backdrop(&ctx, w, h, st.look);
-            feed.draw(&ctx, w, h, t);
-            const float was_zoom = st.look.zoom;
-            const ChromeEvents ce = chrome.draw_controls(&ctx, w, h, &st.look);
-            ctx.end();
-
-            if (st.look.zoom != was_zoom) feed.set_zoom(st.look.zoom);
-            // Правда про налаштування лишається в Python: ми лише кажемо, що
-            // сталося, тими самими кадрами, що й віконна рамка.
-            if (ce.look_changed) {
-                char buf[160];
-                snprintf(buf, sizeof buf,
-                         "{\"t\":\"look\",\"opacity\":%.3f,\"bg_alpha\":%.3f,"
-                         "\"zoom\":%.3f}",
-                         st.look.opacity, st.look.bg_alpha, st.look.zoom);
-                ipc.send(buf);
-            }
-            if (ce.lock_changed) {
-                char buf[64];
-                snprintf(buf, sizeof buf, "{\"t\":\"lock\",\"on\":%s}",
-                         st.look.locked ? "true" : "false");
-                ipc.send(buf);
-            }
-            if (ce.open_settings) ipc.send("{\"t\":\"settings\"}");
-
-            BLImageData data;
-            if (canvas.get_data(&data) == BL_SUCCESS)
-                win.present((const uint8_t*)data.pixel_data, w, h);
-
-            if (!st.shot_path.empty()) {
-                canvas.write_to_file(st.shot_path.c_str());
-                st.shot_path.clear();
-            }
-        }
-
-        if (t - last_gc > 1000) {
-            last_gc = t;
-            images.gc_animated(feed.animated_in_use());
-            feed.trim_anim();
-        }
-        usleep(16000);
-    }
-
-    if (canvas_w) ctx.end();
-    win.destroy();
-    ipc.stop();
-    return 0;
-}
-
-// --- предпросмотр для редактора CSS ---------------------------------------
-//
-// Вікна тут немає навмисно: кадр малюється в память і їде назад каналом. Свій
-// канал («-preview»), тож із вікном оверлея вони не перетинаються ніде —
-// предпросмотр не може ані підмінити його, ані завалити.
-int preview(pid_t parent_pid) {
-    FontStore fonts;
-    if (!fonts.ok()) {
-        fprintf(stderr, "предпросмотр: FreeType недоступний\n");
-        return 3;
-    }
-    ImageCache images;
-    Feed feed(&fonts, &images);
-    images.set_evict_hook([&feed](const std::string& u) { feed.forget_image(u); });
-
-    IpcServer ipc;
-    if (!ipc.start((uint32_t)parent_pid, "-preview")) {
-        fprintf(stderr, "предпросмотр: канал не створився\n");
-        return 4;
-    }
-    fprintf(stderr, "предпросмотр: чекаю на %s\n", ipc.name().c_str());
-
-    RunState st;
-    st.want_w = 360;
-    st.want_h = 480;
-    feed.set_width(st.want_w);
-
-    BLImage canvas;
-    BLContext ctx;
-    int have_w = 0, have_h = 0;
-    int64_t last_gc = 0;
-    std::vector<IpcFrame> frames;
-
-    for (;;) {
-        if (!parent_alive(parent_pid)) break;
-
-        frames.clear();
-        ipc.poll(&frames);
-        bool changed = false;
-        for (const auto& fr : frames) changed |= apply(fr, &feed, &images, &st);
-        if (st.bye) break;
-        feed.take_missing();
-
-        const int64_t t = now_ms();
-        if (!changed && !feed.dirty(t)) { usleep(16000); continue; }
-
-        if (st.want_w != have_w || st.want_h != have_h) {
-            if (canvas.create(st.want_w, st.want_h, BL_FORMAT_PRGB32) != BL_SUCCESS) {
-                usleep(200000);
-                continue;
-            }
-            have_w = st.want_w;
-            have_h = st.want_h;
-            feed.set_width(have_w);
-        }
-        if (ctx.begin(canvas) != BL_SUCCESS) { usleep(50000); continue; }
-        ctx.set_comp_op(BL_COMP_OP_SRC_COPY);
-        ctx.fill_all(BLRgba32(0x00000000));
-        ctx.set_comp_op(BL_COMP_OP_SRC_OVER);
-        feed.draw(&ctx, have_w, have_h, t);
-        ctx.end();
-
-        if (t - last_gc > 1000) {
-            last_gc = t;
-            images.gc_animated(feed.animated_in_use());
-            feed.trim_anim();
-        }
-
-        BLImageData data;
-        if (canvas.get_data(&data) != BL_SUCCESS) { usleep(50000); continue; }
-        // Рядок у Blend2D може бути довшим за ширину*4 (вирівнювання), а той
-        // бік чекає щільні пікселі — тож при потребі складаємо рядок за рядком.
-        const size_t tight = (size_t)have_w * 4;
-        std::vector<uint8_t> px;
-        px.resize(tight * (size_t)have_h);
-        const uint8_t* src = (const uint8_t*)data.pixel_data;
-        for (int y = 0; y < have_h; ++y)
-            memcpy(px.data() + tight * (size_t)y, src + (size_t)y * data.stride, tight);
-
-        json j;
-        j["t"] = "frame";
-        j["w"] = have_w;
-        j["h"] = have_h;
-        ipc.send(j.dump(), px.data(), px.size());
-        usleep(16000);
-    }
-    ipc.stop();
-    return 0;
-}
-
-// --- сам собі програма ------------------------------------------------------
-//
-// Те саме, що робить app/overlay.cpp під Windows, тільки коротше: Python тут
-// більше ні до чого — канали, картинки й налаштування веде сам рендер.
-//
-// Чого ще немає: вікна налаштувань і редактора теми. Вони написані на ImGui, а
-// офіційного бекенда під X11 у ImGui немає, і це наступний крок. Доти канали
-// правляться в config.json (~/.config/hominka/config.json), а все, що є у
-// смужці вікна, працює як і має.
-
 // Події з площадок → стрічка.
 bool pump_chat(ChatNet* net, Feed* feed, ImageCache* images, ImageFetch* fetch, int64_t t) {
     bool changed = false;
@@ -605,6 +251,7 @@ bool pump_images(ImageFetch* fetch, ImageCache* images, Feed* feed) {
     return changed;
 }
 
+// Налаштування «анімовані емоути» → режим кеша картинок.
 Motion motion_of(const std::string& name) {
     if (name == "freeze") return Motion::Freeze;
     if (name == "hide") return Motion::Hide;
@@ -938,9 +585,8 @@ int run_app() {
 void usage() {
     fprintf(stderr,
             "hominka-render-linux — нативний рендер чату\n"
+            "  (без ключів)                         сама програма\n"
             "  --selftest <вхід.json> <вихід.png>   намалювати зразки\n"
-            "  --run <pid Hominka>                  вікно оверлея й канал\n"
-            "  --preview <pid Hominka>              кадр у редактор CSS\n"
             "  --nettest <площадка> <канал> [сек]   прочитати живий чат\n"
             "  --updatecheck [канал] [версія] [--download|--install]\n"
             "  --probe                              перевірити зв'язку\n"
@@ -974,14 +620,6 @@ int main(int argc, char** argv) {
     if (!strcmp(args[0], "--nettest")) {
         if (args.size() < 3) { usage(); return 1; }
         return nettest(args[1], args[2], args.size() > 3 ? atoi(args[3]) : 20);
-    }
-    if (!strcmp(args[0], "--run")) {
-        if (args.size() < 2) { usage(); return 1; }
-        return run((pid_t)atoi(args[1]));
-    }
-    if (!strcmp(args[0], "--preview")) {
-        if (args.size() < 2) { usage(); return 1; }
-        return preview((pid_t)atoi(args[1]));
     }
     if (!strcmp(args[0], "--selftest")) {
         if (args.size() < 3) { usage(); return 1; }
