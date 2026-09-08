@@ -150,6 +150,7 @@ RENDER_SRC="
     $SRC/render/src/ui/uifont.cpp
 
     $SRC/render/src/update/release.cpp
+    $SRC/render/src/update/update_view.cpp
     $SRC/render/src/update/updater.cpp
 "
 

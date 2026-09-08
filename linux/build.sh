@@ -24,21 +24,17 @@ echo "[linux] нативний рендер"
 SRC=/src/native TPL="${TPL:-/tpl}" sh native/build_linux.sh /src/dist-render
 test -x /src/dist-render/hominka-render-linux
 
-# --- 2. сама програма ------------------------------------------------------
-echo "[linux] PyInstaller"
-python3 -m PyInstaller --noconfirm --clean \
-    --distpath dist-linux --workpath build-linux Hominka_one.spec
-
-# --- 3. AppImage -----------------------------------------------------------
+# --- 2. AppImage -----------------------------------------------------------
+#
+# Рендер і Є програма. PyInstaller більше не потрібен: канали, налаштування,
+# редактор теми й оновлення нативний бінар веде сам. Через це AppImage худне з
+# двохсот з гаком мегабайтів до кількох десятків — там більше немає ані
+# Python, ані Qt.
 APPDIR=/src/build-linux/Hominka.AppDir
 rm -rf "$APPDIR"
-mkdir -p "$APPDIR/usr/bin/native"
-cp dist-linux/Hominka "$APPDIR/usr/bin/Hominka"
+mkdir -p "$APPDIR/usr/bin"
+cp dist-render/hominka-render-linux "$APPDIR/usr/bin/Hominka"
 chmod +x "$APPDIR/usr/bin/Hominka"
-# Рендер кладемо в native/ поруч із виконуваним файлом: саме там його шукає
-# hominka/inject.py:native_dir() у зібраній програмі.
-cp dist-render/hominka-render-linux "$APPDIR/usr/bin/native/"
-chmod +x "$APPDIR/usr/bin/native/hominka-render-linux"
 
 cat > "$APPDIR/AppRun" <<'RUN'
 #!/bin/sh

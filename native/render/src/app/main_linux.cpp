@@ -29,6 +29,7 @@
 #include "app/nettest.h"
 #include "core/chat_doc.h"
 #include "core/config.h"
+#include "core/version.h"
 #include "core/feed.h"
 #include "core/look.h"
 #include "gfx/cssbits.h"
@@ -40,6 +41,9 @@
 #include "platform/x11_window.h"
 #include "ui/chrome_bl.h"
 #include <SDL.h>
+
+#include "update/update_view.h"
+#include "update/updater.h"
 
 #include "ui/cssedit_ui.h"
 #include "ui/gui_win_sdl.h"
@@ -607,6 +611,52 @@ Motion motion_of(const std::string& name) {
     return Motion::Play;
 }
 
+// Перевірка оновлення з командного рядка.
+//
+// Те саме, що «--updatecheck» під Windows, і потрібне з тієї самої причини:
+// підмінник — єдина частина оновлення, якої не видно ні з коду, ні з журналу,
+// доки вона не спрацює. Тут ще й підпис перевіряється проти СПРАВЖНЬОГО
+// маніфесту: формат того, що підписується, мусить збігатися з Python до байта.
+int update_check(const char* channel, const char* pretend, bool fetch, bool put) {
+    Updater up;
+    const char* current = pretend && *pretend ? pretend : HOMINKA_VERSION;
+    up.check(channel, current, "");
+    for (int i = 0; i < 300 && up.state() == Updater::State::Checking; ++i) usleep(100000);
+
+    if (up.state() == Updater::State::UpToDate) {
+        printf("оновлень немає (у нас %s)\n", current);
+        return 0;
+    }
+    if (up.state() != Updater::State::Available) {
+        fprintf(stderr, "не вийшло: %s\n", up.error().c_str());
+        return 1;
+    }
+    const Release r = up.release();
+    printf("є оновлення: %s %s (%s), %lld байт\n", channel_label(r.channel).c_str(),
+           r.version.c_str(), kind_label(r.kind).c_str(), (long long)r.size);
+    printf("  файл: %s\n", r.url.c_str());
+    printf("  sha256: %s\n", r.sha256.c_str());
+    printf("  підпис перевірено\n");
+    if (!fetch) return 0;
+
+    printf("качаю…\n");
+    fflush(stdout);
+    up.download();
+    while (up.state() == Updater::State::Downloading) usleep(200000);
+    if (up.state() != Updater::State::Ready) {
+        fprintf(stderr, "не завантажилося: %s\n", up.error().c_str());
+        return 1;
+    }
+    printf("завантажено, сума збіглася\n");
+    if (!put) return 0;
+
+    // І власне підміна. Після неї execv замінює процес, тож рядків нижче
+    // не буде — хіба що щось не вдалося.
+    const std::string bad = up.install();
+    fprintf(stderr, "не встановилося: %s\n", bad.c_str());
+    return 1;
+}
+
 // Стан джерел очима панелі. Те саме, що робить app/overlay.cpp; глядачів тут
 // поки немає — лічильник під Linux ще не під'єднаний.
 std::vector<SourceView> source_view(const ChatNet& net) {
@@ -664,6 +714,9 @@ int run_app() {
     GuiWindowSDL css_win;
     CssEditState cstate;
     cstate.text = cfg.custom_css;
+    Updater updater;
+    bool update_asked = false;
+    const int64_t started = now_ms();
 
     BLImage canvas;
     BLContext ctx;
@@ -790,8 +843,8 @@ int run_app() {
         // Панель налаштувань. Своє вікно, свій контекст ImGui, свій кадр — з
         // вікном чату вона ділить лише config.
         if (gui.begin()) {
-            UpdateView upd;                 // оновлювач під Linux ще не зроблено
-            GameView game;                  // чат усередині гри — теж
+            const UpdateView upd = update_view(updater);
+            GameView game;                  // чат усередині гри під Linux немає
             const SettingsEvents sev =
                 draw_settings(&sstate, &cfg, source_view(net), upd, game,
                               "Linux · нативний рендер", gui.width(), gui.height());
@@ -815,7 +868,24 @@ int run_app() {
                     trace("редактор теми НЕ створився: %s", SDL_GetError());
                 css_win.show_beside(win.x(), win.y(), win.width(), win.height());
             }
+            if (sev.check_update) updater.check(cfg.channel, HOMINKA_VERSION, "");
+            if (sev.start_download) updater.download();
+            if (sev.do_install) {
+                const std::string bad = updater.install();
+                if (bad.empty()) {
+                    trace("оновлення: перезапускаюся");
+                    return 0;            // execv нас уже замінив, сюди не дійде
+                }
+                trace("оновлення не встановилося: %s", bad.c_str());
+            }
             if (sev.changed) cfg.save();
+        }
+
+        // Перевірка оновлень раз на запуск і не одразу: спершу хай
+        // під'єднається чат — саме заради нього програму й відкрили.
+        if (cfg.auto_update && !update_asked && now_ms() - started > 5000) {
+            update_asked = true;
+            updater.check(cfg.channel, HOMINKA_VERSION, "");
         }
 
         // Редактор теми. Правка лягає просто в стрічку — саме тому окремого
@@ -872,6 +942,7 @@ void usage() {
             "  --run <pid Hominka>                  вікно оверлея й канал\n"
             "  --preview <pid Hominka>              кадр у редактор CSS\n"
             "  --nettest <площадка> <канал> [сек]   прочитати живий чат\n"
+            "  --updatecheck [канал] [версія] [--download|--install]\n"
             "  --probe                              перевірити зв'язку\n"
             "  --verbose                            докладний журнал\n");
 }
@@ -887,6 +958,17 @@ int main(int argc, char** argv) {
     // Без ключів — це звичайний запуск програми, як і під Windows.
     if (args.empty()) return run_app();
     if (!strcmp(args[0], "--app")) return run_app();
+    if (!strcmp(args[0], "--updatecheck")) {
+        const char* ch = args.size() > 1 && args[1][0] != '-' ? args[1] : "stable";
+        const char* pretend = "";
+        bool fetch = false, put = false;
+        for (size_t i = 1; i < args.size(); ++i) {
+            if (!strcmp(args[i], "--download")) fetch = true;
+            else if (!strcmp(args[i], "--install")) { fetch = true; put = true; }
+            else if (args[i][0] != '-' && args[i] != ch) pretend = args[i];
+        }
+        return update_check(ch, pretend, fetch, put);
+    }
 
     if (!strcmp(args[0], "--probe")) return probe();
     if (!strcmp(args[0], "--nettest")) {

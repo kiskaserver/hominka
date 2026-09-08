@@ -19,7 +19,7 @@ mkdir -p "$OUT"
 # Свої включення — від native/ і native/render/include, тож у кожному рядку
 # «#include» видно теку, з якої річ.
 INC="-isystem $TPL/include -isystem $TPL/include/imgui -isystem $TPL/include/SDL2 -I $SRC -I $SRC/render/include $(pkg-config --cflags freetype2 fontconfig)"
-LIBS="-L$TPL/lib -limgui -lSDL2 -lGL -llitehtml -lgumbo -lblend2d -lwebpdemux -lwebp -lsharpyuv
+LIBS="-L$TPL/lib -limgui -lSDL2 -lGL -lmonocypher -llitehtml -lgumbo -lblend2d -lwebpdemux -lwebp -lsharpyuv
       -lixwebsocket -lmbedtls -lmbedx509 -lmbedcrypto
       $(pkg-config --libs freetype2 fontconfig x11 xext) -lpthread -lrt -lm -ldl"
 
@@ -52,6 +52,10 @@ SRCS="
     $SRC/render/src/net/src_twitch.cpp
     $SRC/render/src/net/src_youtube.cpp
     $SRC/render/src/net/viewers.cpp
+
+    $SRC/render/src/update/release.cpp
+    $SRC/render/src/update/update_view.cpp
+    $SRC/render/src/update/updater_unix.cpp
 
     $SRC/render/src/platform/ipc.cpp
     $SRC/render/src/platform/ipc_unix.cpp

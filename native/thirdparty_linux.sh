@@ -46,6 +46,7 @@ mkdir -p "$TPL/include" "$TPL/lib"
 : "${MBEDTLS_REF:=mbedtls-3.6.7}"
 : "${IXWS_REF:=v12.0.1}"
 : "${SDL_REF:=release-2.30.9}"
+: "${MONOCYPHER_REF:=4.0.3}"
 : "${IMGUI_REF:=v1.92.9b}"
 
 cd /tmp
@@ -187,6 +188,22 @@ cp -r /tp/include/nlohmann/. "$TPL/include/nlohmann/" 2>/dev/null || {
     git clone -q --depth 1 -b "${JSON_REF:-v3.11.3}" https://github.com/nlohmann/json.git json
     cp -r json/single_include/nlohmann/. "$TPL/include/nlohmann/"
 }
+
+# --- monocypher -----------------------------------------------------------
+#
+# Перевірка підпису випуску (Ed25519) — та сама бібліотека й та сама версія, що
+# під Windows. Своєї реалізації тут бути не може: підпис або перевіряється тим
+# самим кодом на обох системах, або одна з них колись почне приймати те, що
+# друга відкидає.
+echo ">> monocypher $MONOCYPHER_REF (linux)"
+rm -rf monocypher
+git clone -q --depth 1 -b "$MONOCYPHER_REF"     https://github.com/LoupVaillant/Monocypher.git monocypher
+cp monocypher/src/monocypher.h monocypher/src/optional/monocypher-ed25519.h "$TPL/include/"
+gcc -O2 -w -I"$TPL/include" -c monocypher/src/monocypher.c -o /tmp/mc.o
+gcc -O2 -w -I"$TPL/include" -c monocypher/src/optional/monocypher-ed25519.c -o /tmp/mc-ed.o
+ar rcs "$TPL/lib/libmonocypher.a" /tmp/mc.o /tmp/mc-ed.o
+rm -f /tmp/mc.o /tmp/mc-ed.o
+rm -rf monocypher
 
 # --- SDL2 -----------------------------------------------------------------
 #
