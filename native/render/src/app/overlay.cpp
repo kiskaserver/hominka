@@ -494,6 +494,35 @@ int run_overlay() {
             const HRESULT hr = win.end_draw();
             if (FAILED(hr)) rlog("EndDraw не вдався hr=0x%08lX", (unsigned long)hr);
 
+            // Кадр для оверлея, вкладеного в гру — САМЕ ТУТ, доки ImGui ще
+            // не намалював смужку.
+            //
+            // У грі має бути чат, а не наше вікно: заголовок із назвою,
+            // замком і повзунками — це керування для робочого столу, і в кадрі
+            // гри воно просто заважає. Доки смужка з'являлася лише під
+            // курсором, у гру вона потрапляла зрідка й непомітно; відколи вона
+            // постійна — потрапляла б завжди.
+            //
+            // Стилі при цьому ті самі за побудовою: в гру їдуть ТІ САМІ
+            // пікселі, що й у вікні чату, з тим самим своїм CSS, кеглем і
+            // анімованими емоутами. Розійтися вони не можуть — малювання одне.
+            //
+            // Читання з відеокарти коштує грошей, тому робимо його лише коли
+            // інжект увімкнено — і лише коли кадр справді перемальовано.
+            if (inject.on) {
+                if (writer.ready() || writer.open()) {
+                    if (win.capture(&frame_px)) {
+                        float fx, fy, fw, fh;
+                        win.monitor_fraction(&fx, &fy, &fw, &fh);
+                        writer.write(frame_px.data(), win.width(), win.height(),
+                                     fx, fy, fw, fh, inject.opacity, inject.pid,
+                                     inject.hide_obs);
+                    }
+                } else if (!inject_was_on && writer.conflict()) {
+                    rlog("кадр у грі вже пише інший продюсер — не втручаюсь");
+                }
+            }
+
             // Тепер той самий задній буфер бере D3D11 — і ImGui малює керування
             // поверх усього.
             ID3D11RenderTargetView* rtv = win.rtv();
@@ -528,23 +557,6 @@ int run_overlay() {
                         !gui.create(L"HominkaSettings", L"Hominka — налаштування", 760, 560))
                         rlog("вікно налаштувань не створилося (лишаємося без нього)");
                     gui.show_beside(win.screen_rect());
-                }
-            }
-
-            // Кадр для оверлея, вкладеного в гру. Читання з відеокарти
-            // коштує грошей, тому робимо його ЛИШЕ коли інжект увімкнено — і
-            // лише коли кадр справді перемальовано (ми вже в цій гілці).
-            if (inject.on) {
-                if (writer.ready() || writer.open()) {
-                    if (win.capture(&frame_px)) {
-                        float fx, fy, fw, fh;
-                        win.monitor_fraction(&fx, &fy, &fw, &fh);
-                        writer.write(frame_px.data(), win.width(), win.height(),
-                                     fx, fy, fw, fh, inject.opacity, inject.pid,
-                                     inject.hide_obs);
-                    }
-                } else if (!inject_was_on && writer.conflict()) {
-                    rlog("кадр у грі вже пише інший продюсер — не втручаюсь");
                 }
             }
 
@@ -600,6 +612,11 @@ int run_overlay() {
             writer.close();
             rlog("кадр у грі вимкнено");
         } else if (!inject_was_on && inject.on) {
+            // І одразу малюємо кадр. Інакше в грі не з'являлося НІЧОГО доти,
+            // доки чат не перемалюється сам: вікно малює лише коли має що
+            // змінити, а тихий чат не змінюється хвилинами. Людина тисне
+            // «Показати чат у грі», повертається в гру — і там порожньо.
+            force_frame = true;
             rlog("кадр у грі увімкнено (pid=%lu, opacity=%lu, hide_obs=%d)",
                  (unsigned long)inject.pid, (unsigned long)inject.opacity,
                  (int)inject.hide_obs);
@@ -683,13 +700,10 @@ int run_overlay() {
                     games.picked < (int)games.windows.size() && !games.windows.empty()
                         ? &games.windows[(size_t)games.picked]
                         : nullptr;
-                if (sev.toggle_fso && target) {
+                if (sev.fix_fso && target) {
                     const std::string exe = game_exe_path(target->hwnd);
-                    const bool off = fso_disabled(exe);
-                    games.status = set_fso_disabled(exe, !off)
-                                       ? (off ? "Повноекранну оптимізацію повернено як було."
-                                              : "Готово. Перезапустіть гру — і чат буде видно "
-                                                "в бою.")
+                    games.status = set_fso_disabled(exe, false)
+                                       ? "Готово. Перезапустіть гру — і чат буде видно в бою."
                                        : "Не вдалося змінити налаштування гри.";
                 }
                 if (sev.make_borderless && target)

@@ -104,7 +104,7 @@ struct SettingsEvents {
     bool refresh_games = false;
     bool make_borderless = false;
     bool restore_window = false;
-    bool toggle_fso = false;
+    bool fix_fso = false;
     bool inject = false;
     bool stop_inject = false;
     int  pick_game = -1;
