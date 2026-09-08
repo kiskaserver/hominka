@@ -12,6 +12,7 @@ namespace hominka {
 
 int css_check(const wchar_t* path);
 int verify_release(const wchar_t* path);
-int update_check(const char* channel, const char* pretend, bool fetch);
+// put — не лише завантажити, а й поставити: запустити підмінника й вийти.
+int update_check(const char* channel, const char* pretend, bool fetch, bool put);
 
 }  // namespace hominka

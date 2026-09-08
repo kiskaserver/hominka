@@ -26,7 +26,7 @@ int css_check(const wchar_t* path) {
 // Перевірка оновлення з командного рядка. Саме тут видно, чи сходиться підпис
 // зі СПРАВЖНІМ маніфестом на сервері: формат того, що підписується, мусить
 // збігатися з Python до байта, і перевірити це можна лише проти живого випуску.
-int update_check(const char* channel, const char* pretend, bool fetch) {
+int update_check(const char* channel, const char* pretend, bool fetch, bool put) {
     Updater up;
     const char* current = pretend && *pretend ? pretend : HOMINKA_VERSION;
     up.check(channel, current, "");
@@ -70,7 +70,22 @@ int update_check(const char* channel, const char* pretend, bool fetch) {
         return 1;
     }
     printf("завантажено, сума збіглася\n");
-    Updater::cleanup_downloads();
+    if (!put) {
+        Updater::cleanup_downloads();
+        return 0;
+    }
+
+    // І власне встановлення. Воно тут не заради зручності: підмінник —
+    // єдина частина оновлення, якої не видно ні з коду, ні з журналу, доки
+    // вона не спрацює. Саме він і був зламаний у 3.0.0–3.0.2, а помітили це
+    // лише тому, що людина натиснула кнопку й нічого не сталося. Тепер те
+    // саме робиться з командного рядка — і причину видно одразу.
+    const std::string bad = up.install();
+    if (!bad.empty()) {
+        fprintf(stderr, "не встановилося: %s\n", bad.c_str());
+        return 1;
+    }
+    printf("підмінника запущено; виходжу, щоб він переписав файли\n");
     return 0;
 }
 

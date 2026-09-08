@@ -21,7 +21,7 @@
 //                                звірка з браузером (app/selftest.cpp).
 //   --nettest <площадка> <канал> [сек]   живий чат у консоль.
 //   --csslint <тема.css>         помилки теми рядками, придатними для скрипта.
-//   --updatecheck [канал] [версія] [--download]
+//   --updatecheck [канал] [версія] [--download] [--install]
 //   --verifyrelease <маніфест.json>      чому не сходиться підпис.
 //   --probe                      чи жива зв'язка litehtml + Direct2D.
 //
@@ -55,7 +55,7 @@ void usage() {
              L"  hominka-render-x64.exe --preview <pid Hominka>\n"
              L"  hominka-render-x64.exe --nettest <площадка> <канал> [сек]\n"
              L"  hominka-render-x64.exe --csslint <тема.css>\n"
-             L"  hominka-render-x64.exe --updatecheck [канал] [версія] [--download]\n"
+             L"  hominka-render-x64.exe --updatecheck [канал] [версія] [--download|--install]\n"
              L"  hominka-render-x64.exe --verifyrelease <маніфест.json>\n"
              L"  hominka-render-x64.exe --probe\n");
 }
@@ -116,13 +116,14 @@ int run(int argc, wchar_t** argv) {
         rc = hominka::verify_release(argv[2]);
     } else if (argc >= 2 && !wcscmp(argv[1], L"--updatecheck")) {
         char ch[32] = "stable", pretend[32] = {0};
-        bool fetch = false;
+        bool fetch = false, put = false;
         if (argc >= 3 && argv[2][0] != L'-') hominka::narrow(argv[2], ch, sizeof ch);
         for (int i = 3; i < argc; ++i) {
             if (!wcscmp(argv[i], L"--download")) fetch = true;
+            else if (!wcscmp(argv[i], L"--install")) { fetch = true; put = true; }
             else hominka::narrow(argv[i], pretend, sizeof pretend);
         }
-        rc = hominka::update_check(ch, pretend, fetch);
+        rc = hominka::update_check(ch, pretend, fetch, put);
     } else if (argc >= 3 && !wcscmp(argv[1], L"--csslint")) {
         rc = hominka::css_check(argv[2]);
     } else if (argc >= 2 && !wcscmp(argv[1], L"--app")) {

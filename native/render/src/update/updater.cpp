@@ -227,6 +227,26 @@ bool script_sane(const char* text) {
     return true;
 }
 
+// Прибирає теку з усім, що в ній. Без Shell API: SHFileOperation тягне
+// оболонку, а тут потрібне рівно одне — щоб наступне розпакування почалося з
+// чистого місця.
+void remove_tree(const std::string& dir) {
+    WIN32_FIND_DATAA fd;
+    HANDLE h = FindFirstFileA((dir + "\\*").c_str(), &fd);
+    if (h == INVALID_HANDLE_VALUE) return;
+    do {
+        const std::string name = fd.cFileName;
+        if (name == "." || name == "..") continue;
+        const std::string full = dir + "\\" + name;
+        if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)
+            remove_tree(full);
+        else
+            DeleteFileA(full.c_str());
+    } while (FindNextFileA(h, &fd));
+    FindClose(h);
+    RemoveDirectoryA(dir.c_str());
+}
+
 }  // namespace
 
 Updater::~Updater() {
@@ -316,6 +336,21 @@ void Updater::run_download(Release rel) {
 }
 
 std::string Updater::install() {
+    const std::string bad = try_install();
+    if (!bad.empty()) {
+        // Мовчазна відмова тут — найгірше з можливого: людина натискає
+        // «Встановити», вікно закривається, і нічого не стається. Хай причина
+        // буде на екрані, у тому ж розділі, де кнопка.
+        {
+            std::lock_guard<std::mutex> lock(mx_);
+            error_ = bad;
+        }
+        state_ = State::Failed;
+    }
+    return bad;
+}
+
+std::string Updater::try_install() {
     std::string zip;
     {
         std::lock_guard<std::mutex> lock(mx_);
@@ -339,7 +374,10 @@ std::string Updater::install() {
     if (GetFileAttributesA(tar.c_str()) == INVALID_FILE_ATTRIBUTES)
         return "у системі немає tar.exe — оновіться вручну з сайту";
 
-    RemoveDirectoryA(staging.c_str());
+    // Тека має бути ПОРОЖНЬОЮ, а не просто існувати: RemoveDirectory прибирає
+    // лише порожні, і від старих випусків там лишалися сотні мегабайтів, які
+    // robocopy потім слухняно переносив у теку програми.
+    remove_tree(staging);
     CreateDirectoryA(staging.c_str(), nullptr);
 
     std::string cmd = "\"" + tar + "\" -x -f \"" + zip + "\" -C \"" + staging + "\"";
@@ -370,18 +408,39 @@ std::string Updater::install() {
     if (!script_sane(kUpdateBat)) return "скрипт оновлення зіпсований — оновіться вручну";
     const std::string bat = temp_dir() + "hominka-update.bat";
     {
-        // cp1251: скрипт читає консоль зі своєю кодовою сторінкою, а латиниці
-        // й розділових знаків у ньому досить — кирилиці в командах немає.
+        // Кінці рядків — обов'язково CR LF.
+        //
+        // cmd читає .bat не як текстовий файл, а майже побайтово, і на самих
+        // переносах рядка без CR він плутається: рядок REM злипається з
+        // наступним, «set SYS=…» ковтає перенос, і далі сиплеться «не знайдено
+        // шлях». У сирому літералі вище символів CR немає (їх і забороняє
+        // script_sane), тож дописуємо їх ТУТ, у момент запису.
+        //
+        // cp1251 турбувати не треба: кирилиця в скрипті лише в коментарях REM.
+        std::string text;
+        for (const char* c = kUpdateBat; *c; ++c) {
+            if (*c == '\n') text += '\r';
+            text += *c;
+        }
         FILE* f = fopen(bat.c_str(), "wb");
         if (!f) return "нема куди записати скрипт оновлення";
-        fwrite(kUpdateBat, 1, strlen(kUpdateBat), f);
+        fwrite(text.data(), 1, text.size(), f);
         fclose(f);
     }
 
     char pid[32];
     snprintf(pid, sizeof pid, "%lu", (unsigned long)GetCurrentProcessId());
-    std::string run = "\"" + system32("cmd.exe") + "\" /c \"" + bat + "\" " + pid +
-                      " \"" + src + "\" \"" + dir + "\" \"" + staging + "\"";
+    // Лапки й cmd /c — окрема історія, на якій це вже один раз зламалося.
+    //
+    // Якщо перший символ після /c — лапка, cmd за старим правилом викидає її
+    // РАЗОМ з останньою лапкою рядка. Шлях до скрипта лишався з хвостиком
+    // («…hominka-update.bat"»), cmd казав «синтаксис імені файлу неправильний»
+    // і завершувався — а програма про це не знала, бо CreateProcess удався.
+    // Виглядало це як «натиснув оновити, програма закрилася, нічого не
+    // змінилося». Ключ /s разом із ЩЕ однією парою лапок навколо всього
+    // означає «зніми зовнішні лапки й виконай решту як є».
+    std::string run = "\"" + system32("cmd.exe") + "\" /s /c \"\"" + bat + "\" " + pid +
+                      " \"" + src + "\" \"" + dir + "\" \"" + staging + "\"\"";
     STARTUPINFOA si2 = {sizeof(si2)};
     PROCESS_INFORMATION pi2 = {};
     // Підмінник переживає наш вихід і сам по собі; вікна консолі посеред гри

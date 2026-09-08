@@ -59,6 +59,9 @@ public:
     static int cleanup_downloads(const std::string& keep = "");
 
 private:
+    // Уся робота install(); публічний лише додає стан «не вийшло», щоб причина
+    // потрапила не тільки в журнал, а й людині на очі.
+    std::string try_install();
     void run_check(std::string channel, std::string current, std::string installed);
     void run_download(Release rel);
 
