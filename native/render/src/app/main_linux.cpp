@@ -350,6 +350,7 @@ int run_app() {
         return 5;
     }
     feed.set_width(cfg.w);
+    win.grab_hotkey();
     win.show();
     trace("самостійний режим: %s", net.status().c_str());
 
@@ -397,6 +398,14 @@ int run_app() {
             if (ev.closed) { closed = true; break; }
             if (ev.motion) { chrome.on_motion(ev.mx, ev.my); changed = true; }
             if (ev.leave) { chrome.on_leave(); changed = true; }
+            if (ev.hotkey) {
+                // Замок із клавіатури. Вікно чату фокус не бере, тож іншого
+                // способу дотягтися до нього, коли воно клік-крізь, немає.
+                look.locked = !look.locked;
+                cfg.look = look;
+                cfg.save();
+                changed = true;
+            }
             if (ev.moved) {
                 cfg.x = win.x();
                 cfg.y = win.y();
@@ -454,10 +463,14 @@ int run_app() {
             ctx.set_comp_op(BL_COMP_OP_SRC_OVER);
 
             feed.set_alpha(look.opacity);
+            // Місце під смужку лишаємо лише тоді, коли вона там справді буде.
+            const bool bar_now = !look.locked && (cfg.header || chrome.hovered());
+            feed.set_top_pad(bar_now ? (int)ChromeBL::bar_height() + 2 : 0);
             chrome.draw_backdrop(&ctx, w, h, look);
             feed.draw(&ctx, w, h, t);
             const float was_zoom = look.zoom;
-            const ChromeEvents ce = chrome.draw_controls(&ctx, w, h, &look);
+            const ChromeEvents ce =
+                chrome.draw_controls(&ctx, w, h, &look, cfg.header, feed.size() == 0);
             ctx.end();
             if (look.zoom != was_zoom) feed.set_zoom(look.zoom);
 

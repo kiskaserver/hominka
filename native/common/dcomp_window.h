@@ -52,6 +52,13 @@ public:
         wc.lpfnWndProc = wnd_proc;
         wc.hInstance = inst;
         wc.lpszClassName = cls;
+        // Курсор класу — звичайна стрілка, і це не дрібниця.
+        //
+        // Без нього клас віддає NULL, а Windows на NULL не міняє курсор узагалі:
+        // над вікном лишається той, що був. Одразу після запуску це «зачекайте»
+        // від оболонки — і на вікні чату крутився нескінченний кружечок, доки
+        // курсор не сходив на інше вікно й не повертався.
+        wc.hCursor = LoadCursorW(nullptr, (LPCWSTR)IDC_ARROW);
         RegisterClassExW(&wc);
 
         hwnd_ = CreateWindowExW(

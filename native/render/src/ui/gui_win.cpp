@@ -169,8 +169,8 @@ bool GuiWindow::init_gfx(bool mono) {
     io.LogFilename = nullptr;
     // 17 пікселів у панелях: тут читають речення, а не підписи на кнопках, і
     // саме тут дрібний шрифт втомлює найшвидше.
-    load_ui_font(17.0f);
-    if (mono) load_mono_font(16.0f);
+    load_ui_font(18.0f);
+    if (mono) load_mono_font(17.0f);
     settings_style();
     const bool ok = ImGui_ImplWin32_Init(hwnd_) && ImGui_ImplDX11_Init(dev_, ctx_);
     ImGui::SetCurrentContext(prev);

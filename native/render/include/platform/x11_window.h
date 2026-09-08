@@ -39,6 +39,7 @@ struct X11Event {
     bool press = false;               // натиснули ліву
     bool release = false;             // відпустили ліву
     bool leave = false;               // курсор пішов з вікна
+    bool hotkey = false;              // натиснули Ctrl+Alt+Space
     int mx = 0, my = 0;               // курсор у координатах вікна
 };
 
@@ -63,6 +64,11 @@ public:
     void set_geometry(int x, int y, int w, int h);
     // Клік наскрізь: миша перестає помічати вікно.
     void set_click_through(bool on);
+
+    // Перехоплює Ctrl+Alt+Space на весь екран — той самий замок, що й у
+    // смужці. Потрібне саме глобальне: вікно чату фокус не бере (інакше
+    // забирало б його в гри), тож звичайних натискань воно не бачить.
+    void grab_hotkey();
 
     // Кладе на екран готові пікселі (premultiplied BGRA, рядок = w*4).
     void present(const uint8_t* bgra, int w, int h);

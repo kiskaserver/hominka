@@ -1,5 +1,6 @@
 #include "platform/x11_window.h"
 
+#include <X11/keysym.h>
 #include <X11/Xatom.h>
 #include <X11/Xutil.h>
 #include <X11/extensions/shape.h>
@@ -205,6 +206,23 @@ void X11Window::end_drag() {
     resizing_ = false;
 }
 
+void X11Window::grab_hotkey() {
+    if (!ok()) return;
+    const KeyCode key = XKeysymToKeycode(p_->dpy, XK_space);
+    if (!key) return;
+    const unsigned base = ControlMask | Mod1Mask;      // Ctrl + Alt
+    // Замки (NumLock, CapsLock, ScrollLock) входять у стан клавіш, тож те саме
+    // сполучення при увімкненому NumLock — це для X інша комбінація. Беремо всі
+    // чотири поєднання замків, інакше клавіша тихо перестане працювати рівно
+    // тоді, коли людина ввімкне NumLock.
+    const unsigned locks[4] = {0, LockMask, Mod2Mask, LockMask | Mod2Mask};
+    Window root = RootWindow(p_->dpy, p_->screen);
+    for (unsigned l : locks)
+        XGrabKey(p_->dpy, key, base | l, root, True, GrabModeAsync, GrabModeAsync);
+    XSelectInput(p_->dpy, root, KeyPressMask);
+    XFlush(p_->dpy);
+}
+
 bool X11Window::poll_event(X11Event* out) {
     if (!ok() || !out || !XPending(p_->dpy)) return false;
     *out = X11Event();
@@ -212,6 +230,11 @@ bool X11Window::poll_event(X11Event* out) {
     XEvent e;
     XNextEvent(p_->dpy, &e);
     switch (e.type) {
+    case KeyPress:
+        // Єдина клавіша, яку ми перехоплюємо, — Ctrl+Alt+Space; перевіряти, яка
+        // саме прийшла, нема потреби.
+        out->hotkey = true;
+        break;
     case ButtonPress:
         if (e.xbutton.button == Button1) {
             out->press = true;

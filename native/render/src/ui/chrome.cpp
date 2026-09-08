@@ -66,7 +66,7 @@ bool Chrome::init(HWND hwnd, ID3D11Device* dev, ID3D11DeviceContext* ctx) {
     // 16 пікселів, а не 15. Різниця здається дрібницею, але саме на цих
     // розмірах вона й вирішує: у 15 Segoe UI віддає стовпчики завтовшки в один
     // піксель, і будь-яка нерівність растеризації видно як «пікселі».
-    load_ui_font(16.0f);
+    load_ui_font(17.0f);
 
     // Той самий вигляд, що й у панелі налаштувань: кольори, скруглення,
     // повзунки. Рамка чату й панель — одна програма, і синій повзунок ImGui за
@@ -208,8 +208,7 @@ Slot slot(const char* id, float x, float y, float w, float h, ImU32 hot_bg) {
 // Підпис усередині кнопки — рівно посередині, а не «як ляже».
 void slot_text(const Slot& s, const char* text, ImU32 color) {
     const ImVec2 sz = ImGui::CalcTextSize(text);
-    ImGui::GetWindowDrawList()->AddText(
-        ImVec2(s.c.x - sz.x * 0.5f, s.c.y - sz.y * 0.5f), color, text);
+    text_at(ImGui::GetWindowDrawList(), s.c.x - sz.x * 0.5f, s.c.y - sz.y * 0.5f, color, text);
 }
 
 // Повзунок смужки — свій, а не ImGui::SliderFloat.
@@ -333,8 +332,8 @@ ChromeEvents Chrome::draw_controls(int w, int h, Look* look, HWND hwnd,
             app_logo(dl, org.x + x, org.y + BTN_Y + (BTN_H - LOGO) * 0.5f, LOGO);
             x += LOGO + 6.0f;
             if (with_name) {
-                dl->AddText(ImVec2(org.x + x, org.y + BTN_Y + (BTN_H - nsz.y) * 0.5f),
-                            IM_COL32(228, 228, 231, 255), "Hominka");
+                text_at(dl, org.x + x, org.y + BTN_Y + (BTN_H - nsz.y) * 0.5f,
+                        IM_COL32(228, 228, 231, 255), "Hominka");
                 x += nsz.x;
             }
             x += 8.0f;
@@ -436,10 +435,9 @@ ChromeEvents Chrome::draw_controls(int w, int h, Look* look, HWND hwnd,
                         char buf[16];
                         snprintf(buf, sizeof buf, "%.0f%%", *bars[i].v);
                         const ImVec2 sz = ImGui::CalcTextSize(buf);
-                        dl->AddText(
-                            ImVec2(ImGui::GetWindowPos().x + x,
-                                   ImGui::GetWindowPos().y + BTN_Y + (BTN_H - sz.y) * 0.5f),
-                            IM_COL32(216, 194, 255, 255), buf);
+                        text_at(dl, ImGui::GetWindowPos().x + x,
+                                ImGui::GetWindowPos().y + BTN_Y + (BTN_H - sz.y) * 0.5f,
+                                IM_COL32(216, 194, 255, 255), buf);
                         x += 34.0f;
                     }
                     x += 10.0f;
@@ -504,8 +502,8 @@ ChromeEvents Chrome::draw_controls(int w, int h, Look* look, HWND hwnd,
             ImGui::InvisibleButton("##viewers", ImVec2(vsz.x + 14.0f, BTN_H));
             dl->AddCircleFilled(ImVec2(p.x + 3.0f, p.y + BTN_H * 0.5f), 3.0f,
                                 IM_COL32(239, 68, 68, 255));
-            dl->AddText(ImVec2(p.x + 12.0f, p.y + (BTN_H - vsz.y) * 0.5f), TEXT_DIM,
-                        viewers.c_str());
+            text_at(dl, p.x + 12.0f, p.y + (BTN_H - vsz.y) * 0.5f, TEXT_DIM,
+                    viewers.c_str());
             if (ImGui::IsItemHovered()) ImGui::SetTooltip("Глядачів зараз");
             rx -= 6.0f;
         }
@@ -590,9 +588,8 @@ ChromeEvents Chrome::draw_controls(int w, int h, Look* look, HWND hwnd,
         float y = (float)h * 0.5f - 30.0f;
         for (int i = 0; i < 3; ++i) {
             const ImVec2 sz = ImGui::CalcTextSize(lines[i]);
-            dl->AddText(ImVec2(ImGui::GetWindowPos().x + ((float)w - sz.x) * 0.5f,
-                               ImGui::GetWindowPos().y + y),
-                        cols[i], lines[i]);
+            text_at(dl, ImGui::GetWindowPos().x + ((float)w - sz.x) * 0.5f,
+                    ImGui::GetWindowPos().y + y, cols[i], lines[i]);
             y += sz.y + (i == 0 ? 10.0f : 4.0f);
         }
     }
@@ -612,7 +609,7 @@ ChromeEvents Chrome::draw_controls(int w, int h, Look* look, HWND hwnd,
         dl->AddRectFilled(a, b, IM_COL32(16, 16, 22, 200), ph * 0.5f);
         dl->AddCircleFilled(ImVec2(a.x + 10.0f, a.y + ph * 0.5f), 3.0f,
                             IM_COL32(239, 68, 68, 255));
-        dl->AddText(ImVec2(a.x + 19.0f, a.y + 4.0f), TEXT_DIM, viewers.c_str());
+        text_at(dl, a.x + 19.0f, a.y + 4.0f, TEXT_DIM, viewers.c_str());
     }
 
     ImGui::End();

@@ -1,8 +1,17 @@
 #include "ui/uibits.h"
 
+#include <cmath>
+
 #include "imgui/imgui.h"
 
 namespace hominka {
+
+void text_at(ImDrawList* dl, float x, float y, unsigned int color,
+             const char* text) {
+    // floorf, а не IM_FLOOR: той макрос внутрішній для ImGui й у публічному
+    // заголовку його немає.
+    if (dl) dl->AddText(ImVec2(floorf(x), floorf(y)), color, text);
+}
 
 bool ghost(const char* label, float width) {
     ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(1, 1, 1, 0.06f));

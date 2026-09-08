@@ -53,7 +53,9 @@ ImFontConfig& sharp() {
     static ImFontConfig cfg;
     cfg.OversampleH = 1;
     cfg.OversampleV = 1;
-    cfg.PixelSnapH = false;
+    // Відступ кожного гліфа — ціле число пікселів. Інакше всередині рядка вони
+    // поступово з'їжджають на дробові позиції, і хінтинг знову ні до чого.
+    cfg.PixelSnapH = true;
     return cfg;
 }
 

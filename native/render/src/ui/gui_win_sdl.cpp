@@ -75,8 +75,8 @@ bool GuiWindowSDL::create(const char* title, int w, int h, bool resizable, bool 
     ImGuiIO& io = ImGui::GetIO();
     io.IniFilename = nullptr;      // програма не лишає файлів там, звідки її запустили
     io.LogFilename = nullptr;
-    load_ui_font(17.0f);
-    if (mono) load_mono_font(16.0f);
+    load_ui_font(18.0f);
+    if (mono) load_mono_font(17.0f);
     settings_style();
     const bool ok = ImGui_ImplSDL2_InitForOpenGL(win_, gl_) &&
                     ImGui_ImplOpenGL3_Init("#version 130");

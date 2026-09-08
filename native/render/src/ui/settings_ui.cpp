@@ -231,8 +231,8 @@ bool rail_item(const char* label, bool active, bool badge) {
     if (active)
         dl->AddRectFilled(ImVec2(p.x, p.y), ImVec2(p.x + 3, p.y + h), ACCENT);
 
-    dl->AddText(ImVec2(p.x + 18, p.y + (h - ImGui::GetTextLineHeight()) * 0.5f),
-                active ? TEXT : IM_COL32(170, 170, 180, 255), label);
+    text_at(dl, p.x + 18.0f, p.y + (h - ImGui::GetTextLineHeight()) * 0.5f,
+            active ? TEXT : IM_COL32(170, 170, 180, 255), label);
     if (badge)
         dl->AddCircleFilled(ImVec2(p.x + w - 16, p.y + h * 0.5f), 3.5f, ACCENT_DIM);
     ImGui::PopID();

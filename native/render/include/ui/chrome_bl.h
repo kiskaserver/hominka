@@ -49,7 +49,16 @@ public:
     // Підкладка й рамка — ДО чату.
     void draw_backdrop(BLContext* ctx, int w, int h, const Look& look) const;
     // Елементи керування — ПІСЛЯ чату. look міняється на місці.
-    ChromeEvents draw_controls(BLContext* ctx, int w, int h, Look* look);
+    //
+    // header — смужку видно завжди, як заголовок вікна (налаштування «Смужка
+    // згори»). Вимкнена — керування з'являється лише під курсором.
+    // empty — у стрічці ще нічого; тоді замість порожнечі пишемо, що це за
+    // вікно й куди натиснути.
+    ChromeEvents draw_controls(BLContext* ctx, int w, int h, Look* look,
+                               bool header = false, bool empty = false);
+
+    // Висота смужки — стрічці треба знати, скільки місця їй не займати.
+    static float bar_height();
 
 private:
     struct Rect {
@@ -62,10 +71,14 @@ private:
     // Розкладка кнопок залежить лише від ширини вікна, тож рахуємо її на місці
     // й однаково для малювання та для влучань — інакше вони розійшлися б.
     struct Layout {
-        Rect strip, lock, zoom_out, zoom_in, opacity, gear, grip;
+        Rect strip, logo, name, lock, zoom_out, zoom_in, opacity, gear, close, grip;
     };
     Layout layout(int w, int h) const;
 
+    void logo(BLContext* ctx, const Rect& r) const;
+    void lock_icon(BLContext* ctx, const Rect& r, bool locked) const;
+    void gear_icon(BLContext* ctx, const Rect& r) const;
+    void close_icon(BLContext* ctx, const Rect& r) const;
     void button(BLContext* ctx, const Rect& r, const char* label, bool active) const;
     void text(BLContext* ctx, const char* s, float x, float baseline,
               const BLRgba32& color, float px) const;
