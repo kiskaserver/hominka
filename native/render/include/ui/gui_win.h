@@ -89,6 +89,7 @@ private:
     ID3D11RenderTargetView* rtv_ = nullptr;
     int width_ = 0, height_ = 0;
     bool visible_ = false;
+    bool resizable_ = false;   // чи можна тягнути за краї — див. WM_NCHITTEST
     bool dragging_ = false;
     POINT drag_anchor_ = {0, 0};
     RECT drag_origin_ = {0, 0, 0, 0};

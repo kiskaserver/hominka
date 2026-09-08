@@ -440,6 +440,7 @@ int run_overlay(DWORD parent_pid, bool standalone) {
     bool user_sizing = false;
     bool chrome_was_visible = false;
     bool force_frame = false;
+    std::string bar_sig;
     InjectState inject;
     FrameWriter writer;
     bool inject_was_on = false;
@@ -532,11 +533,30 @@ int run_overlay(DWORD parent_pid, bool standalone) {
 
         // Рамку показуємо, лише коли миша над вікном і воно не замкнене. Поки
         // її не видно — і перемальовувати нема чого, тож кадр не рухається.
-        // «Малювати рамку» і «є що перемальовувати» — не одне й те саме: у
-        // перші секунди замкнене вікно кнопок не показує, але напис «я тут»
-        // показує, і той напис теж треба колись стерти.
-        const bool chrome_visible = chrome.visible(look.locked) || chrome.intro_active();
-        const bool chrome_dirty = chrome_visible || chrome_was_visible;
+        // «Малювати рамку» і «є що перемальовувати» — не одне й те саме.
+        //
+        // Увімкнена смужка видно ЗАВЖДИ, і найпростіше було б через це малювати
+        // кадр щоразу. Але тоді програма перестала б засинати — а нерухомий чат,
+        // який не чіпає відеокарту, і був сенсом усього переносу. Тож питаємо
+        // інакше: чи змінилося у смужці хоч щось із того, що на ній видно.
+        const std::string vline = standalone ? viewers_line(viewers, cfg) : std::string();
+        // Питаємо стан, а не будуємо цілий UpdateView: той складає кілька рядків,
+        // а тут потрібне одне «є чи немає», і потрібне воно щокадру.
+        const bool upd_ready = updater.state() == Updater::State::Available ||
+                               updater.state() == Updater::State::Ready;
+        const bool chrome_visible =
+            chrome.visible(look.locked, standalone && cfg.header) || chrome.intro_active();
+        char sig[320];
+        snprintf(sig, sizeof sig, "%d%d%d%d%d%d%d|%s", (int)chrome_visible,
+                 (int)chrome.hovered(), (int)look.locked, (int)look.frameless,
+                 (int)(look.opacity * 100.0f), (int)(look.bg_alpha * 100.0f),
+                 (int)upd_ready, vline.c_str());
+        const bool bar_changed = bar_sig != sig;
+        if (bar_changed) bar_sig = sig;
+        // Поки курсор на смужці, малюємо щокадру: підсвітка кнопок і підказки
+        // інакше застигли б.
+        const bool chrome_dirty =
+            chrome.hovered() || bar_changed || chrome_visible != chrome_was_visible;
 
         // force_frame — «намалюй іще раз, навіть якщо здається, що нічого не
         // змінилося». Потрібне рівно там, де рядки ЗНИКАЮТЬ: стрічка після
@@ -556,7 +576,10 @@ int run_overlay(DWORD parent_pid, bool standalone) {
             // з'явитися, стрічка не займає верхні пікселі; замкнене вікно
             // смужки не показує — і місце їй не потрібне.
             feed.set_alpha(look.opacity);
-            feed.set_top_pad(look.locked ? 0 : 30);
+            // Місце під смужку лишаємо лише тоді, коли вона там справді буде:
+            // увімкнена — завжди, вимкнена — лише поки на вікно наведено.
+            const bool bar_now = chrome.visible(look.locked, standalone && cfg.header);
+            feed.set_top_pad(bar_now ? (int)Chrome::bar_height() + 2 : 0);
             win.begin_draw();
             win.d2d()->Clear(D2D1::ColorF(0, 0, 0, 0));
             // Підкладка й рамка — під чатом; сам чат — поверх.
@@ -584,8 +607,9 @@ int run_overlay(DWORD parent_pid, bool standalone) {
             if (rtv) win.d3d_ctx()->OMSetRenderTargets(1, &rtv, nullptr);
             const ChromeEvents cev =
                 chrome.draw_controls(win.width(), win.height(), &look, win.hwnd(),
-                                     standalone ? viewers_line(viewers, cfg) : std::string(),
-                                     /*can_close=*/standalone, feed.size() == 0);
+                                     vline, /*can_close=*/standalone, feed.size() == 0,
+                                     standalone && cfg.header,
+                                     upd_ready);
             // Поки тягнуть — розмір веде рука; відпустили (geometry_changed) —
             // знову веде Python.
             if (chrome.wants_mouse()) user_sizing = true;
@@ -725,6 +749,10 @@ int run_overlay(DWORD parent_pid, bool standalone) {
                 gui.drag(sev.title_active);
                 if (sev.close) gui.hide();
                 if (sev.look_changed) {
+                    // Вікно чату малює лише тоді, коли має що змінити. Крутіння
+                    // повзунка в ІНШОМУ вікні для нього нічого не змінює — і
+                    // тло мінялося аж тоді, коли на чат наводили мишу.
+                    force_frame = true;
                     look.opacity = cfg.look.opacity;
                     look.bg_alpha = cfg.look.bg_alpha;
                     look.zoom = cfg.look.zoom;

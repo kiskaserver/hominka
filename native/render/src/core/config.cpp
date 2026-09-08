@@ -124,6 +124,7 @@ void Config::load() {
     look.zoom = num(raw_, "zoom", look.zoom);
     look.frameless = flag(raw_, "frameless", look.frameless);
     keep_top = flag(raw_, "keepTop", keep_top);
+    header = flag(raw_, "header", header);
 
     youtube = str(raw_, "myChannel");
     twitch = str(raw_, "twitchChannel");
@@ -181,6 +182,7 @@ void Config::flush(bool force) {
     raw_["zoom"] = look.zoom;
     raw_["frameless"] = look.frameless;
     raw_["keepTop"] = keep_top;
+    raw_["header"] = header;
     raw_["myChannel"] = youtube;
     raw_["twitchChannel"] = twitch;
     raw_["kickChannel"] = kick;

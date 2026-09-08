@@ -106,6 +106,24 @@ git clone -q https://github.com/memononen/nanosvg.git
 (cd nanosvg && git checkout -q "$NANOSVG_REF")
 cp nanosvg/src/nanosvg.h nanosvg/src/nanosvgrast.h "$TP/include/"
 
+# --- FreeType --------------------------------------------------------------
+#
+# Растеризатор шрифтів для ImGui замість вбудованого stb_truetype. Різниця не
+# в смаку: stb НЕ виконує хінтинг, тобто ігнорує вбудовані у шрифт вказівки,
+# як укласти лінії літери на пікселі. Segoe UI розрахований саме на них, і без
+# хінтингу на п'ятнадцяти пікселях його стовпчики лягають між пікселями —
+# літери виходять рвані й нерівні за товщиною. Це та сама «піксельність», яку
+# видно поруч із чатом, що його малює DirectWrite (він хінтинг виконує).
+#
+# Беремо без залежностей: ані zlib, ані png, ані brotli, ані harfbuzz нам не
+# потрібні — ми відкриваємо два системні .ttf і більше нічого.
+echo ">> freetype $FREETYPE_REF"
+git clone -q --depth 1 -b "$FREETYPE_REF" https://gitlab.freedesktop.org/freetype/freetype.git
+cmake -S freetype -B /tmp/ft-build $TC -DCMAKE_BUILD_TYPE=Release       -DCMAKE_INSTALL_PREFIX="$TP" -DBUILD_SHARED_LIBS=OFF       -DFT_DISABLE_ZLIB=ON -DFT_DISABLE_BZIP2=ON -DFT_DISABLE_PNG=ON       -DFT_DISABLE_HARFBUZZ=ON -DFT_DISABLE_BROTLI=ON > /dev/null
+cmake --build /tmp/ft-build -j"$(nproc)" > /dev/null
+cmake --install /tmp/ft-build > /dev/null
+rm -rf /tmp/ft-build freetype
+
 echo ">> imgui $IMGUI_REF"
 git clone -q --depth 1 -b "$IMGUI_REF" https://github.com/ocornut/imgui.git
 mkdir -p "$TP/include/imgui"
@@ -114,6 +132,13 @@ mkdir -p "$TP/include/imgui"
 cp imgui/imgui.h imgui/imgui_internal.h imgui/imconfig.h "$TP/include/imgui/"
 cp imgui/imstb_*.h "$TP/include/imgui/"
 cp imgui/backends/imgui_impl_win32.h imgui/backends/imgui_impl_dx11.h "$TP/include/imgui/"
+cp imgui/misc/freetype/imgui_freetype.h "$TP/include/imgui/"
+
+# IMGUI_ENABLE_FREETYPE вмикається саме тут, у imconfig.h: цей заголовок ImGui
+# читає першим, і прапорець мусить бачити і його власний код, і наш.
+cat >> "$TP/include/imgui/imconfig.h" <<'EOF'
+#define IMGUI_ENABLE_FREETYPE
+EOF
 
 # Збираємо ImGui ТУТ, а не разом із нашим кодом, і на це дві причини.
 #
@@ -134,6 +159,7 @@ done
 for f in imgui_impl_win32 imgui_impl_dx11; do
     $CXX -O2 -std=c++17 -w -I"$TP/include/imgui"         -c "imgui/backends/$f.cpp" -o "$IMGUI_OBJ/$f.o"
 done
+$CXX -O2 -std=c++17 -w -I"$TP/include/imgui" -I"$TP/include/freetype2"     -c imgui/misc/freetype/imgui_freetype.cpp -o "$IMGUI_OBJ/imgui_freetype.o"
 x86_64-w64-mingw32-ar rcs "$TP/lib/libimgui.a" "$IMGUI_OBJ"/*.o
 rm -rf "$IMGUI_OBJ"
 

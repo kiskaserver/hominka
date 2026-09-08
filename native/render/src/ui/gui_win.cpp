@@ -36,6 +36,40 @@ LRESULT CALLBACK GuiWindow::wnd_proc(HWND h, UINT m, WPARAM w, LPARAM l) {
         if (r) return r;
     }
     switch (m) {
+    case WM_NCCALCSIZE:
+        // Неклієнтської області немає взагалі: клієнт займає все вікно.
+        //
+        // Це і є та «біла смужка згори» в редакторі теми. Вікно з рамкою для
+        // розтягування (WS_THICKFRAME) отримує від Windows неклієнтську смугу
+        // в кілька пікселів, і система малює її СВОЇМ кольором — у світлій темі
+        // майже білим. Колір рамки DWM тут ні до чого: то лінія в один піксель,
+        // а це ціла смуга. У вікна налаштувань її не було саме тому, що воно
+        // не розтягується.
+        if (w) return 0;
+        break;
+
+    case WM_NCHITTEST: {
+        // Розтягування лишається, але межі доводиться рахувати самим: системних
+        // більше немає, а віддати мишу цілком клієнту означало б вікно, яке не
+        // змінити в розмірі.
+        if (!self || !self->resizable_) break;
+        RECT r;
+        if (!GetWindowRect(h, &r)) break;
+        const int x = (int)(short)LOWORD(l), y = (int)(short)HIWORD(l);
+        const int E = 6;                       // ширина смуги для захоплення
+        const bool L = x < r.left + E, R = x >= r.right - E;
+        const bool T = y < r.top + E, B = y >= r.bottom - E;
+        if (T && L) return HTTOPLEFT;
+        if (T && R) return HTTOPRIGHT;
+        if (B && L) return HTBOTTOMLEFT;
+        if (B && R) return HTBOTTOMRIGHT;
+        if (L) return HTLEFT;
+        if (R) return HTRIGHT;
+        if (T) return HTTOP;
+        if (B) return HTBOTTOM;
+        return HTCLIENT;
+    }
+
     case WM_CLOSE:
         // Панель не закривають назовсім — її ховають: вікно чату живе далі.
         if (self) self->hide();
@@ -62,6 +96,7 @@ bool GuiWindow::create(const wchar_t* cls, const wchar_t* title, int w, int h,
 
     width_ = w;
     height_ = h;
+    resizable_ = resizable;
     // Без рамки: заголовок і хрестик малюємо самі — так само, як це робила
     // Qt-панель, і так вікно виглядає однією річчю з чатом, а не гостем із
     // системного оформлення.
@@ -92,12 +127,10 @@ bool GuiWindow::create(const wchar_t* cls, const wchar_t* title, int w, int h,
         DwmSetWindowAttribute(hwnd_, 33 /*DWMWA_WINDOW_CORNER_PREFERENCE*/,
                               &kRound, sizeof kRound);
 
-        // І сама рамка. Вікно без заголовка Windows 11 однаково обводить
-        // світлою лінією — зверху її видно найкраще, і виглядає вона як біла
-        // смужка над заголовком, що не належить ні вікну, ні системі.
-        // DWMWA_COLOR_NONE прибирає її зовсім, а не перефарбовує: колір, навіть
-        // підібраний, лишає ту саму лінію, тільки темнішу. На Windows 10 виклик
-        // просто нічого не робить.
+        // І тонка рамка DWM — теж геть. Це не та сама «біла смужка», що була у
+        // редакторі теми (ту малювала неклієнтська область, див. WM_NCCALCSIZE),
+        // але лінія по краю тут однаково зайва. На Windows 10 виклик просто
+        // нічого не робить.
         const COLORREF kNone = 0xFFFFFFFE;   // DWMWA_COLOR_NONE
         DwmSetWindowAttribute(hwnd_, 34 /*DWMWA_BORDER_COLOR*/, &kNone, sizeof kNone);
     }

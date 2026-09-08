@@ -100,7 +100,7 @@ x86_64-w64-mingw32-g++ -O2 -s -static -municode -mwindows $DLL_INC \
 # рядку «#include» видно, звідки річ: core/, gfx/, net/, ui/, platform/,
 # update/, app/. Заголовки й реалізації лежать окремо (include/ і src/): у
 # теці модуля видно самі .cpp, а не подвійний список із парами.
-RENDER_INC="-isystem $TP/include -I $SRC -I $SRC/render/include"
+RENDER_INC="-isystem $TP/include -isystem $TP/include/freetype2 -I $SRC -I $SRC/render/include"
 
 # Джерела — тим самим поділом, що й теки. Один список на дві збірки: доки він
 # був переписаний двічі, звичайна збірка й відладочна встигали розійтися.
@@ -159,7 +159,7 @@ RENDER_SRC="
 echo ">> x64: ресурс версії та значка"
 x86_64-w64-mingw32-windres -I "$SRC/render/include" -I "$SRC/render"     "$SRC/render/hominka.rc" -O coff -o /tmp/hominka-res.o
 
-RENDER_LIBS="/tmp/hominka-res.o -L$TP/lib -limgui -llitehtml -lgumbo -lwebpdemux -lwebp -lsharpyuv
+RENDER_LIBS="/tmp/hominka-res.o -L$TP/lib -limgui -lfreetype -llitehtml -lgumbo -lwebpdemux -lwebp -lsharpyuv
     -lixwebsocket -lmbedtls -lmbedx509 -lmbedcrypto -lmonocypher
     -ld2d1 -ldwrite -lwindowscodecs -ld3d11 -ldxgi -ldcomp
     -ld3dcompiler_47 -lgdi32 -ldwmapi -lole32 -luuid -lws2_32 -lcrypt32

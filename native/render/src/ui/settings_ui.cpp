@@ -193,10 +193,19 @@ bool toggle(const char* label, bool* on, const char* what = nullptr) {
         ImGui::AlignTextToFramePadding();
         ImGui::TextUnformatted(label);
     }
+    // Пояснення — У ТОМУ Ж РЯДКУ, за підписом.
+    //
+    // Під перемикачем воно читалося як окремий абзац, що стосується чогось
+    // іншого: очі спускалися на рядок нижче й губили зв'язок із тим, що саме
+    // вмикається. Поруч — видно, що це те саме речення.
     if (what) {
-        ImGui::Indent(w + 10.0f);
-        dim_wrapped(what);
-        ImGui::Unindent(w + 10.0f);
+        ImGui::SameLine(0, 12);
+        ImGui::AlignTextToFramePadding();
+        ImGui::PushStyleColor(ImGuiCol_Text, col(TEXT_DIM));
+        ImGui::PushTextWrapPos(0.0f);
+        ImGui::TextUnformatted(what);
+        ImGui::PopTextWrapPos();
+        ImGui::PopStyleColor();
     }
     ImGui::PopID();
     return clicked;
@@ -419,7 +428,8 @@ void page_channels(SettingsState* st, Config* cfg, const std::vector<SourceView>
         ImGui::EndDisabled();
     }
     ImGui::Indent(LABEL_W);
-    dim_wrapped("Число видно у смужці вікна чату.");
+    dim_wrapped("Число видно у смужці вікна чату, а коли смужка вимкнена — плашкою "
+                "в кутку. Показувати його чи ні — рішення, не пов'язане зі смужкою.");
     ImGui::Unindent(LABEL_W);
 
     ImGui::Dummy(ImVec2(0, 14));
@@ -519,6 +529,13 @@ void page_look(Config* cfg, SettingsEvents* ev) {
             cfg->look.frameless = !border;
             ev->changed = ev->look_changed = true;
         }
+    }
+
+    ImGui::Dummy(ImVec2(0, 6));
+    if (toggle("Смужка згори", &cfg->header,
+               "Заголовок вікна: назва, замок, повзунки, налаштування. Вимкнена — "
+               "лишаються самі повідомлення, а керування з'являється під курсором.")) {
+        ev->changed = ev->look_changed = true;
     }
 
     ImGui::Dummy(ImVec2(0, 6));

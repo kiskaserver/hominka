@@ -23,11 +23,12 @@ const ImU32 ACCENT       = IM_COL32(168, 85, 247, 255);   // #a855f7
 const ImU32 ACCENT_LOCK  = IM_COL32(34, 197, 94, 255);    // #22c55e
 const ImU32 TEXT_DIM     = IM_COL32(190, 190, 200, 255);
 
-// Смужка згори. 28 пікселів замість колишніх 22: у 22 не вміщалися ані кнопка
-// з підписом, ані повзунок — усе доводилося тиснути, і ряд виглядав кривим.
-const float BAR_H = 28.0f;
-const float BTN_W = 26.0f;
-const float BTN_H = 22.0f;
+// Смужка згори. 36 пікселів — стільки ж, скільки заголовок вікна налаштувань:
+// це заголовок вікна чату, і виглядати він має так само, а не вдвічі нижчим.
+// У колишні 22 не вміщалися ані кнопка з підписом, ані повзунок.
+const float BAR_H = 36.0f;
+const float BTN_W = 30.0f;
+const float BTN_H = 26.0f;
 const float BTN_Y = (BAR_H - BTN_H) * 0.5f;
 // Куточок для розтягування.
 const float GRIP = 16.0f;
@@ -166,10 +167,12 @@ bool Chrome::poll_hover(HWND hwnd, bool blocked) {
 
 void Chrome::begin_intro(int ms) { intro_until_ = GetTickCount64() + (unsigned long long)ms; }
 
-bool Chrome::visible(bool locked) const {
+bool Chrome::visible(bool locked, bool header) const {
     if (locked) return false;          // замкнене вікно керування не показує
-    return hovered_ || intro_active();
+    return header || hovered_ || intro_active();
 }
+
+float Chrome::bar_height() { return BAR_H; }
 
 bool Chrome::intro_active() const { return GetTickCount64() < intro_until_; }
 
@@ -276,7 +279,8 @@ void separator(ImDrawList* dl, float x, float y, float h) {
 }  // namespace
 
 ChromeEvents Chrome::draw_controls(int w, int h, Look* look, HWND hwnd,
-                                   const std::string& viewers, bool can_close, bool empty) {
+                                   const std::string& viewers, bool can_close, bool empty,
+                                   bool header, bool update) {
     ChromeEvents ev;
     if (!ready_) return ev;
 
@@ -288,7 +292,7 @@ ChromeEvents Chrome::draw_controls(int w, int h, Look* look, HWND hwnd,
     ImGui::GetIO().AddMousePosEvent((float)mouse_.x, (float)mouse_.y);
     ImGui::NewFrame();
 
-    const bool show = visible(look->locked);
+    const bool show = visible(look->locked, header);
     // Замкнене вікно кнопок не показує — але в перші секунди після запуску воно
     // все одно має сказати, що воно тут. Інакше замкнена й порожня Hominka на
     // вигляд нічим не відрізняється від незапущеної.
@@ -494,6 +498,14 @@ ChromeEvents Chrome::draw_controls(int w, int h, Look* look, HWND hwnd,
                             ImVec2(s.c.x + cs * 6.5f, s.c.y + sn * 6.5f), tint, 2.0f);
             }
             dl->AddCircle(s.c, 4.0f, tint, 12, 2.0f);
+            // Є оновлення — крапка на шестерні. Не вікно й не звук: посеред
+            // ефіру таке заважає, а мовчати зовсім означає, що про виправлення
+            // дізнаються через тиждень.
+            if (update) {
+                dl->AddCircleFilled(ImVec2(s.b.x - 5.0f, s.a.y + 5.0f), 3.5f,
+                                    IM_COL32(18, 18, 24, 255));
+                dl->AddCircleFilled(ImVec2(s.b.x - 5.0f, s.a.y + 5.0f), 2.5f, ACCENT);
+            }
         }
 
         // Глядачі — ліворуч від шестерні. Саме тут, а не в налаштуваннях:
@@ -577,7 +589,10 @@ ChromeEvents Chrome::draw_controls(int w, int h, Look* look, HWND hwnd,
     // Порожня стрічка — не привід показувати порожнє вікно. Поки нічого не
     // приїхало, пишемо просто, що це і куди натиснути. Замкненому вікну
     // натискати нема куди, тож йому кажемо, як розімкнутися.
-    if ((show && empty) || intro_note) {
+    //
+    // Напис НЕ прив'язаний до наведення: вікно, яке зникає, щойно з нього
+    // пішла миша, виглядає як несправність, а не як задум.
+    if ((empty && !look->locked) || intro_note) {
         const char* lines[3] = {
             "Hominka працює",
             intro_note ? "Вікно замкнене — миша проходить крізь нього."
@@ -594,6 +609,24 @@ ChromeEvents Chrome::draw_controls(int w, int h, Look* look, HWND hwnd,
                         cols[i], lines[i]);
             y += sz.y + (i == 0 ? 10.0f : 4.0f);
         }
+    }
+
+    // Глядачі без смужки.
+    //
+    // Показувати їх чи ні — вибір стримера, і він не має залежати від того, чи
+    // ввімкнена смужка: це два різні рішення. Тож коли смужки немає, число
+    // живе своєю плашкою в правому верхньому куті.
+    if (!show && !viewers.empty() && !look->locked) {
+        ImDrawList* dl = ImGui::GetWindowDrawList();
+        const ImVec2 org = ImGui::GetWindowPos();
+        const ImVec2 sz = ImGui::CalcTextSize(viewers.c_str());
+        const float pw = sz.x + 26.0f, ph = sz.y + 8.0f;
+        const ImVec2 a(org.x + (float)w - pw - 8.0f, org.y + 8.0f);
+        const ImVec2 b(a.x + pw, a.y + ph);
+        dl->AddRectFilled(a, b, IM_COL32(16, 16, 22, 200), ph * 0.5f);
+        dl->AddCircleFilled(ImVec2(a.x + 10.0f, a.y + ph * 0.5f), 3.0f,
+                            IM_COL32(239, 68, 68, 255));
+        dl->AddText(ImVec2(a.x + 19.0f, a.y + 4.0f), TEXT_DIM, viewers.c_str());
     }
 
     ImGui::End();
