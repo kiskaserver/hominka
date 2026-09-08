@@ -20,12 +20,13 @@ struct CssEditState {
     int cursor_line = 1;
     int64_t typed_ms = 0;          // коли востаннє щось змінили
     bool pending = false;          // є незастосована правка
+    bool samples_on = false;       // зразки зараз сиплються у стрічку
 };
 
 struct CssEditEvents {
     bool apply = false;            // текст змінився й час його застосувати
     bool close = false;
-    bool samples = false;          // показати зразки повідомлень у стрічці
+    bool samples = false;          // увімкнути або вимкнути зразки у стрічці
     bool title_active = false;     // тягнуть за заголовок
 };
 

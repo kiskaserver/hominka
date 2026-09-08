@@ -160,6 +160,52 @@ GameView game_view(const GameState& gs) {
     return v;
 }
 
+// Зразки повідомлень у стрічці, доки відкритий редактор теми.
+//
+// Три речі, яких бракувало першому підходу: вони сипалися всі разом (тему
+// підбирають на русі стрічки, а не на готовій купі), кінчалися (а дивитися
+// треба довше, ніж сім рядків) і лишалися в чаті після закриття редактора,
+// хоч ніхто їх не писав.
+struct Demo {
+    bool on = false;
+    size_t next = 0;
+    unsigned seq = 0;
+    int64_t last = 0;
+    std::vector<std::string> ids;
+
+    void clear(Feed* feed) {
+        if (!ids.empty()) rlog("зразки: прибираю %u", (unsigned)ids.size());
+        for (const std::string& id : ids) feed->remove_id(id);
+        ids.clear();
+        next = 0;
+    }
+
+    // Один рядок раз на 900 мс, по колу й без кінця: тему підбирають на
+    // стрічці, яка рухається, а не на застиглій купі. Дійшли кінця списку —
+    // починаємо його спочатку, а найдавніші свої рядки прибираємо, щоб стрічка
+    // не росла нескінченно.
+    bool tick(Feed* feed, ImageCache* images, ImageFetch* fetch, int64_t t) {
+        if (!on || t - last < 900) return false;
+        last = t;
+        const std::vector<ChatMessage> all = demo_messages();
+        if (all.empty()) return false;
+        if (next >= all.size()) next = 0;
+
+        ChatMessage m = all[next++];
+        char id[32];
+        snprintf(id, sizeof id, "demo-%u", (unsigned)seq++);
+        m.id = id;
+        want_images(m, images, fetch);
+        feed->add(m, t);
+        ids.push_back(m.id);
+        while (ids.size() > 30) {
+            feed->remove_id(ids.front());
+            ids.erase(ids.begin());
+        }
+        return true;
+    }
+};
+
 // Налаштування «анімовані емоути» → режим кеша картинок.
 Motion motion_of(const std::string& name) {
     if (name == "freeze") return Motion::Freeze;
@@ -312,6 +358,7 @@ int run_overlay(DWORD parent_pid, bool standalone) {
     SettingsState sstate;
     GuiWindow css_win;
     CssEditState cstate;
+    Demo demo;
     Updater updater;
     Viewers viewers;
     bool update_asked = false;
@@ -368,6 +415,7 @@ int run_overlay(DWORD parent_pid, bool standalone) {
     // Інакше кожен «config» смикав би вікно назад під час розтягування.
     bool user_sizing = false;
     bool chrome_was_visible = false;
+    bool force_frame = false;
     InjectState inject;
     FrameWriter writer;
     bool inject_was_on = false;
@@ -404,6 +452,7 @@ int run_overlay(DWORD parent_pid, bool standalone) {
         if (standalone) {
             changed |= pump_chat(&net, &feed, &images, &fetch, now_ms());
             changed |= pump_images(&fetch, &images, &feed);
+            changed |= demo.tick(&feed, &images, &fetch, now_ms());
         } else {
             frames.clear();
             ipc.poll(&frames);
@@ -450,12 +499,25 @@ int run_overlay(DWORD parent_pid, bool standalone) {
         const bool chrome_visible = chrome.visible(look.locked) || chrome.intro_active();
         const bool chrome_dirty = chrome_visible || chrome_was_visible;
 
-        if (changed || resized || blanked || chrome_dirty || feed.dirty(t)) {
+        // force_frame — «намалюй іще раз, навіть якщо здається, що нічого не
+        // змінилося». Потрібне рівно там, де рядки ЗНИКАЮТЬ: стрічка після
+        // цього спокійна, малювати їй нема чого, і на екрані так і лишалися б
+        // пікселі попереднього кадру — прибрані зразки виглядали б як
+        // неприбрані.
+        if (changed || resized || blanked || chrome_dirty || force_frame || feed.dirty(t)) {
+            force_frame = false;
             if (!win.ensure_size(want_w, want_h)) {
                 rlog("ensure_size %dx%d не вдався", want_w, want_h);
                 Sleep(100);
                 continue;
             }
+            // Прозорість стосується всього вікна, а не самої лише підкладки:
+            // крізь напівпрозорий чат має бути видно те, що під ним. А смужка
+            // керування з'являється поверх стрічки, тож поки вона може
+            // з'явитися, стрічка не займає верхні пікселі; замкнене вікно
+            // смужки не показує — і місце їй не потрібне.
+            feed.set_alpha(look.opacity);
+            feed.set_top_pad(look.locked ? 0 : 30);
             win.begin_draw();
             win.d2d()->Clear(D2D1::ColorF(0, 0, 0, 0));
             // Підкладка й рамка — під чатом; сам чат — поверх.
@@ -546,6 +608,20 @@ int run_overlay(DWORD parent_pid, bool standalone) {
                 const bool ok = dump_window_png(&win, wp.c_str());
                 rlog("знімок %s: %s", ok ? "збережено" : "НЕ вдався", shot_path.c_str());
                 shot_path.clear();
+            }
+
+            // Знімок вікна чату для перевірки вигляду — ТУТ, до показу.
+            //
+            // Той самий підводний камінь, що й вище: у flip-моделі після
+            // Present задній буфер уже інший, і знімок, зроблений пізніше по
+            // ходу циклу, показував кадр, який був ДО останньої зміни. На
+            // стрічці, яка щойно завмерла, це виглядало як «прибрані зразки не
+            // прибралися» — і двічі відправило шукати неіснуючу помилку.
+            if (shot_prefix && !shot_chat && now_ms() - started > shot_wait - 1500) {
+                shot_chat = true;
+                wchar_t path[512];
+                _snwprintf(path, 512, L"%hs-chat.png", shot_prefix);
+                rlog("знімок чату: %d", (int)dump_window_png(&win, path));
             }
 
             win.present();
@@ -723,17 +799,30 @@ int run_overlay(DWORD parent_pid, bool standalone) {
                     ++css_shots;
                 }
                 css_win.drag(cev2.title_active);
-                if (cev2.close) css_win.hide();
+                if (cev2.close) {
+                    // Зразки живуть рівно доти, доки відкритий редактор: інакше
+                    // людина закриває вікно, а в чаті лишаються чужі
+                    // повідомлення, яких вона не писала.
+                    demo.on = false;
+                    cstate.samples_on = false;
+                    demo.clear(&feed);
+                    force_frame = true;
+                    css_win.hide();
+                }
                 if (cev2.apply) {
                     cfg.custom_css = cstate.text;
                     feed.set_css(cfg.custom_css);
                     cfg.save();
                 }
                 if (cev2.samples) {
-                    const int64_t t0 = now_ms();
-                    for (const ChatMessage& m : demo_messages()) {
-                        want_images(m, &images, &fetch);
-                        feed.add(m, t0);
+                    demo.on = !demo.on;
+                    cstate.samples_on = demo.on;
+                    if (!demo.on) {
+                        demo.clear(&feed);
+                        force_frame = true;
+                    } else {
+                        demo.next = 0;
+                        demo.last = 0;
                     }
                 }
             }
@@ -758,15 +847,9 @@ int run_overlay(DWORD parent_pid, bool standalone) {
 
             // Вікна ще не показані — показуємо: знімок робиться саме з них.
             if (shot_prefix && now_ms() - started > shot_wait - 1500) {
-                // Спершу — сам чат, без рамки: саме так його бачить глядач.
-                if (!shot_chat) {
-                    shot_chat = true;
-                    wchar_t path[512];
-                    _snwprintf(path, 512, L"%hs-chat.png", shot_prefix);
-                    rlog("знімок чату: %d", (int)dump_window_png(&win, path));
-                }
-                // А вже потім наводимо курсор: рамку видно, лише коли на вікно
-                // наведено, і перевіряти її вигляд інакше нічим.
+                // Сам чат уже знято вище, до Present. Тепер наводимо курсор:
+                // рамку видно, лише коли на вікно наведено, і перевіряти її
+                // вигляд інакше нічим.
                 {
                     const RECT r = win.screen_rect();
                     SetCursorPos((r.left + r.right) / 2, r.top + 10);

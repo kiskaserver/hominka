@@ -109,24 +109,31 @@ bool Chrome::wants_mouse() const {
 }
 
 void Chrome::draw_backdrop(ID2D1DeviceContext* d2d, int w, int h, const Look& look) const {
-    if (look.frameless) return;      // «лише повідомлення» — жодної підкладки
+    // Тло й рамка — ДВІ різні речі, і вимикаються вони окремо.
+    //
+    // Доки це був один прапорець «без рамки», разом із рамкою зникало й тло, а
+    // повзунок «Тло» переставав робити будь-що — при тому, що людині якраз і
+    // потрібне було тло без рамки, зокрема поверх гри. Тепер тло веде свій
+    // повзунок (нуль — немає), рамку веде свій перемикач.
+    const bool bg = look.bg_alpha > 0.001f;
+    if (!bg && look.frameless) return;
 
-    // Підкладка й рамка — точно як у Qt-вікні (hominka/look.py:_apply_border):
-    // rgba(12,12,15, bg_alpha), рамка 2 px акцентом, скруглення 11 px.
-    const float a = look.bg_alpha * look.opacity;
     ID2D1SolidColorBrush* brush = nullptr;
-    if (FAILED(d2d->CreateSolidColorBrush(d2d_color(12 / 255.0f, 12 / 255.0f, 15 / 255.0f, a),
-                                          &brush)))
+    if (FAILED(d2d->CreateSolidColorBrush(
+            d2d_color(12 / 255.0f, 12 / 255.0f, 15 / 255.0f, look.bg_alpha * look.opacity),
+            &brush)))
         return;
     const D2D1_ROUNDED_RECT rr =
         D2D1::RoundedRect(D2D1::RectF(1.0f, 1.0f, (float)w - 1.0f, (float)h - 1.0f), 11.0f, 11.0f);
-    d2d->FillRoundedRectangle(rr, brush);
+    if (bg) d2d->FillRoundedRectangle(rr, brush);
 
-    const bool lock = look.locked;
-    brush->SetColor(d2d_color(lock ? 34 / 255.0f : 168 / 255.0f,
-                              lock ? 197 / 255.0f : 85 / 255.0f,
-                              lock ? 94 / 255.0f : 247 / 255.0f, look.opacity));
-    d2d->DrawRoundedRectangle(rr, brush, 2.0f);
+    if (!look.frameless) {
+        const bool lock = look.locked;
+        brush->SetColor(d2d_color(lock ? 34 / 255.0f : 168 / 255.0f,
+                                  lock ? 197 / 255.0f : 85 / 255.0f,
+                                  lock ? 94 / 255.0f : 247 / 255.0f, look.opacity));
+        d2d->DrawRoundedRectangle(rr, brush, 2.0f);
+    }
     brush->Release();
 }
 
@@ -229,6 +236,33 @@ bool bar_slider(const char* id, float x, float y, float w, float h, float* v,
     return changed;
 }
 
+// Значок програми — той самий, що на ярлику: фіолетово-рожевий квадрат зі
+// скругленням, у ньому біла бульбашка з трьома крапками. Малюємо, а не
+// вантажимо картинку: на вісімнадцяти пікселях від цього нічого не втрачається,
+// зате не треба ані файлу поруч, ані текстури в атласі.
+void logo(ImDrawList* dl, ImVec2 p, float s) {
+    dl->AddRectFilledMultiColor(p, ImVec2(p.x + s, p.y + s),
+                                IM_COL32(150, 90, 240, 255), IM_COL32(214, 70, 190, 255),
+                                IM_COL32(214, 70, 190, 255), IM_COL32(150, 90, 240, 255));
+    // Скруглення підробляємо зверху: AddRectFilledMultiColor кутів не вміє.
+    dl->AddRect(p, ImVec2(p.x + s, p.y + s), IM_COL32(0, 0, 0, 0), s * 0.28f, 0, 0.0f);
+
+    const float bx = p.x + s * 0.17f, by = p.y + s * 0.25f;
+    const float bw = s * 0.66f, bh = s * 0.42f;
+    dl->AddRectFilled(ImVec2(bx, by), ImVec2(bx + bw, by + bh), IM_COL32(255, 255, 255, 245),
+                      bh * 0.42f);
+    // Хвостик бульбашки.
+    dl->AddTriangleFilled(ImVec2(bx + bw * 0.22f, by + bh - 0.5f),
+                          ImVec2(bx + bw * 0.52f, by + bh - 0.5f),
+                          ImVec2(bx + bw * 0.24f, by + bh + s * 0.22f),
+                          IM_COL32(255, 255, 255, 245));
+    const ImU32 dots[3] = {IM_COL32(99, 102, 241, 255), IM_COL32(147, 51, 234, 255),
+                           IM_COL32(236, 72, 153, 255)};
+    for (int i = 0; i < 3; ++i)
+        dl->AddCircleFilled(ImVec2(bx + bw * (0.26f + 0.24f * (float)i), by + bh * 0.5f),
+                            s * 0.055f + 0.4f, dots[i], 8);
+}
+
 void separator(ImDrawList* dl, float x, float y, float h) {
     dl->AddLine(ImVec2(x, y), ImVec2(x, y + h), IM_COL32(255, 255, 255, 26));
 }
@@ -292,6 +326,26 @@ ChromeEvents Chrome::draw_controls(int w, int h, Look* look, HWND hwnd,
         // Скільки ще влізе ліворуч, лишивши місце під смужку перетягування.
         auto fits = [&](float need) { return x + need <= right_x - 24.0f; };
 
+        // Значок і назва — першими. Вікно чату не має ані заголовка, ані рядка
+        // в панелі задач, тож інакше воно ніде себе не називає: людина бачить
+        // темний прямокутник і кілька кнопок.
+        {
+            const float LOGO = 16.0f;
+            const ImVec2 nsz = ImGui::CalcTextSize("Hominka");
+            const bool with_name = fits(LOGO + 6.0f + nsz.x + 10.0f + BTN_W * 3.0f);
+            const ImVec2 org = ImGui::GetWindowPos();
+            logo(dl, ImVec2(org.x + x, org.y + BTN_Y + (BTN_H - LOGO) * 0.5f), LOGO);
+            x += LOGO + 6.0f;
+            if (with_name) {
+                dl->AddText(ImVec2(org.x + x, org.y + BTN_Y + (BTN_H - nsz.y) * 0.5f),
+                            IM_COL32(228, 228, 231, 255), "Hominka");
+                x += nsz.x;
+            }
+            x += 8.0f;
+            separator(dl, x, BTN_Y + 3.0f, BTN_H - 6.0f);
+            x += 7.0f;
+        }
+
         // Замок: вимикає й вмикає клік-крізь. Малюємо колодку, а не пишемо
         // «[o]»: на смужці підпис прочитати нема коли, а замкнену колодку
         // видно з першого погляду.
@@ -321,13 +375,25 @@ ChromeEvents Chrome::draw_controls(int w, int h, Look* look, HWND hwnd,
             x += BTN_W;
         }
 
+        // Хто поступається місцем, коли вікно вузьке.
+        //
+        // Питання не абстрактне: у вікні на 370 пікселів разом усе не вміщається
+        // ніколи. Повзунки прозорості крутять постійно й лише звідси, а кегль є
+        // ще й у налаштуваннях — тож першими рахуємо повзунки, а «A−/A+» беруть
+        // те, що лишилося.
+        const float ZOOM_NEED = 4.0f + BTN_W * 2.0f + 2.0f;
+        const float SLIDER_W = 58.0f;
+        const bool values = (float)w >= 470.0f;
+        const float ONE = SLIDER_W + (values ? 6.0f + 34.0f : 0.0f) + 10.0f;
+        const float SLIDERS_NEED = 11.0f + ONE * 2.0f;
+        const bool show_sliders = fits(SLIDERS_NEED);
+        const bool show_zoom = fits((show_sliders ? SLIDERS_NEED : 0.0f) + ZOOM_NEED);
+
         // Кегль. Підпис малюємо самі й по центру кнопки: ImGui::Button ставив
         // текст за своїм відступом, і «A−» з «A+» стояли не на одній лінії з
         // рештою ряду.
-        if (fits(11.0f + BTN_W * 2.0f + 2.0f)) {
-            x += 5.0f;
-            separator(dl, x, BTN_Y + 3.0f, BTN_H - 6.0f);
-            x += 6.0f;
+        if (show_zoom) {
+            x += 4.0f;
 
             const Slot a = slot("##smaller", x, BTN_Y, BTN_W, BTN_H, HOT);
             if (a.pressed) {
@@ -352,10 +418,7 @@ ChromeEvents Chrome::draw_controls(int w, int h, Look* look, HWND hwnd,
         // а не в налаштуваннях. Число поруч показуємо, лише коли для нього є
         // місце; у підказці воно є завжди.
         {
-            const float SLIDER_W = 58.0f;
-            const bool values = (float)w >= 470.0f;
-            const float one = SLIDER_W + (values ? 6.0f + 34.0f : 0.0f) + 10.0f;
-            if (fits(11.0f + one * 2.0f)) {
+            if (show_sliders) {
                 x += 5.0f;
                 separator(dl, x, BTN_Y + 3.0f, BTN_H - 6.0f);
                 x += 8.0f;

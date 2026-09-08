@@ -122,17 +122,47 @@ bool disclosure(const char* label, bool open, float width) {
     return r;
 }
 
-// Повзунок із підписом справа: значення поруч, а не всередині доріжки —
-// інакше його не видно на світлій частині.
+// Повзунок: доріжка, ПРОЙДЕНА ЧАСТИНА кольором, ручка, значення справа.
+//
+// Стандартний ImGui-повзунок малює лише ручку на порожній доріжці — і за нею не
+// видно, багато це чи мало, доки не прочитаєш число. Залита ліва частина
+// відповідає на це, ще не читаючи.
 bool slider(const char* id, float* v, float lo, float hi, const char* fmt,
             float width) {
-    ImGui::SetNextItemWidth(width);
-    const bool changed = ImGui::SliderFloat(id, v, lo, hi, "");
+    const float h = ImGui::GetFrameHeight();
+    ImGui::PushID(id);
+    const ImVec2 p = ImGui::GetCursorScreenPos();
+    ImGui::InvisibleButton("##t", ImVec2(width, h));
+    const bool active = ImGui::IsItemActive();
+    const bool hot = ImGui::IsItemHovered() || active;
+
+    const float r = h * 0.30f;
+    const float x0 = p.x + r, x1 = p.x + width - r;
+    bool changed = false;
+    if (active && x1 > x0) {
+        float t = (ImGui::GetIO().MousePos.x - x0) / (x1 - x0);
+        t = t < 0.0f ? 0.0f : (t > 1.0f ? 1.0f : t);
+        const float nv = lo + t * (hi - lo);
+        if (nv != *v) {
+            *v = nv;
+            changed = true;
+        }
+    }
+    const float t = hi > lo ? (*v - lo) / (hi - lo) : 0.0f;
+    const float cy = p.y + h * 0.5f;
+    const float kx = x0 + t * (x1 - x0);
+
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    dl->AddLine(ImVec2(x0, cy), ImVec2(x1, cy), IM_COL32(255, 255, 255, hot ? 46 : 32), 4.0f);
+    if (kx > x0) dl->AddLine(ImVec2(x0, cy), ImVec2(kx, cy), ACCENT, 4.0f);
+    dl->AddCircleFilled(ImVec2(kx, cy), hot ? r : r - 1.0f, IM_COL32(244, 240, 255, 255));
+
     ImGui::SameLine(0, 10);
     char buf[32];
     snprintf(buf, sizeof buf, fmt, *v);
     ImGui::AlignTextToFramePadding();
     text_col(IM_COL32(233, 213, 255, 255), buf);
+    ImGui::PopID();
     return changed;
 }
 
@@ -478,10 +508,18 @@ void page_look(Config* cfg, SettingsEvents* ev) {
     }
 
     ImGui::Dummy(ImVec2(0, 10));
-    if (toggle("Без рамки", &cfg->look.frameless,
-               "Лише повідомлення: ні підкладки, ні рамки. Керування повертається, "
-               "щойно знімеш замок."))
-        ev->changed = ev->look_changed = true;
+    {
+        // Тло веде повзунок «Тло» вище — воно лишається завжди, зокрема поверх
+        // гри. Тут лише рамка. Доки це був один перемикач «Без рамки», разом із
+        // рамкою зникало й тло, і повзунок переставав робити будь-що.
+        bool border = !cfg->look.frameless;
+        if (toggle("Рамка навколо вікна", &border,
+                   "Фіолетова смужка по краю (зелена, коли вікно замкнене). Тло під "
+                   "чатом від неї не залежить — його веде «Тло» вище.")) {
+            cfg->look.frameless = !border;
+            ev->changed = ev->look_changed = true;
+        }
+    }
 
     ImGui::Dummy(ImVec2(0, 6));
     if (toggle("Поверх усіх вікон", &cfg->keep_top,
@@ -734,6 +772,10 @@ void settings_style() {
     c[ImGuiCol_ScrollbarGrab] = ImVec4(1, 1, 1, 0.18f);
     c[ImGuiCol_ScrollbarGrabHovered] = ImVec4(1, 1, 1, 0.30f);
     c[ImGuiCol_Separator] = ImVec4(1, 1, 1, 0.08f);
+    // Стандартна обводка темної теми — світло-сіра, і на чорному тлі вона
+    // читається як біла рамка навколо кожної картки. Своя, ледь помітна.
+    c[ImGuiCol_Border] = ImVec4(1, 1, 1, 0.07f);
+    c[ImGuiCol_BorderShadow] = ImVec4(0, 0, 0, 0);
     c[ImGuiCol_PlotHistogram] = col(ACCENT);
 }
 
@@ -799,8 +841,12 @@ SettingsEvents draw_settings(SettingsState* st, Config* cfg,
 
     // --- сторінка ------------------------------------------------------------
     ImGui::SetCursorPos(ImVec2(RAIL_W + PAD, TITLE_H + PAD));
+    // «Канали» вміщаються цілком, і смужка прокрутки там — лише зайва деталь,
+    // що натякає, ніби нижче щось є. Решті розділів вона потрібна.
     ImGui::BeginChild("##page", ImVec2((float)w - RAIL_W - PAD * 2, body_h - PAD * 2),
-                      false);
+                      false,
+                      st->page == 0 ? ImGuiWindowFlags_NoScrollbar
+                                    : ImGuiWindowFlags_None);
     switch (st->page) {
     case 0: page_channels(st, cfg, sources, &ev); break;
     case 1: page_look(cfg, &ev); break;

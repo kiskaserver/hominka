@@ -91,6 +91,13 @@ bool GuiWindow::create(const wchar_t* cls, const wchar_t* title, int w, int h,
         const DWORD kRound = 2;   // DWMWCP_ROUND
         DwmSetWindowAttribute(hwnd_, 33 /*DWMWA_WINDOW_CORNER_PREFERENCE*/,
                               &kRound, sizeof kRound);
+
+        // І колір самої рамки. Вікно без заголовка Windows 11 однаково обводить
+        // світлою лінією — зверху вона видно найкраще, і виглядає як біла смужка
+        // над заголовком, що не належить ні вікну, ні системі. Фарбуємо її в
+        // колір заголовка; на Windows 10 виклик просто нічого не робить.
+        const COLORREF kEdge = RGB(23, 20, 31);
+        DwmSetWindowAttribute(hwnd_, 34 /*DWMWA_BORDER_COLOR*/, &kEdge, sizeof kEdge);
     }
     return init_gfx(mono);
 }

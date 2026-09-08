@@ -58,6 +58,18 @@ public:
     int width() const { return width_; }
     int inset() const { return inset_; }
 
+    // Прозорість усієї стрічки: 1 — як намальовано, 0.5 — напівпрозоро.
+    //
+    // Саме цього чекають від «прозорості вікна»: щоб крізь чат було видно те,
+    // що під ним. Доки це значення множилося лише в підкладку, у режимі без
+    // підкладки повзунок не робив рівно нічого.
+    void set_alpha(float a) { alpha_ = a < 0.05f ? 0.05f : (a > 1.0f ? 1.0f : a); }
+
+    // Скільки пікселів згори лишити вільними під смужку керування. Без цього
+    // смужка накривала найстаріший видимий рядок — вона ж напівпрозора і
+    // з'являється поверх уже намальованого.
+    void set_top_pad(int px) { top_pad_ = px < 0 ? 0 : px; }
+
     // --- вміст ---
     void add(const ChatMessage& m, int64_t now_ms);
     void remove_id(const std::string& id);
@@ -163,6 +175,8 @@ private:
     float zoom_ = 1.0f;
     int width_ = 430;
     int inset_ = 8;
+    int top_pad_ = 0;
+    float alpha_ = 1.0f;
     int gap_ = 6;
     // «#list { flex-direction: column-reverse }» — новіші рядки згори.
     bool reversed_ = false;

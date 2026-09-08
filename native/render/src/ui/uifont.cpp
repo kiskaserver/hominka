@@ -33,6 +33,21 @@ void build_ranges(ImVector<ImWchar>* out) {
     b.BuildRanges(out);
 }
 
+// Наскільки дрібно растеризувати гліфи.
+//
+// Windows малює свій текст із хінтингом і субпіксельним згладжуванням; stb, яким
+// користується ImGui, не вміє ні того, ні того — і Segoe UI у п'ятнадцять
+// пікселів виходив рваним, «піксельним» поруч із самим чатом, який малює
+// DirectWrite. Потроєна вибірка по горизонталі це здебільшого лікує: гліф
+// растеризується втричі щільніше й лягає на будь-яку дробову позицію.
+ImFontConfig& sharp() {
+    static ImFontConfig cfg;
+    cfg.OversampleH = 3;
+    cfg.OversampleV = 1;
+    cfg.PixelSnapH = false;
+    return cfg;
+}
+
 // Шлях до системного шрифту. Порожньо — якщо теки Windows чомусь немає.
 std::string font_path(const char* file) {
     char dir[MAX_PATH] = {0};
@@ -54,7 +69,7 @@ void load_ui_font(float size) {
     // його вже після цього виклику. Локальний вектор зник би одразу.
     static ImVector<ImWchar> kept;
     build_ranges(&kept);
-    if (!ImGui::GetIO().Fonts->AddFontFromFileTTF(path.c_str(), size, nullptr, kept.Data)) {
+    if (!ImGui::GetIO().Fonts->AddFontFromFileTTF(path.c_str(), size, &sharp(), kept.Data)) {
         // Не знайшовся — лишається вбудований: краще латиниця, ніж жодного
         // інтерфейсу.
         ImGui::GetIO().Fonts->AddFontDefault();
@@ -73,7 +88,7 @@ void load_mono_font(float size) {
     if (path.empty()) return;
     static ImVector<ImWchar> kept;
     build_ranges(&kept);
-    g_mono = ImGui::GetIO().Fonts->AddFontFromFileTTF(path.c_str(), size, nullptr, kept.Data);
+    g_mono = ImGui::GetIO().Fonts->AddFontFromFileTTF(path.c_str(), size, &sharp(), kept.Data);
 #else
     (void)size;
 #endif

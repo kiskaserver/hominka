@@ -174,10 +174,14 @@ CssEditEvents draw_css_editor(CssEditState* st, int w, int h, int64_t now_ms) {
         ev.title_active = ImGui::IsItemActive();
 
         ImGui::SetCursorPos(ImVec2((float)w - 308.0f, 7));
-        if (ghost("Показати зразки", 150.0f)) ev.samples = true;
+        if (ghost(st->samples_on ? "Прибрати зразки" : "Показати зразки", 150.0f))
+            ev.samples = true;
         if (ImGui::IsItemHovered())
-            ImGui::SetTooltip("Кілька прикладів повідомлень у самій стрічці —\n"
-                              "щоб бачити тему, коли чат мовчить.");
+            ImGui::SetTooltip(st->samples_on
+                                  ? "Зразки зникнуть зі стрічки. Вони зникають і самі,\n"
+                                    "коли закрити це вікно."
+                                  : "Приклади повідомлень у самій стрічці, по одному —\n"
+                                    "щоб бачити тему в русі, коли чат мовчить.");
         ImGui::SameLine(0, 6);
         ImGui::SetCursorPosY(7);
         if (ghost("Застосувати", 104.0f)) { ev.apply = true; st->pending = false; }
@@ -240,11 +244,18 @@ CssEditEvents draw_css_editor(CssEditState* st, int w, int h, int64_t now_ms) {
             ImGui::PopStyleColor(3);
         }
         ImGui::Spacing();
-        ImGui::BeginChild("##tabbody", ImVec2(0, 0), true);
+        // Без рамки: стандартна ImGui-обводка тут світло-сіра, і навколо
+        // «Проблем» виходив чужий білий прямокутник. Замість неї — ледь
+        // світліше тло, того самого роду, що й решта карток.
+        ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(1, 1, 1, 0.03f));
+        ImGui::PushStyleVar(ImGuiStyleVar_ChildRounding, 8.0f);
+        ImGui::BeginChild("##tabbody", ImVec2(0, 0), false);
         if (st->tab == 0) draw_problems(st->text);
         else if (st->tab == 1) draw_recipes(st);
         else draw_reference(st);
         ImGui::EndChild();
+        ImGui::PopStyleVar();
+        ImGui::PopStyleColor();
     }
     ImGui::EndChild();
 
