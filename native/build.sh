@@ -72,6 +72,12 @@ echo ">> x64: testhost.exe (для перевірки)"
 x86_64-w64-mingw32-g++ -O2 -s -static -municode -mwindows \
     "$SRC/testhost/testhost.cpp" -o "$OUT/testhost-x64.exe" -ld3d11 -ldxgi
 
+# DX9 збирається тим самим набором, що й решта. Джерело лежало тут від початку,
+# але в збірку не потрапляло — тому єдиний API, який ми жодного разу не
+# перевіряли на живому хості, був саме він.
+echo ">> x64: testhost-dx9.exe (для перевірки DX9)"
+x86_64-w64-mingw32-g++ -O2 -s -static -municode -mwindows     "$SRC/testhost/testhost_dx9.cpp" -o "$OUT/testhost-dx9-x64.exe" -ld3d9
+
 echo ">> x64: testhost-dx12.exe (для перевірки DX12)"
 x86_64-w64-mingw32-g++ -O2 -s -static -municode -mwindows \
     "$SRC/testhost/testhost_dx12.cpp" -o "$OUT/testhost-dx12-x64.exe" -ld3d12 -ldxgi
