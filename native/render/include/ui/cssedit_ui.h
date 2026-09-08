@@ -21,12 +21,16 @@ struct CssEditState {
     int64_t typed_ms = 0;          // коли востаннє щось змінили
     bool pending = false;          // є незастосована правка
     bool samples_on = false;       // зразки зараз сиплються у стрічку
+    // Скидання питає підтвердження просто в кнопці: свій CSS пишуть годинами, і
+    // втратити його одним випадковим кліком не має бути так легко.
+    int64_t reset_asked_ms = 0;
 };
 
 struct CssEditEvents {
     bool apply = false;            // текст змінився й час його застосувати
     bool close = false;
     bool samples = false;          // увімкнути або вимкнути зразки у стрічці
+    bool reset = false;            // прибрати свій CSS — лишиться типове оформлення
     bool title_active = false;     // тягнуть за заголовок
 };
 

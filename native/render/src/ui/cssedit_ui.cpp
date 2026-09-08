@@ -170,10 +170,10 @@ CssEditEvents draw_css_editor(CssEditState* st, int w, int h, int64_t now_ms) {
         ImGui::TextUnformatted("Свій CSS для чату");
 
         ImGui::SetCursorPos(ImVec2(0, 0));
-        ImGui::InvisibleButton("##title", ImVec2((float)w - 316.0f, TITLE_H));
+        ImGui::InvisibleButton("##title", ImVec2((float)w - 468.0f, TITLE_H));
         ev.title_active = ImGui::IsItemActive();
 
-        ImGui::SetCursorPos(ImVec2((float)w - 308.0f, 7));
+        ImGui::SetCursorPos(ImVec2((float)w - 460.0f, 7));
         if (ghost(st->samples_on ? "Прибрати зразки" : "Показати зразки", 150.0f))
             ev.samples = true;
         if (ImGui::IsItemHovered())
@@ -182,6 +182,30 @@ CssEditEvents draw_css_editor(CssEditState* st, int w, int h, int64_t now_ms) {
                                     "коли закрити це вікно."
                                   : "Приклади повідомлень у самій стрічці, по одному —\n"
                                     "щоб бачити тему в русі, коли чат мовчить.");
+        ImGui::SameLine(0, 6);
+        ImGui::SetCursorPosY(7);
+        // Скидання — у два кроки. Перший клац лише перепитує; за п'ять секунд
+        // питання знімається саме́. Свій CSS пишуть годинами, і одного
+        // випадкового кліка для його втрати замало.
+        const bool asked = st->reset_asked_ms && now_ms - st->reset_asked_ms < 5000;
+        if (asked) {
+            ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.94f, 0.27f, 0.27f, 0.85f));
+            ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.94f, 0.27f, 0.27f, 1.0f));
+            ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.86f, 0.15f, 0.15f, 1.0f));
+        }
+        if (ImGui::Button(asked ? "Точно скинути?" : "Скинути до типових",
+                          ImVec2(asked ? 146.0f : 146.0f, 0))) {
+            if (asked) {
+                ev.reset = true;
+                st->reset_asked_ms = 0;
+            } else {
+                st->reset_asked_ms = now_ms;
+            }
+        }
+        if (asked) ImGui::PopStyleColor(3);
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("Прибрати свій CSS — лишиться наше типове оформлення.");
+
         ImGui::SameLine(0, 6);
         ImGui::SetCursorPosY(7);
         if (ghost("Застосувати", 104.0f)) { ev.apply = true; st->pending = false; }

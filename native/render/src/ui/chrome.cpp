@@ -145,16 +145,22 @@ void Chrome::draw_backdrop(ID2D1DeviceContext* d2d, int w, int h, const Look& lo
 // Інакше курсор для ImGui назавжди лишався б «у нескінченності»: рамка не
 // з'явилася б, клік-крізь не вимкнувся — і вікном не можна було б
 // скористатися взагалі.
-bool Chrome::poll_hover(HWND hwnd) {
+bool Chrome::poll_hover(HWND hwnd, bool blocked) {
     POINT cur;
     RECT wr;
     if (!GetCursorPos(&cur) || !GetWindowRect(hwnd, &wr)) {
         hovered_ = false;
+        hover_until_ = 0;
         return false;
     }
     mouse_.x = cur.x - wr.left;
     mouse_.y = cur.y - wr.top;
-    hovered_ = PtInRect(&wr, cur) != FALSE;
+
+    const bool inside = !blocked && PtInRect(&wr, cur) != FALSE;
+    const unsigned long long now = GetTickCount64();
+    if (inside) hover_until_ = now + 350;
+    else if (blocked) hover_until_ = 0;      // пішли у своє ж вікно — гасимо одразу
+    hovered_ = inside || now < hover_until_;
     return hovered_;
 }
 

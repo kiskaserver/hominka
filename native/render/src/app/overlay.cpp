@@ -180,15 +180,39 @@ struct Demo {
         next = 0;
     }
 
+    // Які площадки показувати. Зразки мають бути схожі на СВІЙ чат: у того, хто
+    // веде лише Twitch, рядки з Kick і YouTube нічого не пояснюють про його
+    // тему — вони просто інші.
+    bool wants(const std::string& platform, const Config& cfg) const {
+        const bool any = !cfg.twitch.empty() || !cfg.kick.empty() || !cfg.youtube.empty();
+        if (!any) return true;                       // каналів ще немає — показуємо всі
+        if (platform == "twitch") return !cfg.twitch.empty();
+        if (platform == "kick") return !cfg.kick.empty();
+        if (platform == "youtube") return !cfg.youtube.empty();
+        return true;                                 // свій сайт і системні події
+    }
+
     // Один рядок раз на 900 мс, по колу й без кінця: тему підбирають на
     // стрічці, яка рухається, а не на застиглій купі. Дійшли кінця списку —
     // починаємо його спочатку, а найдавніші свої рядки прибираємо, щоб стрічка
     // не росла нескінченно.
-    bool tick(Feed* feed, ImageCache* images, ImageFetch* fetch, int64_t t) {
+    bool tick(Feed* feed, ImageCache* images, ImageFetch* fetch, const Config& cfg,
+              int64_t t) {
         if (!on || t - last < 900) return false;
         last = t;
         const std::vector<ChatMessage> all = demo_messages();
         if (all.empty()) return false;
+
+        // Пропускаємо чужі площадки. Обмежуємо кількість спроб розміром списку:
+        // якщо не підійшов жоден, краще нічого не додати, ніж крутитися вічно.
+        size_t skipped = 0;
+        while (skipped < all.size()) {
+            if (next >= all.size()) next = 0;
+            if (wants(all[next].platform, cfg)) break;
+            ++next;
+            ++skipped;
+        }
+        if (skipped >= all.size()) return false;
         if (next >= all.size()) next = 0;
 
         ChatMessage m = all[next++];
@@ -452,7 +476,7 @@ int run_overlay(DWORD parent_pid, bool standalone) {
         if (standalone) {
             changed |= pump_chat(&net, &feed, &images, &fetch, now_ms());
             changed |= pump_images(&fetch, &images, &feed);
-            changed |= demo.tick(&feed, &images, &fetch, now_ms());
+            changed |= demo.tick(&feed, &images, &fetch, cfg, now_ms());
         } else {
             frames.clear();
             ipc.poll(&frames);
@@ -466,7 +490,22 @@ int run_overlay(DWORD parent_pid, bool standalone) {
             return 0;
         }
 
-        chrome.poll_hover(win.hwnd());
+        // Курсор над нашим же вікном налаштувань чи редактора — це не
+        // наведення на чат, навіть якщо він під ними. Інакше смужка чату
+        // блимала щоразу, коли миша йшла до налаштувань повз край вікна.
+        bool over_our_gui = false;
+        {
+            POINT cur;
+            RECT r;
+            if (GetCursorPos(&cur)) {
+                if (gui.visible() && GetWindowRect(gui.hwnd(), &r) && PtInRect(&r, cur))
+                    over_our_gui = true;
+                if (css_win.visible() && GetWindowRect(css_win.hwnd(), &r) &&
+                    PtInRect(&r, cur))
+                    over_our_gui = true;
+            }
+        }
+        chrome.poll_hover(win.hwnd(), over_our_gui);
 
         // Порожня стрічка — показувати нічого. Але в самостійному режимі вікно
         // чату це єдиний шлях до налаштувань: не малювати його зовсім означало
@@ -808,6 +847,16 @@ int run_overlay(DWORD parent_pid, bool standalone) {
                     demo.clear(&feed);
                     force_frame = true;
                     css_win.hide();
+                }
+                if (cev2.reset) {
+                    // Скидання — це порожній свій CSS: далі діє наше типове
+                    // оформлення, те саме, що бачить людина до першої правки.
+                    cstate.text.clear();
+                    cfg.custom_css.clear();
+                    feed.set_css("");
+                    cfg.save();
+                    force_frame = true;
+                    rlog("свій CSS скинуто до типового");
                 }
                 if (cev2.apply) {
                     cfg.custom_css = cstate.text;
