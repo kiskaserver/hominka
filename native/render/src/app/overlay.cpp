@@ -240,27 +240,22 @@ Motion motion_of(const std::string& name) {
 // або вимкнено в налаштуваннях, або жодна площадка ще не відповіла.
 std::string viewers_line(const Viewers& v, const Config& cfg) {
     if (!cfg.viewers_show) return "";
-    const Viewers::Count tw = cfg.viewers_twitch ? v.twitch() : Viewers::Count();
-    const Viewers::Count kk = cfg.viewers_kick ? v.kick() : Viewers::Count();
-    const Viewers::Count yt = cfg.viewers_youtube ? v.youtube() : Viewers::Count();
-
-    if (cfg.viewers_sum) {
-        int n = 0;
-        bool known = false;
-        for (const Viewers::Count* c : {&tw, &kk, &yt})
-            if (c->known) { known = true; n += c->n; }
-        return known ? group_digits(n) : std::string();
-    }
-    // Окремо — з літерою площадки: без неї три числа поспіль ні про що.
-    std::string out;
-    const std::pair<const char*, const Viewers::Count*> parts[] = {
-        {"T", &tw}, {"K", &kk}, {"Y", &yt}};
-    for (const auto& p : parts) {
-        if (!p.second->known) continue;
-        if (!out.empty()) out += " · ";
-        out += std::string(p.first) + " " + group_digits(p.second->n);
-    }
-    return out;
+    // Одне число з усіх позначених площадок.
+    //
+    // Окремі числа з літерами («T 1 200 · K 300») були й зникли навмисно: у
+    // смужці вікна чату це три величини там, де питання одне — скільки людей
+    // мене зараз дивиться. Вибір площадок лишився, підсумок став єдиним.
+    int n = 0;
+    bool known = false;
+    const Viewers::Count parts[3] = {cfg.viewers_twitch ? v.twitch() : Viewers::Count(),
+                                     cfg.viewers_kick ? v.kick() : Viewers::Count(),
+                                     cfg.viewers_youtube ? v.youtube() : Viewers::Count()};
+    for (const Viewers::Count& c : parts)
+        if (c.known) {
+            known = true;
+            n += c.n;
+        }
+    return known ? group_digits(n) : std::string();
 }
 
 // Стан джерел очима панелі. Просто перекладаємо — панель не має знати ні про
@@ -633,7 +628,7 @@ int run_overlay(DWORD parent_pid, bool standalone) {
                 }
                 if (cev.open_settings) {
                     if (!gui.created() &&
-                        !gui.create(L"HominkaSettings", L"Hominka — налаштування", 720, 520))
+                        !gui.create(L"HominkaSettings", L"Hominka — налаштування", 760, 560))
                         rlog("вікно налаштувань не створилося (лишаємося без нього)");
                     gui.show_beside(win.screen_rect());
                 }
@@ -933,7 +928,7 @@ int run_overlay(DWORD parent_pid, bool standalone) {
                 }
                 if (!gui.visible()) {
                     if (!gui.created())
-                        gui.create(L"HominkaSettings", L"Hominka — налаштування", 720, 520);
+                        gui.create(L"HominkaSettings", L"Hominka — налаштування", 760, 560);
                     gui.show_beside(win.screen_rect());
                 }
                 if (!css_win.visible()) {

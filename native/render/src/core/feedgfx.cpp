@@ -56,6 +56,13 @@ void gfx_blit(GfxTarget* rt, GfxRaster* r, float left, float top,
                    D2D1_BITMAP_INTERPOLATION_MODE_LINEAR);
 }
 
+void gfx_push_clip(GfxTarget* rt, float left, float top, float right, float bottom) {
+    if (rt) rt->PushAxisAlignedClip(D2D1::RectF(left, top, right, bottom),
+                                    D2D1_ANTIALIAS_MODE_ALIASED);
+}
+
+void gfx_pop_clip(GfxTarget* rt) { if (rt) rt->PopAxisAlignedClip(); }
+
 void gfx_release(GfxSurface* s) { if (s) s->Release(); }
 void gfx_release(GfxRaster* r) { if (r) r->Release(); }
 
@@ -123,6 +130,14 @@ void gfx_blit(GfxTarget* rt, GfxRaster* r, float left, float top,
     rt->blit_image(dst, *r, src);
     rt->restore();
 }
+
+void gfx_push_clip(GfxTarget* rt, float left, float top, float right, float bottom) {
+    if (!rt) return;
+    rt->save();
+    rt->clip_to_rect(BLRect(left, top, right - left, bottom - top));
+}
+
+void gfx_pop_clip(GfxTarget* rt) { if (rt) rt->restore(); }
 
 void gfx_release(GfxSurface* s) { delete s; }
 void gfx_release(GfxRaster* r) { delete r; }

@@ -8,6 +8,7 @@
 #include "imgui/imgui_impl_win32.h"
 
 #include "ui/settings_ui.h"
+#include "ui/uibits.h"
 #include "ui/uifont.h"
 
 extern IMGUI_IMPL_API LRESULT ImGui_ImplWin32_WndProcHandler(HWND hWnd, UINT msg,
@@ -23,12 +24,12 @@ const ImU32 ACCENT       = IM_COL32(168, 85, 247, 255);   // #a855f7
 const ImU32 ACCENT_LOCK  = IM_COL32(34, 197, 94, 255);    // #22c55e
 const ImU32 TEXT_DIM     = IM_COL32(190, 190, 200, 255);
 
-// Смужка згори. 36 пікселів — стільки ж, скільки заголовок вікна налаштувань:
-// це заголовок вікна чату, і виглядати він має так само, а не вдвічі нижчим.
-// У колишні 22 не вміщалися ані кнопка з підписом, ані повзунок.
-const float BAR_H = 36.0f;
-const float BTN_W = 30.0f;
-const float BTN_H = 26.0f;
+// Смужка згори. 42 пікселі — рівно стільки ж, скільки заголовок вікна
+// налаштувань: це заголовок вікна чату, і виглядати він має так само. У
+// колишні 22 не вміщалися ані кнопка з підписом, ані повзунок.
+const float BAR_H = 42.0f;
+const float BTN_W = 32.0f;
+const float BTN_H = 30.0f;
 const float BTN_Y = (BAR_H - BTN_H) * 0.5f;
 // Куточок для розтягування.
 const float GRIP = 16.0f;
@@ -62,7 +63,10 @@ bool Chrome::init(HWND hwnd, ID3D11Device* dev, ID3D11DeviceContext* ctx) {
     io.ConfigFlags |= ImGuiConfigFlags_NoMouseCursorChange;
 
     // Шрифт із системи, з кирилицею — див. uifont.h.
-    load_ui_font(15.0f);
+    // 16 пікселів, а не 15. Різниця здається дрібницею, але саме на цих
+    // розмірах вона й вирішує: у 15 Segoe UI віддає стовпчики завтовшки в один
+    // піксель, і будь-яка нерівність растеризації видно як «пікселі».
+    load_ui_font(16.0f);
 
     // Той самий вигляд, що й у панелі налаштувань: кольори, скруглення,
     // повзунки. Рамка чату й панель — одна програма, і синій повзунок ImGui за
@@ -245,33 +249,6 @@ bool bar_slider(const char* id, float x, float y, float w, float h, float* v,
     return changed;
 }
 
-// Значок програми — той самий, що на ярлику: фіолетово-рожевий квадрат зі
-// скругленням, у ньому біла бульбашка з трьома крапками. Малюємо, а не
-// вантажимо картинку: на вісімнадцяти пікселях від цього нічого не втрачається,
-// зате не треба ані файлу поруч, ані текстури в атласі.
-void logo(ImDrawList* dl, ImVec2 p, float s) {
-    dl->AddRectFilledMultiColor(p, ImVec2(p.x + s, p.y + s),
-                                IM_COL32(150, 90, 240, 255), IM_COL32(214, 70, 190, 255),
-                                IM_COL32(214, 70, 190, 255), IM_COL32(150, 90, 240, 255));
-    // Скруглення підробляємо зверху: AddRectFilledMultiColor кутів не вміє.
-    dl->AddRect(p, ImVec2(p.x + s, p.y + s), IM_COL32(0, 0, 0, 0), s * 0.28f, 0, 0.0f);
-
-    const float bx = p.x + s * 0.17f, by = p.y + s * 0.25f;
-    const float bw = s * 0.66f, bh = s * 0.42f;
-    dl->AddRectFilled(ImVec2(bx, by), ImVec2(bx + bw, by + bh), IM_COL32(255, 255, 255, 245),
-                      bh * 0.42f);
-    // Хвостик бульбашки.
-    dl->AddTriangleFilled(ImVec2(bx + bw * 0.22f, by + bh - 0.5f),
-                          ImVec2(bx + bw * 0.52f, by + bh - 0.5f),
-                          ImVec2(bx + bw * 0.24f, by + bh + s * 0.22f),
-                          IM_COL32(255, 255, 255, 245));
-    const ImU32 dots[3] = {IM_COL32(99, 102, 241, 255), IM_COL32(147, 51, 234, 255),
-                           IM_COL32(236, 72, 153, 255)};
-    for (int i = 0; i < 3; ++i)
-        dl->AddCircleFilled(ImVec2(bx + bw * (0.26f + 0.24f * (float)i), by + bh * 0.5f),
-                            s * 0.055f + 0.4f, dots[i], 8);
-}
-
 void separator(ImDrawList* dl, float x, float y, float h) {
     dl->AddLine(ImVec2(x, y), ImVec2(x, y + h), IM_COL32(255, 255, 255, 26));
 }
@@ -340,11 +317,20 @@ ChromeEvents Chrome::draw_controls(int w, int h, Look* look, HWND hwnd,
         // в панелі задач, тож інакше воно ніде себе не називає: людина бачить
         // темний прямокутник і кілька кнопок.
         {
-            const float LOGO = 16.0f;
+            const float LOGO = 18.0f;
             const ImVec2 nsz = ImGui::CalcTextSize("Hominka");
-            const bool with_name = fits(LOGO + 6.0f + nsz.x + 10.0f + BTN_W * 3.0f);
+            // Назва поступається місцем ПЕРШОЮ.
+            //
+            // У вузькому вікні все разом не вміщається ніколи, і черга така:
+            // значок (він і є впізнавання) → замок → повзунки, якими крутять
+            // постійно → назва → «A−/A+», що є і в налаштуваннях. Доки назва
+            // стояла попереду черги, вона з'їдала обидва повзунки.
+            const float need_after =
+                BTN_W + 4.0f + 11.0f +
+                2.0f * (58.0f + ((float)w >= 470.0f ? 40.0f : 0.0f) + 10.0f);
+            const bool with_name = fits(LOGO + 6.0f + nsz.x + 8.0f + need_after);
             const ImVec2 org = ImGui::GetWindowPos();
-            logo(dl, ImVec2(org.x + x, org.y + BTN_Y + (BTN_H - LOGO) * 0.5f), LOGO);
+            app_logo(dl, org.x + x, org.y + BTN_Y + (BTN_H - LOGO) * 0.5f, LOGO);
             x += LOGO + 6.0f;
             if (with_name) {
                 dl->AddText(ImVec2(org.x + x, org.y + BTN_Y + (BTN_H - nsz.y) * 0.5f),

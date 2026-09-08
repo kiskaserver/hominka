@@ -28,14 +28,21 @@
 
 #include "app/nettest.h"
 #include "core/chat_doc.h"
+#include "core/config.h"
 #include "core/feed.h"
 #include "core/look.h"
 #include "gfx/cssbits.h"
 #include "gfx/fontstore.h"
 #include "gfx/imgcache.h"
+#include "net/chatnet.h"
+#include "net/imgfetch.h"
 #include "platform/ipc.h"
 #include "platform/x11_window.h"
 #include "ui/chrome_bl.h"
+#include <SDL.h>
+
+#include "ui/gui_win_sdl.h"
+#include "ui/settings_ui.h"
 
 using json = nlohmann::json;
 using namespace hominka;
@@ -545,6 +552,284 @@ int preview(pid_t parent_pid) {
     return 0;
 }
 
+// --- сам собі програма ------------------------------------------------------
+//
+// Те саме, що робить app/overlay.cpp під Windows, тільки коротше: Python тут
+// більше ні до чого — канали, картинки й налаштування веде сам рендер.
+//
+// Чого ще немає: вікна налаштувань і редактора теми. Вони написані на ImGui, а
+// офіційного бекенда під X11 у ImGui немає, і це наступний крок. Доти канали
+// правляться в config.json (~/.config/hominka/config.json), а все, що є у
+// смужці вікна, працює як і має.
+
+// Події з площадок → стрічка.
+bool pump_chat(ChatNet* net, Feed* feed, ImageCache* images, ImageFetch* fetch, int64_t t) {
+    bool changed = false;
+    ChatEvent ev;
+    // Не більше жмені за кадр: на бурхливому каналі суцільний потік інакше
+    // з'їв би кадр цілком.
+    for (int i = 0; i < 32 && net->take(&ev); ++i) {
+        switch (ev.type) {
+        case ChatEvent::Type::Message:
+            for (const auto& e : ev.msg.emotes)
+                if (!e.url.empty() && !images->known(e.url)) fetch->want(e.url);
+            for (const auto& b : ev.msg.badge_icons)
+                if (!b.url.empty() && !images->known(b.url)) fetch->want(b.url);
+            feed->add(ev.msg, t);
+            break;
+        case ChatEvent::Type::Delete: feed->remove_id(ev.id); break;
+        case ChatEvent::Type::Purge: feed->purge_nick(ev.nick); break;
+        }
+        changed = true;
+    }
+    return changed;
+}
+
+// Докачані картинки → кеш. Розбираємо саме тут, у потоці малювання: кеш
+// спільний із розкладкою, і робити його потокобезпечним заради кількох емоутів
+// на секунду означало б платити блокуванням у найгарячішому місці.
+bool pump_images(ImageFetch* fetch, ImageCache* images, Feed* feed) {
+    bool changed = false;
+    std::string url;
+    std::vector<uint8_t> data;
+    for (int i = 0; i < 8 && fetch->take(&url, &data); ++i) {
+        images->put(url, data.data(), data.size());
+        feed->on_image_arrived(url);
+        changed = true;
+    }
+    return changed;
+}
+
+Motion motion_of(const std::string& name) {
+    if (name == "freeze") return Motion::Freeze;
+    if (name == "hide") return Motion::Hide;
+    return Motion::Play;
+}
+
+// Стан джерел очима панелі. Те саме, що робить app/overlay.cpp; глядачів тут
+// поки немає — лічильник під Linux ще не під'єднаний.
+std::vector<SourceView> source_view(const ChatNet& net) {
+    std::vector<SourceView> out;
+    for (const ChatNet::SourceInfo& s : net.sources()) {
+        SourceView v;
+        v.name = s.name;
+        v.configured = s.configured;
+        v.connected = s.connected;
+        v.note = s.note;
+        out.push_back(v);
+    }
+    return out;
+}
+
+int run_app() {
+    FontStore fonts;
+    if (!fonts.ok()) {
+        fprintf(stderr, "FreeType недоступний\n");
+        return 3;
+    }
+
+    Config cfg;
+    cfg.load();
+
+    ImageCache images;
+    Feed feed(&fonts, &images);
+    images.set_evict_hook([&feed](const std::string& u) { feed.forget_image(u); });
+
+    ImageFetch fetch;
+    ChatNet net;
+
+    Look look = cfg.look;
+    feed.set_zoom(look.zoom);
+    feed.set_css(cfg.custom_css);
+    if (!cfg.layout.empty()) feed.set_layout(cfg.layout);
+    images.set_motion(motion_of(cfg.motion));
+    fetch.start();
+    net.apply(cfg);
+
+    X11Window win;
+    if (!win.create(cfg.x, cfg.y, cfg.w, cfg.h, "Hominka chat overlay")) {
+        fprintf(stderr, "вікно не створилося (X-сервер? 32-бітний візуал?)\n");
+        return 5;
+    }
+    feed.set_width(cfg.w);
+    win.show();
+    trace("самостійний режим: %s", net.status().c_str());
+
+    ChromeBL chrome;
+    chrome.set_fonts(&fonts);
+
+    GuiWindowSDL gui;
+    SettingsState sstate;
+
+    BLImage canvas;
+    BLContext ctx;
+    int canvas_w = 0, canvas_h = 0;
+    int64_t last_gc = 0;
+    bool first = true;
+
+    for (;;) {
+        // Події SDL — одні на весь процес, і розбирає їх один виклик. Вікно
+        // чату на них не тримається: воно на голому X11.
+        GuiWindowSDL::pump();
+
+        bool changed = false;
+        const int64_t t = now_ms();
+        changed |= pump_chat(&net, &feed, &images, &fetch, t);
+        changed |= pump_images(&fetch, &images, &feed);
+        // Картинки, про які стрічка дізналася вже під час розкладки (тло з
+        // теми, наприклад): під Windows їх забирає той самий цикл, тут теж.
+        for (const std::string& u : feed.take_missing())
+            if (!images.known(u)) fetch.want(u);
+
+        // Події миші — не більше ОДНОГО натискання чи відпускання за коло.
+        //
+        // Рамка рахує натискання по парі «натиснули на кнопці — відпустили на
+        // ній же», і кожну половину має побачити окремий кадр. Якщо вичерпати
+        // чергу цілком, швидкий клац (а такий дає й тачпад, і будь-яка
+        // автоматика) прийде обома половинами в одне коло — і зникне безслідно.
+        X11Event ev;
+        bool closed = false;
+        while (win.poll_event(&ev)) {
+            if (ev.closed) { closed = true; break; }
+            if (ev.motion) { chrome.on_motion(ev.mx, ev.my); changed = true; }
+            if (ev.leave) { chrome.on_leave(); changed = true; }
+            if (ev.moved) {
+                cfg.x = win.x();
+                cfg.y = win.y();
+                cfg.w = win.width();
+                cfg.h = win.height();
+                cfg.save();
+                feed.set_width(win.width());
+                changed = true;
+            }
+            if (ev.press) {
+                chrome.on_button(ev.mx, ev.my, true);
+                // Куди саме натиснули, знає рамка: смужка — тягнути вікно,
+                // куточок — розтягувати, решта — її власні кнопки.
+                switch (chrome.hit(ev.mx, ev.my, win.width(), win.height())) {
+                case ChromeBL::Hit::Strip: win.start_drag(ev.mx, ev.my); break;
+                case ChromeBL::Hit::Grip:  win.start_resize(ev.mx, ev.my); break;
+                default: break;
+                }
+                changed = true;
+                break;
+            }
+            if (ev.release) {
+                chrome.on_button(ev.mx, ev.my, false);
+                win.end_drag();
+                changed = true;
+                break;
+            }
+        }
+        if (closed) break;
+
+        // Клік-крізь — ЛИШЕ коли вікно замкнене.
+        //
+        // Під Windows правило інше (крізь, поки на вікно не навели), і воно там
+        // працює, бо курсор там опитується щокадру. Тут наведення приходить
+        // ПОДІЄЮ від X11 — а порожня вхідна область означає, що подій більше
+        // не буде: вікно назавжди лишилося б без рамки. Саме це й сталося на
+        // першій перевірці.
+        win.set_click_through(look.locked && !chrome.wants_mouse());
+
+        if (changed || first || feed.dirty(t) || chrome.hovered()) {
+            first = false;
+            const int w = win.width(), h = win.height();
+            if (w != canvas_w || h != canvas_h) {
+                if (canvas_w) ctx.end();
+                if (canvas.create(w, h, BL_FORMAT_PRGB32) != BL_SUCCESS) {
+                    usleep(100000);
+                    continue;
+                }
+                canvas_w = w;
+                canvas_h = h;
+            }
+            if (ctx.begin(canvas) != BL_SUCCESS) { usleep(100000); continue; }
+            ctx.set_comp_op(BL_COMP_OP_SRC_COPY);
+            ctx.fill_all(BLRgba32(0x00000000));
+            ctx.set_comp_op(BL_COMP_OP_SRC_OVER);
+
+            feed.set_alpha(look.opacity);
+            chrome.draw_backdrop(&ctx, w, h, look);
+            feed.draw(&ctx, w, h, t);
+            const float was_zoom = look.zoom;
+            const ChromeEvents ce = chrome.draw_controls(&ctx, w, h, &look);
+            ctx.end();
+            if (look.zoom != was_zoom) feed.set_zoom(look.zoom);
+
+            // Правда про налаштування тепер тут, а не в Python: те, що покрутили
+            // у смужці, лягає в той самий config.json.
+            if (ce.look_changed || ce.lock_changed) {
+                cfg.look = look;
+                cfg.save();
+            }
+            if (ce.close) break;
+            if (ce.open_settings) {
+                trace("відкриваю налаштування");
+                if (!gui.created() && !gui.create("Hominka — налаштування", 760, 560))
+                    trace("вікно налаштувань НЕ створилося: %s", SDL_GetError());
+                gui.show_beside(win.x(), win.y(), win.width(), win.height());
+            }
+            if (ce.geometry_changed) {
+                cfg.x = win.x();
+                cfg.y = win.y();
+                cfg.w = win.width();
+                cfg.h = win.height();
+                cfg.save();
+            }
+
+            BLImageData data;
+            if (canvas.get_data(&data) == BL_SUCCESS)
+                win.present((const uint8_t*)data.pixel_data, w, h);
+        }
+
+        // Панель налаштувань. Своє вікно, свій контекст ImGui, свій кадр — з
+        // вікном чату вона ділить лише config.
+        if (gui.begin()) {
+            UpdateView upd;                 // оновлювач під Linux ще не зроблено
+            GameView game;                  // чат усередині гри — теж
+            const SettingsEvents sev =
+                draw_settings(&sstate, &cfg, source_view(net), upd, game,
+                              "Linux · нативний рендер", gui.width(), gui.height());
+            gui.end();
+            gui.drag(sev.title_active);
+            if (sev.close) gui.hide();
+            if (sev.look_changed) {
+                look = cfg.look;
+                feed.set_zoom(look.zoom);
+                changed = true;
+            }
+            if (sev.sources_changed) net.apply(cfg);
+            if (sev.motion_changed) {
+                images.set_motion(motion_of(cfg.motion));
+                changed = true;
+            }
+            if (sev.changed) cfg.save();
+        }
+
+        // Прибирання анімованих емоутів — раз на секунду.
+        if (t - last_gc > 1000) {
+            last_gc = t;
+            images.gc_animated(feed.animated_in_use());
+            feed.trim_anim();
+        }
+
+        cfg.flush();
+        usleep(16000);
+    }
+
+    cfg.x = win.x();
+    cfg.y = win.y();
+    cfg.w = win.width();
+    cfg.h = win.height();
+    cfg.look = look;
+    cfg.save();
+    cfg.flush(true);
+    net.stop();
+    fetch.stop();
+    return 0;
+}
+
 void usage() {
     fprintf(stderr,
             "hominka-render-linux — нативний рендер чату\n"
@@ -564,7 +849,9 @@ int main(int argc, char** argv) {
         if (!strcmp(argv[i], "--verbose")) { g_verbose = true; g_draw_trace = true; continue; }
         args.push_back(argv[i]);
     }
-    if (args.empty()) { usage(); return 1; }
+    // Без ключів — це звичайний запуск програми, як і під Windows.
+    if (args.empty()) return run_app();
+    if (!strcmp(args[0], "--app")) return run_app();
 
     if (!strcmp(args[0], "--probe")) return probe();
     if (!strcmp(args[0], "--nettest")) {

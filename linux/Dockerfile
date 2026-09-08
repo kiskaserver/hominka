@@ -28,6 +28,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         libxcb-xinerama0 libasound2 \
         g++ make cmake git patch ca-certificates pkg-config \
         libfreetype-dev libfontconfig1-dev libx11-dev libxext-dev \
+        libgl1-mesa-dev libxcursor-dev libxrandr-dev libxi-dev libxss-dev \
         fonts-noto-core fonts-noto-color-emoji \
         file desktop-file-utils wget \
     && rm -rf /var/lib/apt/lists/*

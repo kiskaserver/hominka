@@ -18,8 +18,8 @@ mkdir -p "$OUT"
 #
 # Свої включення — від native/ і native/render/include, тож у кожному рядку
 # «#include» видно теку, з якої річ.
-INC="-isystem $TPL/include -I $SRC -I $SRC/render/include $(pkg-config --cflags freetype2 fontconfig)"
-LIBS="-L$TPL/lib -llitehtml -lgumbo -lblend2d -lwebpdemux -lwebp -lsharpyuv
+INC="-isystem $TPL/include -isystem $TPL/include/imgui -isystem $TPL/include/SDL2 -I $SRC -I $SRC/render/include $(pkg-config --cflags freetype2 fontconfig)"
+LIBS="-L$TPL/lib -limgui -lSDL2 -lGL -llitehtml -lgumbo -lblend2d -lwebpdemux -lwebp -lsharpyuv
       -lixwebsocket -lmbedtls -lmbedx509 -lmbedcrypto
       $(pkg-config --libs freetype2 fontconfig x11 xext) -lpthread -lrt -lm -ldl"
 
@@ -33,6 +33,7 @@ SRCS="
     $SRC/render/src/app/nettest.cpp
 
     $SRC/render/src/core/chat_doc.cpp
+    $SRC/render/src/core/config.cpp
     $SRC/render/src/core/feed.cpp
     $SRC/render/src/core/feedgfx.cpp
 
@@ -42,6 +43,8 @@ SRCS="
     $SRC/render/src/gfx/imgcache.cpp
 
     $SRC/render/src/net/badges.cpp
+    $SRC/render/src/net/chatnet.cpp
+    $SRC/render/src/net/imgfetch.cpp
     $SRC/render/src/net/emotes.cpp
     $SRC/render/src/net/net_http.cpp
     $SRC/render/src/net/src_kick.cpp
@@ -55,6 +58,14 @@ SRCS="
     $SRC/render/src/platform/x11_window.cpp
 
     $SRC/render/src/ui/chrome_bl.cpp
+    $SRC/render/src/ui/cssedit_ui.cpp
+    $SRC/render/src/ui/csslint.cpp
+    $SRC/render/src/ui/cssref.cpp
+    $SRC/render/src/ui/gui_win_sdl.cpp
+    $SRC/render/src/ui/samples.cpp
+    $SRC/render/src/ui/settings_ui.cpp
+    $SRC/render/src/ui/uibits.cpp
+    $SRC/render/src/ui/uifont.cpp
 "
 
 echo ">> linux: hominka-render (нативний рендер чату)"

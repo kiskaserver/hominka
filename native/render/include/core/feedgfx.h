@@ -62,6 +62,13 @@ GfxRaster* gfx_raster_from_bgra(GfxTarget* rt, const uint8_t* px, int w, int h);
 void gfx_blit(GfxTarget* rt, GfxRaster* r, float left, float top,
               float right, float bottom, float alpha);
 
+// Обмежити малювання прямокутником. Потрібне рівно в одному місці — щоб
+// найстаріший видимий рядок обрізався об нижній край смужки керування, а не
+// зникав цілком: інакше під смужкою лишалася діра завбільшки з ціле
+// повідомлення, і на довгих рядках вона впадала в око.
+void gfx_push_clip(GfxTarget* rt, float left, float top, float right, float bottom);
+void gfx_pop_clip(GfxTarget* rt);
+
 void gfx_release(GfxSurface* s);
 void gfx_release(GfxRaster* r);
 

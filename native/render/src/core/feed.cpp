@@ -396,6 +396,9 @@ bool Feed::draw(GfxTarget* rt, int view_w, int view_h, int64_t now_ms) {
     // перерахунку всієї стрічки на кожне нове повідомлення.
     //
     // «column-reverse» перевертає: новіші згори, стрічка росте вниз.
+    // Малюємо лише під смужкою керування: те, що вище, обрізається.
+    if (top_pad_ > 0) gfx_push_clip(rt, 0.0f, (float)top_pad_, (float)width_, (float)view_h);
+
     float y = reversed_ ? (float)(inset_ + top_pad_) : (float)(view_h - inset_);
     size_t first_drawn = items_.size();
     int64_t next = 0;                    // найближча зміна кадру анімації
@@ -413,10 +416,14 @@ bool Feed::draw(GfxTarget* rt, int view_w, int view_h, int64_t now_ms) {
 
         const float content_top = reversed_ ? y : y - (float)it.content;
         const float img_top = content_top - (float)it.pad_top + shift;
-        // Вийшли за край вікна — далі не видно. Зверху краєм вважається не
-        // нуль, а нижній край смужки керування: рядок, наполовину схований під
-        // нею, читається гірше, ніж його відсутність.
-        if (reversed_ ? img_top > (float)view_h : img_top < (float)top_pad_) break;
+        // Вийшли за край вікна — далі не видно. Зверху краєм вважається не нуль,
+        // а нижній край смужки керування: рядок, що туди не вміщається,
+        // ОБРІЗАЄТЬСЯ (див. gfx_push_clip нижче), а не зникає. Доки він зникав,
+        // під смужкою лишалася порожнеча завбільшки з ціле повідомлення — на
+        // довгому рядку це півекрана нізвідки.
+        if (reversed_ ? img_top > (float)view_h
+                      : img_top + (float)it.height() < (float)top_pad_)
+            break;
 
         gfx_blit(rt, it.bitmap, (float)inset_, img_top,
                  (float)(inset_ + width_ - inset_ * 2), img_top + (float)it.height(),
@@ -443,8 +450,10 @@ bool Feed::draw(GfxTarget* rt, int view_w, int view_h, int64_t now_ms) {
 
         y = reversed_ ? content_top + (float)it.content + (float)gap_
                       : content_top - (float)gap_;
-        if (reversed_ ? y > (float)view_h : y < (float)top_pad_) break;
+        if (reversed_ ? y > (float)view_h : y < (float)top_pad_ - (float)it.height()) break;
     }
+    if (top_pad_ > 0) gfx_pop_clip(rt);
+
     // Усе, що лишилося вище намальованого, у кадр не входить.
     for (size_t i = 0; i < first_drawn; ++i) items_[i].offscreen = true;
     // Жодного видимого анімованого емоута — нема чого й чекати: стрічка знову

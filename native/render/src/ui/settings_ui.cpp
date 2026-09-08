@@ -31,10 +31,10 @@ const ImU32 DOT_ERR    = IM_COL32(248, 113, 113, 255);
 const ImU32 DOT_OFF    = IM_COL32(90, 90, 100, 255);
 
 const float TITLE_H = 42.0f;
-const float RAIL_W = 168.0f;
+const float RAIL_W = 178.0f;
 const float STATUS_H = 30.0f;
 const float PAD = 18.0f;
-const float LABEL_W = 92.0f;      // стовпчик підписів у розділі «Канали»
+const float LABEL_W = 100.0f;     // стовпчик підписів у розділі «Канали»
 
 ImVec4 col(ImU32 c) { return ImGui::ColorConvertU32ToFloat4(c); }
 
@@ -170,11 +170,19 @@ bool slider(const char* id, float* v, float lo, float hi, const char* fmt,
 // ImGui поруч зі скругленими картками виглядає як частина іншої програми.
 bool toggle(const char* label, bool* on, const char* what = nullptr) {
     ImGui::PushID(label);
-    const float h = ImGui::GetFrameHeight() * 0.82f;
+    // Ряд заввишки з кнопку, а сам тумблер — по його центру.
+    //
+    // Доки елемент був заввишки лише з тумблер, усе, що ставало поруч —
+    // підпис, кнопки площадок — рахувало свою висоту від іншої величини, і ряд
+    // розповзався: підпис виявлявся нижчим за тумблер, кнопки ще нижчими. Це і
+    // є те «не на рівні», яке видно на кожній сторінці.
+    const float row = ImGui::GetFrameHeight();
+    const float h = row * 0.72f;
     const float w = h * 1.8f;
-    const ImVec2 p = ImGui::GetCursorScreenPos();
+    const ImVec2 p0 = ImGui::GetCursorScreenPos();
+    const ImVec2 p(p0.x, p0.y + (row - h) * 0.5f);
 
-    const bool clicked = ImGui::InvisibleButton("##t", ImVec2(w, h));
+    const bool clicked = ImGui::InvisibleButton("##t", ImVec2(w, row));
     if (clicked) *on = !*on;
     const bool hovered = ImGui::IsItemHovered();
 
@@ -193,19 +201,13 @@ bool toggle(const char* label, bool* on, const char* what = nullptr) {
         ImGui::AlignTextToFramePadding();
         ImGui::TextUnformatted(label);
     }
-    // Пояснення — У ТОМУ Ж РЯДКУ, за підписом.
-    //
-    // Під перемикачем воно читалося як окремий абзац, що стосується чогось
-    // іншого: очі спускалися на рядок нижче й губили зв'язок із тим, що саме
-    // вмикається. Поруч — видно, що це те саме речення.
+    // Пояснення — рядком нижче, але з відступом ПІД ПІДПИС, а не під тумблер:
+    // так видно, що воно належить саме цьому перемикачу. Поруч у тому ж рядку
+    // воно розтягувало ряд на три рядки й ламало вирівнювання всієї сторінки.
     if (what) {
-        ImGui::SameLine(0, 12);
-        ImGui::AlignTextToFramePadding();
-        ImGui::PushStyleColor(ImGuiCol_Text, col(TEXT_DIM));
-        ImGui::PushTextWrapPos(0.0f);
-        ImGui::TextUnformatted(what);
-        ImGui::PopTextWrapPos();
-        ImGui::PopStyleColor();
+        ImGui::Indent(w + 10.0f);
+        dim_wrapped(what);
+        ImGui::Unindent(w + 10.0f);
     }
     ImGui::PopID();
     return clicked;
@@ -416,20 +418,11 @@ void page_channels(SettingsState* st, Config* cfg, const std::vector<SourceView>
             }
             ImGui::PopStyleColor(3);
         }
-        ImGui::SameLine(0, 10);
-        if (ghost(cfg->viewers_sum ? "разом" : "окремо", 72.0f)) {
-            cfg->viewers_sum = !cfg->viewers_sum;
-            ev->changed = true;
-        }
-        if (ImGui::IsItemHovered())
-            ImGui::SetTooltip(cfg->viewers_sum
-                                  ? "Одне число з усіх площадок."
-                                  : "Кожна окремо, з літерою площадки.");
         ImGui::EndDisabled();
     }
     ImGui::Indent(LABEL_W);
-    dim_wrapped("Число видно у смужці вікна чату, а коли смужка вимкнена — плашкою "
-                "в кутку. Показувати його чи ні — рішення, не пов'язане зі смужкою.");
+    dim_wrapped("Одне число з усіх позначених площадок. Видно у смужці вікна чату, "
+                "а коли смужка вимкнена — плашкою в кутку.");
     ImGui::Unindent(LABEL_W);
 
     ImGui::Dummy(ImVec2(0, 14));
@@ -819,7 +812,13 @@ SettingsEvents draw_settings(SettingsState* st, Config* cfg,
     dl->AddLine(ImVec2(org.x, org.y + TITLE_H), ImVec2(org.x + w, org.y + TITLE_H),
                 IM_COL32(168, 85, 247, 90));
 
-    ImGui::SetCursorPos(ImVec2(PAD, 12));
+    {
+        // Значок перед назвою — той самий, що у смужці вікна чату й на ярлику.
+        // Заголовок без нього читався як чужа панель, приклеєна збоку.
+        const float ico = 20.0f;
+        app_logo(dl, org.x + PAD, org.y + (TITLE_H - ico) * 0.5f, ico);
+    }
+    ImGui::SetCursorPos(ImVec2(PAD + 28.0f, (TITLE_H - ImGui::GetTextLineHeight()) * 0.5f));
     text_col(TEXT, "Hominka");
     ImGui::SameLine(0, 10);
     text_col(TEXT_DIM, HOMINKA_VERSION);

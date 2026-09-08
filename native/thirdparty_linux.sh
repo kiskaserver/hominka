@@ -45,6 +45,8 @@ mkdir -p "$TPL/include" "$TPL/lib"
 : "${STB_REF:=2c980bb59875b0d32144a71867fbdebb2f77cd20}"
 : "${MBEDTLS_REF:=mbedtls-3.6.7}"
 : "${IXWS_REF:=v12.0.1}"
+: "${SDL_REF:=release-2.30.9}"
+: "${IMGUI_REF:=v1.92.9b}"
 
 cd /tmp
 
@@ -185,5 +187,55 @@ cp -r /tp/include/nlohmann/. "$TPL/include/nlohmann/" 2>/dev/null || {
     git clone -q --depth 1 -b "${JSON_REF:-v3.11.3}" https://github.com/nlohmann/json.git json
     cp -r json/single_include/nlohmann/. "$TPL/include/nlohmann/"
 }
+
+# --- SDL2 -----------------------------------------------------------------
+#
+# Вікна налаштувань і редактора теми малює Dear ImGui, а йому потрібен хтось,
+# хто відкриє вікно й дасть події. Офіційного бекенда під голий X11 у ImGui
+# немає — є під SDL2, і саме з ним він живе найдовше.
+#
+# Статично й без Wayland: AppImage не має вимагати від системи нічого, чого там
+# може не бути. X11 достатньо — під Wayland працює XWayland.
+echo ">> SDL2 $SDL_REF (linux)"
+rm -rf sdl
+git clone -q --depth 1 -b "$SDL_REF" https://github.com/libsdl-org/SDL.git sdl
+cmake -S sdl -B sdl/build -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX="$TPL"       -DSDL_SHARED=OFF -DSDL_STATIC=ON -DSDL_TEST=OFF -DSDL_TESTS=OFF       -DSDL_X11=ON -DSDL_WAYLAND=OFF -DSDL_PULSEAUDIO=OFF -DSDL_ALSA=OFF       -DSDL_OSS=OFF -DSDL_JACK=OFF -DSDL_PIPEWIRE=OFF -DSDL_SNDIO=OFF       -DSDL_DISKAUDIO=OFF -DSDL_DUMMYAUDIO=OFF -DSDL_VULKAN=OFF >/dev/null
+cmake --build sdl/build -j"$(nproc)" >/dev/null
+cmake --install sdl/build >/dev/null
+rm -rf sdl
+
+# --- Dear ImGui -----------------------------------------------------------
+#
+# Ті самі файли панелей, що й під Windows: settings_ui.cpp і cssedit_ui.cpp —
+# чистий ImGui й нічого віндового не знають. Різні тут лише бекенди: там Win32
+# і D3D11, тут SDL2 і OpenGL3.
+#
+# FreeType замість вбудованого stb — з тієї самої причини, що під Windows: stb
+# не виконує хінтинг, і текст виходить рваний.
+echo ">> imgui $IMGUI_REF (linux)"
+rm -rf imgui-linux
+git clone -q --depth 1 -b "$IMGUI_REF" https://github.com/ocornut/imgui.git imgui-linux
+mkdir -p "$TPL/include/imgui"
+cp imgui-linux/imgui.h imgui-linux/imgui_internal.h imgui-linux/imconfig.h "$TPL/include/imgui/"
+cp imgui-linux/imstb_*.h "$TPL/include/imgui/"
+cp imgui-linux/backends/imgui_impl_sdl2.h imgui-linux/backends/imgui_impl_opengl3.h    imgui-linux/backends/imgui_impl_opengl3_loader.h "$TPL/include/imgui/"
+cp imgui-linux/misc/freetype/imgui_freetype.h "$TPL/include/imgui/"
+cat >> "$TPL/include/imgui/imconfig.h" <<'EOF'
+#define IMGUI_ENABLE_FREETYPE
+EOF
+
+IMGUI_OBJ=/tmp/imgui-obj-linux
+rm -rf "$IMGUI_OBJ"
+mkdir -p "$IMGUI_OBJ"
+IMGUI_INC="-I$TPL/include/imgui -I$TPL/include $(pkg-config --cflags freetype2)"
+for f in imgui imgui_draw imgui_tables imgui_widgets; do
+    g++ -O2 -std=c++17 -w $IMGUI_INC -c "imgui-linux/$f.cpp" -o "$IMGUI_OBJ/$f.o"
+done
+for f in imgui_impl_sdl2 imgui_impl_opengl3; do
+    g++ -O2 -std=c++17 -w $IMGUI_INC -I"$TPL/include/SDL2"         -c "imgui-linux/backends/$f.cpp" -o "$IMGUI_OBJ/$f.o"
+done
+g++ -O2 -std=c++17 -w $IMGUI_INC -c imgui-linux/misc/freetype/imgui_freetype.cpp     -o "$IMGUI_OBJ/imgui_freetype.o"
+ar rcs "$TPL/lib/libimgui.a" "$IMGUI_OBJ"/*.o
+rm -rf "$IMGUI_OBJ" imgui-linux
 
 echo ">> сторонні бібліотеки Linux готові в $TPL"
