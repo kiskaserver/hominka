@@ -51,7 +51,10 @@ ChromeBL::Layout ChromeBL::layout(int w, int h) const {
     Layout L;
     L.strip = {2.0f, 2.0f, (float)w - 4.0f, kBar};
 
-    float x = 2.0f + kPad;
+    // Значок відступає від краю на ті самі 14 пікселів, що й у Windows-смужці
+    // та в заголовку панелі налаштувань: приклеєний до рамки він виглядав
+    // кривим поруч із хрестиком, який стоїть усередині своєї кнопки.
+    float x = 14.0f;
     const float y = 2.0f + (kBar - kBtnH) * 0.5f;
     // Значок і назва — першими: вікно чату не має ані заголовка, ані рядка в
     // панелі задач, тож інакше воно ніде себе не називає.
@@ -61,7 +64,7 @@ ChromeBL::Layout ChromeBL::layout(int w, int h) const {
     // трималося б лише на тому, що шрифт випадково саме такої ширини.
     float name_w = 62.0f;
     if (fonts_) {
-        if (Face* face = fonts_->face("sans-serif", 600, false, 15.0f)) {
+        if (Face* face = fonts_->face("sans-serif", 600, false, 16.0f)) {
             name_w = 0.0f;
             for (const char* c = "Hominka"; *c;)
                 if (const Glyph* g = face->glyph(next_cp(&c))) name_w += g->advance;
@@ -272,7 +275,7 @@ ChromeEvents ChromeBL::draw_controls(BLContext* ctx, int w, int h, Look* look,
 
     logo(ctx, L.logo);
     text(ctx, "Hominka", L.name.x, L.name.y + L.name.h * 0.66f,
-         BLRgba32(0xFFE4E4E7u), 15.0f);
+         BLRgba32(0xFFE4E4E7u), 16.0f);
     button(ctx, L.lock, "", look->locked);
     lock_icon(ctx, L.lock, look->locked);
     button(ctx, L.zoom_out, "A-", false);

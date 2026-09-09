@@ -66,7 +66,7 @@ bool Chrome::init(HWND hwnd, ID3D11Device* dev, ID3D11DeviceContext* ctx) {
     // 16 пікселів, а не 15. Різниця здається дрібницею, але саме на цих
     // розмірах вона й вирішує: у 15 Segoe UI віддає стовпчики завтовшки в один
     // піксель, і будь-яка нерівність растеризації видно як «пікселі».
-    load_ui_font(17.0f);
+    load_ui_font(18.0f);
 
     // Той самий вигляд, що й у панелі налаштувань: кольори, скруглення,
     // повзунки. Рамка чату й панель — одна програма, і синій повзунок ImGui за
@@ -308,9 +308,29 @@ ChromeEvents Chrome::draw_controls(int w, int h, Look* look, HWND hwnd,
         if (show_viewers) right_w += vsz.x + 24.0f;
         const float right_x = (float)w - right_w;
 
-        float x = 6.0f;
+        // Значок відступає від краю, а не приклеєний до рамки. Шість пікселів
+        // виглядали кривими ще й тому, що праворуч хрестик стоїть усередині
+        // своєї кнопки й від краю відступає майже вдвічі більше.
+        float x = 14.0f;
         // Скільки ще влізе ліворуч, лишивши місце під смужку перетягування.
+        // Вікно без рамки більше нічим не взяти, тож ці двадцять чотири
+        // пікселі — не запас на красу, а єдиний спосіб пересунути вікно.
         auto fits = [&](float need) { return x + need <= right_x - 24.0f; };
+
+        // Ширини, від яких залежить, що саме поміститься. Рахуємо їх ТУТ, до
+        // першого елемента: інакше вийде те, що вже виходило — назва бачить
+        // одну оцінку місця, повзунки потім міряють інакше, і в підсумку
+        // назва є, а повзунків, заради яких її й тіснили, немає.
+        //
+        // У вузькому вікні повзунок коротший. Дванадцять пікселів довжини
+        // нічого не додають до керування — ручку однаково видно й тягнеться
+        // вона так само, — а от назві програми їх якраз бракувало, щоб стояти
+        // поруч зі значком, як їй і належить.
+        const float SLIDER_W = (float)w >= 470.0f ? 58.0f : 46.0f;
+        const bool values = (float)w >= 470.0f;
+        const float ONE = SLIDER_W + (values ? 6.0f + 34.0f : 0.0f) + 10.0f;
+        const float SLIDERS_NEED = 11.0f + ONE * 2.0f;
+        const float ZOOM_NEED = 4.0f + BTN_W * 2.0f + 2.0f;
 
         // Значок і назва — першими. Вікно чату не має ані заголовка, ані рядка
         // в панелі задач, тож інакше воно ніде себе не називає: людина бачить
@@ -324,9 +344,8 @@ ChromeEvents Chrome::draw_controls(int w, int h, Look* look, HWND hwnd,
             // значок (він і є впізнавання) → замок → повзунки, якими крутять
             // постійно → назва → «A−/A+», що є і в налаштуваннях. Доки назва
             // стояла попереду черги, вона з'їдала обидва повзунки.
-            const float need_after =
-                BTN_W + 4.0f + 11.0f +
-                2.0f * (58.0f + ((float)w >= 470.0f ? 40.0f : 0.0f) + 10.0f);
+            // 8 + 7 — хвіст цього ж блоку (відступ і риска), BTN_W — замок.
+            const float need_after = 8.0f + 7.0f + BTN_W + SLIDERS_NEED;
             const bool with_name = fits(LOGO + 6.0f + nsz.x + 8.0f + need_after);
             const ImVec2 org = ImGui::GetWindowPos();
             app_logo(dl, org.x + x, org.y + BTN_Y + (BTN_H - LOGO) * 0.5f, LOGO);
@@ -376,11 +395,6 @@ ChromeEvents Chrome::draw_controls(int w, int h, Look* look, HWND hwnd,
         // ніколи. Повзунки прозорості крутять постійно й лише звідси, а кегль є
         // ще й у налаштуваннях — тож першими рахуємо повзунки, а «A−/A+» беруть
         // те, що лишилося.
-        const float ZOOM_NEED = 4.0f + BTN_W * 2.0f + 2.0f;
-        const float SLIDER_W = 58.0f;
-        const bool values = (float)w >= 470.0f;
-        const float ONE = SLIDER_W + (values ? 6.0f + 34.0f : 0.0f) + 10.0f;
-        const float SLIDERS_NEED = 11.0f + ONE * 2.0f;
         const bool show_sliders = fits(SLIDERS_NEED);
         const bool show_zoom = fits((show_sliders ? SLIDERS_NEED : 0.0f) + ZOOM_NEED);
 

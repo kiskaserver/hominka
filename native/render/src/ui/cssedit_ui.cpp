@@ -245,7 +245,11 @@ CssEditEvents draw_css_editor(CssEditState* st, int w, int h, int64_t now_ms) {
         if (mono) ImGui::PushFont(mono);
         const bool changed = ImGui::InputTextMultiline(
             "##css_text", (char*)st->text.c_str(), st->text.capacity() + 1,
-            ImVec2(left_w - PAD, body_h - 24.0f),
+            // Місце під рядок стану знизу рахуємо від шрифту, а не числом:
+            // двадцять чотири пікселі були рівно під той кегль, який був, і
+            // «рядок 1 · N символів» обрізало навпіл, щойно шрифт підріс.
+            ImVec2(left_w - PAD, body_h - ImGui::GetTextLineHeight() -
+                                     ImGui::GetStyle().ItemSpacing.y - 5.0f),
             ImGuiInputTextFlags_AllowTabInput | ImGuiInputTextFlags_CallbackResize |
                 ImGuiInputTextFlags_CallbackAlways,
             text_resize, st);

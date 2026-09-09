@@ -14,6 +14,13 @@ void text_at(ImDrawList* dl, float x, float y, unsigned int color,
 }
 
 bool ghost(const char* label, float width) {
+    // width — мінімум, а не догма. Ширина кнопок задана числами, і напис,
+    // який у неї не вліз, ImGui просто обрізає: досить було підняти шрифт на
+    // піксель, щоб «Увімкнути повноекранну оптимізацію» втратило хвіст.
+    const float need =
+        ImGui::CalcTextSize(label).x + ImGui::GetStyle().FramePadding.x * 2.0f;
+    if (need > width) width = need;
+
     ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(1, 1, 1, 0.06f));
     ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(1, 1, 1, 0.16f));
     ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(1, 1, 1, 0.24f));
