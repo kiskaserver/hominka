@@ -38,13 +38,12 @@ mkdir -p "$HOME"
 # зібраній програмі поза Windows.
 mkdir -p "$HOME/.config/hominka"
 cat > "$HOME/.config/hominka/config.json" <<'CFG'
-{"renderer": "native", "twitchChannel": "test", "autoUpdate": false,
+{"twitchChannel": "test", "autoUpdate": false,
  "geometry": {"x": 60, "y": 60, "w": 430, "h": 400}}
 CFG
 
 # Без цього Python буферизує stdout у файл, і журнал лишається порожнім навіть
 # тоді, коли програма щось пише.
-export PYTHONUNBUFFERED=1
 START=$(date +%s)
 "$APP" > /tmp/app.log 2>&1 &
 APP_PID=$!
@@ -54,7 +53,7 @@ for _ in $(seq 1 90); do
     sleep 1
     kill -0 "$APP_PID" 2>/dev/null || break
     WINS="$(xwininfo -root -tree 2>/dev/null | grep -ci 'hominka' || true)"
-    [ "$WINS" -ge 2 ] && break        # вікно чату + вікно рендера
+    [ "$WINS" -ge 1 ] && break        # вікно чату (нативна програма — одне вікно)
 done
 ELAPSED=$(( $(date +%s) - START ))
 
@@ -63,13 +62,6 @@ if kill -0 "$APP_PID" 2>/dev/null; then
     echo "програма жива: так (вікна за ${ELAPSED} с)"
 else
     echo "програма жива: НІ"
-    FAIL=1
-fi
-
-if pgrep -f hominka-render-linux >/dev/null; then
-    echo "нативний рендер піднявся: так"
-else
-    echo "нативний рендер піднявся: НІ"
     FAIL=1
 fi
 
@@ -86,4 +78,4 @@ if [ "$FAIL" -ne 0 ]; then
     exit 1
 fi
 echo ""
-echo "гаразд: AppImage запускається на чистій системі й піднімає рендер"
+echo "гаразд: AppImage запускається на чистій системі й показує вікно"
