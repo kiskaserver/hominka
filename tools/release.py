@@ -46,7 +46,20 @@ DIST = os.path.join(HERE, "dist")
 EXE = os.path.join(DIST, "Hominka.exe")
 
 # Куди кладемо. Змінюється лише разом із сервером, тому не в аргументах.
-SSH_HOST = os.environ.get("HOMINKA_SSH", "user@your-server")
+# Адреса сервера — не в коді: або змінна HOMINKA_SSH, або файл .keys/ssh_host
+# поруч із ключем підпису (тека .keys/ у git не потрапляє ніколи).
+def _ssh_host() -> str:
+    env = os.environ.get("HOMINKA_SSH", "").strip()
+    if env:
+        return env
+    try:
+        with open(os.path.join(HERE, ".keys", "ssh_host"), encoding="utf-8") as f:
+            return f.read().strip()
+    except OSError:
+        return ""
+
+
+SSH_HOST = _ssh_host()
 REMOTE_DIR = os.environ.get("HOMINKA_DIR", "/opt/stream/updates/hominka")
 BASE_URL = "https://update.svitix.com/hominka/"
 
@@ -285,6 +298,13 @@ def main():
                     help="архів цієї версії вже на сервері — лише переписати маніфест каналу")
     ap.add_argument("--dry-run", action="store_true", help="нічого не завантажувати")
     args = ap.parse_args()
+
+    # Без адреси сервера не прочитати й поточний маніфест каналу, а
+    # fetch_manifest() на помилку мовчки віддає порожній — і випуск поїхав би
+    # БЕЗ історії змін, затерши її на сервері. Тож падаємо тут, одразу.
+    if not SSH_HOST:
+        raise SystemExit("не задано, куди викладати: змінна HOMINKA_SSH (user@host) "
+                         "або файл .keys/ssh_host")
 
     manifest = {
         "product": "hominka",
