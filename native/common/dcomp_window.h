@@ -66,12 +66,21 @@ public:
             // TOOLWINDOW   — не в панелі задач і не в Alt-Tab;
             // NOACTIVATE   — не забирає фокус у гри;
             // TRANSPARENT  — миша проходить крізь (поки не вимкнемо);
+            // LAYERED      — без нього TRANSPARENT крізь себе мишу НЕ пускає:
+            //                Windows віддає клік вікну однаково, і замкнений чат
+            //                їв кліки, призначені грі чи столу. У Python-версії
+            //                вікно Qt було шаруватим само собою, тож цього ніхто
+            //                не помічав, доки його не переписали;
             // NOREDIRECTIONBITMAP — вміст іде лише через DComp, без застарілої
             //                поверхні перенаправлення (інакше DComp не працює).
             WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE | WS_EX_TRANSPARENT
-                | WS_EX_NOREDIRECTIONBITMAP,
+                | WS_EX_LAYERED | WS_EX_NOREDIRECTIONBITMAP,
             cls, title, WS_POPUP, 0, 0, 16, 16, nullptr, nullptr, inst, nullptr);
         if (!hwnd_) return false;
+        // Шарувате вікно не показується зовсім, доки йому не сказати, як себе
+        // змішувати. Повна непрозорість на рівні вікна — а справжню прозорість
+        // і далі веде альфа свопчейна DirectComposition.
+        SetLayeredWindowAttributes(hwnd_, 0, 255, LWA_ALPHA);
         SetWindowDisplayAffinity(hwnd_, WDA_EXCLUDEFROMCAPTURE);   // OBS не бачить
         return true;
     }
