@@ -1,76 +1,48 @@
-# Збірка під Linux
+# Linux build
 
-Збираємо в контейнері, а не на машині розробника: під Linux має значення, на
-якій системі зібрано (програма не запуститься на старішій glibc, ніж та, де її
-зібрали). Контейнер фіксує це раз і назавжди — Ubuntu 22.04, найстаріша з
-підтриманих Qt 6.11.
+The AppImage is built in a container, not on a developer's machine, because on
+Linux it matters where a binary was built: it will not start on a system with an
+older glibc than the one it was linked against. The image is Ubuntu 22.04 —
+the oldest system the AppImage supports.
 
-```bash
+```sh
 docker build -t hominka-linux -f linux/Dockerfile .
 docker run --rm -v "$PWD:/src" hominka-linux
 ```
 
-На виході — `dist/Hominka-<версія>-linux64.AppImage`.
+Output: `dist/Hominka-<version>-linux64.AppImage`, containing one executable
+(`usr/bin/Hominka`), its icon and a `.desktop` entry, so it appears in the
+application menu. Updates replace the AppImage file itself.
 
-Усередині два виконуваних файли, і другий там не випадково:
+The native core is compiled in this image rather than taken from `native/dist`:
+that image is Debian bookworm (glibc 2.36), and a binary from it would not start
+on Ubuntu 22.04 (glibc 2.35).
 
-```
-usr/bin/Hominka                       сама програма (PyInstaller, одним файлом)
-usr/bin/native/hominka-render-linux   нативний рендер чату
-```
+## Checking on a clean system
 
-**Рендер збирається в ЦЬОМУ образі, а не береться з `native/dist`.** Причина —
-glibc: образ `native/` це Debian bookworm (2.36), а програма орієнтується на
-Ubuntu 22.04 (2.35), і зібране на новішій glibc на старішій не запускається.
-Взяли б готовий — архів виглядав би цілим, а на 22.04 рендер мовчки не
-стартував би, і чат лишався б порожнім.
-
-Тека `native/` поруч із виконуваним файлом — саме те місце, де його шукає
-`hominka/inject.py:native_dir()` у зібраній програмі.
-
-Чому AppImage, а не zip з одним файлом (як було): файл усе одно один, але
-AppImage несе значок і `.desktop`, тож у меню програм з'являється сам.
-Оновлення не змінилося — сервер віддає файл, оновлювач міняє теку цілком.
-
-### Перевірка
-
-Зібране перевіряється на ЧИСТІЙ системі, а не в тому ж образі: там є
-компілятор, Qt-devel і шрифти, тож забута залежність лишилася б непоміченою до
-першого користувача.
-
-```bash
+```sh
 docker build -t hominka-appcheck -f linux/Dockerfile.check .
 docker run --rm -v "$PWD/dist:/dist:ro" hominka-appcheck
 ```
 
-Перевірка чекає ПОЯВИ вікна, а не спить фіксовано: збірка одним файлом
-розпаковує себе при кожному запуску (понад 200 МБ), і в контейнері без кеша
-сторінок це довше, ніж на живій машині. Перша спроба з паузою в 12 секунд
-показала «не стартувала», хоча програма просто ще розпаковувалась; зараз вікна
-з'являються за ~15 секунд у контейнері.
+Runs the AppImage on a bare Ubuntu 22.04 under Xvfb and waits for the chat
+window. The build image has compilers and `-dev` packages that a user's system
+does not, so a forgotten runtime dependency would otherwise go unnoticed.
 
-Далі AppImage їде в той самий випуск, що й Windows-збірка:
+## Why there is no "invisible to OBS" on Linux
 
-```bat
-python release.py --version 1.9.0 --channel stable --kind minor ^
-  --notes "..." --linux-zip dist\Hominka-1.9.0-linux64.AppImage
-```
+On Windows the operating system itself hides the window from capture
+(`SetWindowDisplayAffinity` with `WDA_EXCLUDEFROMCAPTURE`). Neither X11 nor
+Wayland lets a window forbid being captured.
 
-## Чому під Linux немає «невидимості для OBS»
+It matters less there, because on Linux you normally capture the game, not the
+screen:
 
-У Windows вікно ховає від захоплення сама система (`SetWindowDisplayAffinity`
-з `WDA_EXCLUDEFROMCAPTURE`). Ні X11, ні Wayland такого не вміють: жодна
-програма не може заборонити себе знімати.
-
-Але на Linux це й не потрібно так гостро — там нормально знімати не екран, а
-гру:
-
-| Спосіб у OBS | Чи потрапить оверлей у кадр |
+| OBS source | Does the overlay end up in the stream? |
 | --- | --- |
-| Window Capture (Xcomposite), X11 | ні — знімається одне вікно гри |
-| Window Capture (PipeWire), Wayland | ні |
-| obs-vkcapture (гра через Vulkan/OpenGL) | ні |
-| Screen Capture / Display Capture | **так** — знімається весь екран разом з оверлеєм |
+| Window Capture (Xcomposite), X11 | no — only the game window is captured |
+| Window Capture (PipeWire), Wayland | no |
+| obs-vkcapture (Vulkan / OpenGL games) | no |
+| Screen Capture / Display Capture | **yes** — the whole screen, overlay included |
 
-Тобто правило просте: знімайте вікно гри, а не екран. Програма каже про це в
-консолі при старті на Linux.
+Capture the game window, not the screen.

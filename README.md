@@ -1,381 +1,110 @@
-# Hominka — чат поверх гри, невидимий для OBS
+<div align="center">
 
-<sub>назва — від укр. «гомін» (гомін голосів у чаті) · автор: Mykyta Vinnyk · версія 1.7.2</sub>
+<img src="assets/hominka.png" width="96" height="96" alt="Hominka">
 
-Прозорий оверлей, який показує сторінку твого чату (`/overlay/chat`) **поверх
-будь-якої гри**, але **Windows приховує це вікно від захоплення екрана** — тобто
-OBS (Display / Window / Game Capture) його **не бачить**. Глядачі бачать чат один
-раз (той, що ти накладаєш в OBS), а ти читаєш його окремо на своєму екрані.
+# Hominka
 
-> Один монітор — більше не проблема: бачиш чат і відповідаєш людям прямо в грі.
+**Your stream chat on top of the game — visible to you, invisible to OBS.**
 
-Навколо вікна є **рамка**, щоб було видно, де воно на екрані:
-- 🟣 **фіолетова** — звичайний режим (можна тягати/змінювати розмір);
-- 🟢 **зелена** — режим «клік-крізь» (миша проходить у гру).
+Twitch, Kick, YouTube and your own site in one feed, styled with your own CSS,
+drawn by a 6 MB native app that stays out of your stream.
 
-## Налаштування (кнопка ⚙ на панелі)
+[![Build](https://github.com/kiskaserver/hominka/actions/workflows/build.yml/badge.svg)](https://github.com/kiskaserver/hominka/actions/workflows/build.yml)
+[![Release](https://img.shields.io/github/v/release/kiskaserver/hominka?color=a855f7&label=release)](https://github.com/kiskaserver/hominka/releases/latest)
+[![License: GPL v3](https://img.shields.io/badge/license-GPL--3.0-a855f7)](LICENSE)
+![Windows 10/11](https://img.shields.io/badge/Windows-10%202004%2B%20%7C%2011-0e0f12)
+![Linux](https://img.shields.io/badge/Linux-AppImage-0e0f12)
 
-- **Мій канал / Twitch / Kick** — вписуються один раз; далі чат із усіх
-  заданих площадок збирається в одну стрічку з іконками джерел (див. розділ
-  нижче).
-- **Затримка чату** — 0–60 с, щоб встигати читати потік (див. нижче).
-- **Прозорість вікна** — повзунок.
-- **Тло під чатом (затемнення)** — повзунок: від повністю прозорого до темнішої
-  підкладки (щоб чат читався на світлих іграх).
-- **Розмір тексту** — A− / A+.
+[**Download**](https://hominka.app) · [Changelog](CHANGELOG.md) · [How it works](docs/architecture.md) · [Build from source](docs/building.md)
 
-Куточок **унизу праворуч** тепер помітний (три діагональні риски в кольорі
-рамки) — тягни за нього, щоб змінити розмір.
+English · [Українська](README.uk.md) · [Русский](README.ru.md)
 
-## Дати другові, що стрімить на YouTube
+<img src="docs/images/themes.png" width="720" alt="The same chat in the built-in theme and in a custom CSS theme">
 
-Скинь йому **всю теку `dist\Hominka\`** (запакуй у zip). Усередині він
-запускає **`Hominka.exe`** — Python не потрібен. Далі: **⚙ → «Мій канал» →
-свій `@нік`** — і все, трансляцію програма знайде сама. Налаштування
-збережуться в `config.json` поряд з .exe.
+</div>
 
-**Чат свого сайту** вписується там же: **⚙ → «Чат сайту»**. Готове посилання
-лежить в адмінці (**Віджети → Адреси для OBS → Чат**) — воно вже з ключем.
-У програмі його немає і бути не може: ключ (`?key=`) відкриває ОСОБИСТЕ вікно
-чату, де видно й те, що автомодерація прибрала від глядачів, — роздавати такий
-ключ разом з .exe означало б дати кожному читати чужий приватний чат. Мову
-(`lang`) і особистий режим (`raw=1`) програма дописує до посилання сама.
+## Why
 
-Для YouTube програма гарно показує не лише звичайні повідомлення, а й **Super
-Chat, нових/подарованих учасників (підписки), етапи членства та емодзі** —
-авторські кастомні й стандартні. Свій чат (stream.svitix.com) працює як і був,
-без змін стилів.
+On one monitor you cannot read chat while you play — and a chat you put on top
+of the game ends up in your stream. Hominka's window is excluded from screen
+capture by Windows itself, so OBS Display, Window and Game Capture record the
+game without it, even while it sits on top of everything.
 
-**Усі повідомлення, а не «цікаві».** YouTube відкриває чат у режимі «Цікавий
-чат» (Top chat) — він ховає схожі повідомлення, повідомлення нових акаунтів і
-все, що вважає спамом, тому чат виглядає майже мертвим, хоча люди пишуть.
-Програма сама перемикає його на **«Чат наживо»** і повертає режим назад, якщо
-YouTube його скине. Робити це вручну ніде: перемикач лежить у шапці чату, а її
-ми ховаємо, щоб не займала місце.
+## Features
 
-## Канали: свій YouTube, Twitch і Kick — в одну стрічку
+- **Hidden from capture.** `WDA_EXCLUDEFROMCAPTURE` — the OS leaves the window
+  out of every capture API. Not a window-ordering trick.
+- **One feed, four sources.** Twitch, Kick, YouTube and your own site's chat,
+  with platform icons, badges, replies, donations, Super Chats, raids and subs.
+- **Emotes that move.** 7TV, BetterTTV and FrankerFaceZ, animated — or frozen
+  on the first frame, or hidden, if you prefer.
+- **Your own CSS.** A real CSS engine lays out every message. The built-in
+  editor checks your theme as you type, lists every rule the engine will
+  ignore, ships ready-made recipes and documents every class.
+- **Out of the way.** Lock it (Ctrl+Alt+Space) and clicks go straight through to
+  the game. It never takes focus.
+- **Inside full-screen games.** For games that take the screen exclusively, the
+  optional in-game overlay draws the chat inside the game's own frame —
+  DirectX 9, 11, 12, OpenGL and Vulkan. It refuses outright to touch games with
+  kernel anti-cheat.
+- **Light.** One native executable, about 50 MB of RAM, and no GPU work at all
+  while chat is quiet. No browser, no runtime.
+- **Updates itself, safely.** Stable, beta and dev channels; every release is
+  signed with Ed25519 and verified before it is installed.
+- **Private.** No account, no telemetry, no server of ours in the middle.
 
-У ⚙ три поля. Заповнюєте раз, і далі програма все робить сама:
+<div align="center">
+<img src="docs/images/settings.png" width="49%" alt="Settings">
+<img src="docs/images/css-editor.png" width="49%" alt="CSS editor">
+</div>
 
-| Поле | Що вписати |
-| --- | --- |
-| **Мій канал** | `@нік`, посилання на канал або `UC…` |
-| **Twitch** | `twitch.tv/канал` або просто нік |
-| **Kick** | `kick.com/канал` або просто нік |
+## Install
 
-Якщо заповнено **тільки YouTube** — показуємо його рідну сторінку чату (там
-YouTube сам малює суперчати, стикери й членства найкраще).
+**Windows 10 (2004+) and 11.** Download the archive from
+[hominka.app](https://hominka.app) or [Releases](https://github.com/kiskaserver/hominka/releases/latest),
+unpack it anywhere and run `Hominka.exe`. There is no installer; settings live in
+`%LOCALAPPDATA%\Hominka`.
 
-Щойно додано **Twitch або Kick** — вмикається **спільна стрічка**: повідомлення
-з усіх площадок ідуть одним потоком, і біля кожного видно, звідки воно. Двома
-сторінками одразу такого не покажеш, тому стрічку малює сама програма.
+**Linux (x86_64, X11).** Download the AppImage, make it executable and run it.
+X11 and Wayland cannot hide a window from capture, so capture the game window
+rather than the whole screen (Window Capture, PipeWire or `obs-vkcapture`).
 
-Що доїжджає в стрічку:
+> SmartScreen or Chrome may warn about the download. Every release is a new,
+> unsigned file with no download history yet — see
+> [docs/false-positives.md](docs/false-positives.md) for what that means and
+> what we do about it.
 
-| | Twitch | Kick | YouTube |
-| --- | --- | --- | --- |
-| Значки (стрімер, мод, VIP, підписник, учасник, staff, OG) | ✓ | ✓ | ✓ |
-| Колір ніка з площадки | ✓ | ✓ | — (YouTube його не дає) |
-| Емоути картинками | ✓ | ✓ | кастомні емодзі каналу |
-| Кому відповідають | ✓ | ✓ | — (немає гілок) |
-| Гроші окремою плашкою | біти, Hype Chat | — | Super Chat, стикери |
-| Видалення й бани від модератора | ✓ | ✓ | ✓ |
-| Підписки, дарунки, рейди, оголошення | ✓ | ✓ | членства й дарунки |
+## Quick start
 
-Ключі й вхід не потрібні **ніде**: Twitch пускає читати чат анонімно, Kick
-роздає його через свій же сокет, YouTube читається через InnerTube — той самий
-внутрішній API, яким користується його сторінка. Ні квот, ні токенів.
+1. Click the gear on the chat window and enter your channels.
+2. Move and resize the window where you want to read chat.
+3. Press **Ctrl+Alt+Space** to lock it — the mouse now goes to the game.
 
-Поля для посилання в налаштуваннях немає навмисне: програма для того, щоб
-стрімер читав СВІЙ чат. Чужий за посиланням можна відкрити з командного рядка —
-`Hominka.exe <адреса>`.
+## Building
 
-### Затримка чату
+Everything builds in Docker, on any host:
 
-Коли пишуть із трьох площадок одразу, стрічка перетворюється на кашу: рядки
-з'являються пачками швидше, ніж встигаєш прочитати. У ⚙ є **«Затримка чату»**
-(0–60 с):
-
-- повідомлення чекає вказаний час — зручно, якщо треба збігтися із затримкою
-  самої трансляції;
-- а пачка, що прийшла разом, виходить **по одному рядку**, а не стіною — саме
-  це й робить чат читабельним;
-- якщо модератор видалив повідомлення, поки воно чекало, воно **не покажеться
-  зовсім**, а не з'явиться, щоб одразу зникнути.
-
-Стосується спільної стрічки. Коли показується рідна сторінка YouTube, її малює
-сам YouTube — там затримкою керувати нічим.
-
-## Оновлення
-
-Програма оновлюється сама з **update.svitix.com**. У ⚙ є **канал оновлень**:
-
-| Канал | Що там |
-| --- | --- |
-| **Стабільна** | перевірені випуски — за замовчуванням |
-| **Бета** | нове раніше за стабільну, зазвичай працює |
-| **Тестова** | збірки одразу після змін, можуть ламатися |
-
-Канал можна перемикати в обидва боки: повернення з бети на стабільну поставить
-стабільну збірку, навіть якщо її номер менший.
-
-Коли є що ставити, під панеллю вікна з'являється смужка «Є оновлення …» з
-кнопкою. Модального вікна немає навмисне: програма висить поверх гри. У смужці
-лише версія і вид оновлення — **повний опис змін** видно в ⚙ («Оновлення») і в
-підказці при наведенні на смужку.
-
-Ставиться **у два кроки**: «Оновити» завантажує (з перевіркою sha256 **до**
-розпакування), потім кнопка стає **«Встановити»** — і лише після натискання
-програма закривається, підміняє себе й запускається знову. Саму теку підміняє
-окремий процес: Windows не дає перезаписати .exe, поки він запущений.
-`config.json` і теку `profile/` (кеш браузера) оновлення не чіпає.
-
-Завантажені архіви (це ~220 МБ) не залишаються в тимчасовій теці: поточний
-прибирається після встановлення, а хвости від минулих разів — під час запуску
-й при виході, якщо оновлення завантажили, але так і не поставили.
-
-Вимкнути автоперевірку: ⚙ → зняти «Перевіряти автоматично» (перевірка вручну
-кнопкою лишається).
-
-### Випустити нову версію (для себе)
-
-```bat
-python release.py --version 1.1.1 --channel stable --kind patch ^
-  --notes "Що змінилось"
+```sh
+docker build -t hominka-native native                               # Windows binaries
+docker build -t hominka-linux -f linux/Dockerfile . \
+  && docker run --rm -v "$PWD:/src" hominka-linux                   # Linux AppImage
 ```
 
-`--kind` — `major` / `minor` / `patch` / `hotfix` (показується користувачу),
-`--mandatory` — для термінових виправлень, `--no-build` — узяти вже зібране,
-`--reuse` — перевести вже випущений архів в інший канал (нічого не збираючи).
+Details, test hosts and command-line checks are in [docs/building.md](docs/building.md).
 
-Скрипт проставляє версію в код і у властивості .exe, збирає, пакує, рахує
-sha256 і кладе архів та маніфест каналу на сервер:
+## Documentation
 
-    /opt/stream/updates/hominka/{stable,beta,dev}.json
-    /opt/stream/updates/hominka/files/Hominka-<версія>-win64.zip
-    /opt/stream/updates/hominka/files/Hominka-<версія>-linux64.zip
+| | |
+|---|---|
+| [docs/architecture.md](docs/architecture.md) | How chat becomes pixels, the capture-excluded window, the in-game overlay |
+| [docs/building.md](docs/building.md) | Building both platforms, testing the in-game overlay |
+| [docs/releasing.md](docs/releasing.md) | Release channels, signing, publishing |
+| [CONTRIBUTING.md](CONTRIBUTING.md) | How to propose a change |
+| [SECURITY.md](SECURITY.md) | Reporting a vulnerability, how updates are protected |
 
-Звичайний порядок: спершу `--channel dev`, далі той самий архів у `beta`
-(`--reuse`), і врешті в `stable`.
+## License
 
-Linux-збірка робиться тим самим запуском (контейнер, див. `linux/`), тому
-версії для двох систем не можуть розійтися. `--no-linux` є, але користуватися
-ним не варто: людина на Linux просто лишиться на старій версії й не дізнається,
-що вийшла нова.
+[GNU General Public License v3.0](LICENSE). Third-party components and their
+licenses are listed in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
 
-### Підпис випусків
-
-Кожен маніфест підписується Ed25519 (`signing.py`), і програма з 2.0.0 не
-поставить оновлення без правильного підпису. Приватний ключ лежить у
-`.keys/hominka_release.key` (у git його немає й бути не може), публічний —
-у `updater.RELEASE_KEYS`.
-
-Раніше цілісність трималася на HTTPS до update.svitix.com і sha256 з того ж
-маніфесту — тобто на одному джерелі: хто дістався до домену, той підмінив би і
-файл, і його контрольну суму. Тепер підмінити треба ще й ключ, якого на сервері
-немає.
-
-**Ключ треба берегти.** Загубили — доведеться випустити версію з двома ключами
-(список у `RELEASE_KEYS` саме для цього), а ті, хто не оновиться до неї, не
-отримають оновлень взагалі.
-
-## Варіант 1 — готовий .exe (найпростіше)
-
-1. Запусти **`build.bat`** (двічі клікни) — один раз збере `Hominka.exe`
-   (кілька хвилин).
-2. Далі запускай **`dist\Hominka.exe`** (можна зробити ярлик на робочий стіл).
-   Python для цього більше не потрібен.
-
-Збірка — **один файл**: усе, що раніше лежало поруч у теці `_internal`, тепер
-усередині .exe. Плата за це чесна: bootloader щоразу розпаковує ~300 МБ у
-тимчасову теку, тож вікно з'являється приблизно за 8 с проти 1-2 с у збірці
-текою. Щоб цей час не виглядав як «клікнув і нічого», показується заставка
-(`splash.png`, малює `make_splash.py`) з рядком прогресу: спершу в нього пише
-сам bootloader — що саме зараз розпаковує, — потім програма («Запускаю…»,
-«Відкриваю чат…»), і зникає вона рівно тоді, коли з'являється вікно чату.
-Збірку описує `Hominka_one.spec`.
-
-## Збірка під Linux
-
-Окремим контейнером — див. [`linux/README.md`](linux/README.md):
-
-```bash
-docker build -t hominka-linux -f linux/Dockerfile .
-docker run --rm -v "$PWD:/src" hominka-linux
-```
-
-## Варіант 2 — просто запустити (без збірки)
-
-Двічі клікни **`run.bat`** — він сам поставить залежності (одноразово) і
-запустить оверлей без вікна консолі.
-
-Вручну:
-
-```bat
-py -m venv .venv
-.venv\Scripts\activate
-pip install -r requirements.txt
-python chat_overlay.py
-```
-
-Чужий чат (для налагодження) можна передати аргументом — він сильніший за
-все, що в налаштуваннях:
-
-```bat
-python chat_overlay.py https://stream.example.com/overlay/chat?key=...
-```
-
-Свій чат задається в ⚙ («Чат сайту») і зберігається в `config.json`. Поки він
-порожній і жодного каналу не названо, вікно так і каже: джерела немає.
-
-## Як розкладено код
-
-```
-chat_overlay.py          точка входу і більше нічого
-hominka/
-  app.py                 запуск: QApplication, головне вікно
-  overlay.py             вікно чату: рамка, геометрія, показ сторінки
-  sources.py             звідки береться чат (площадки, стрічка, ефір)
-  updating.py            перевірка, завантаження і встановлення оновлення
-  config.py              config.json: що зберігаємо і як читаємо
-  look.py                прозорість, кегль, клік-крізь
-  winapi.py              невидимість для OBS, гаряча клавіша
-  urls.py                розбір посилань і адрес каналів
-  probe.py               пошук власного ефіру на YouTube
-  styles.py              оформлення вікна і панелі
-  notes.py, splash.py, paths.py, webprofile.py, version.py
-  ui/
-    panel/               панель ⚙: каркас, картки, дрібні віджети
-    banner.py            смужка «є оновлення»
-    chrome.py            смужка перетягування і куточок розміру
-  feed/                  спільна стрічка: page.py (верстка) + feed.py (черга)
-  yt/                    JS, який вставляємо в чат YouTube (по файлу на вставку)
-  youtube/               читач YouTube: net, session, parse, reader
-  chat_twitch.py, chat_kick.py, chatsources.py
-  cssui/                 вікно «свій CSS»: editor, codeedit, validator, catalog
-  update/                оновлення: channels, manifest, download, install
-  signing.py             перевірка підпису випуску (Ed25519)
-```
-
-Раніше все, крім читачів, лежало в одному файлі на 2400 рядків: щоб знайти,
-звідки береться чат, доводилося гортати повз чотириста рядків CSS і чужий
-JavaScript для YouTube. Тепер найбільший файл — саме вікно чату (≈380 рядків),
-решта менша за 300. Правило просте: файл описує ОДНУ тему, і якщо в ньому
-з'явилася друга — час різати.
-
-## Коли гра на весь екран
-
-Найчастіше питання: «чому чата не видно?». Відповідь залежить від того, як гра
-показує себе на весь екран.
-
-| Режим гри | Чат поверх неї |
-| --- | --- |
-| Вікно | видно |
-| Вікно без рамки (borderless) | видно |
-| «Повний екран» у сучасній грі | видно — Windows від 2017 року підміняє його
-режимом Fullscreen Optimizations, і гра лишається композованою |
-| Справжній виключний повний екран (старі ігри на DX9/DDraw; або вимкнені
-оптимізації у властивостях .exe) | **не видно нікому**, крім самої гри |
-
-У виключному режимі гра забирає вивід відеокарти собі, і композитор Windows
-(DWM) відходить убік — малювати поверх нема кому. Прапорець «поверх усіх вікон»
-тут ні до чого: він про менеджер вікон, якого в цю мить немає.
-
-Тому в ⚙ є розділ **«Поверх гри»**:
-
-* показує, що зараз попереду і чи буде видно чат — простими словами;
-* **«Зробити гру безрамковою»** знімає з вікна гри рамку і розтягує його на
-  монітор (те саме робить Borderless Gaming). Гра виглядає так само, але малює
-  її вже система — і чат зʼявляється. Поруч «Повернути» повертає вікну те, що в
-  нього було: стиль і розмір ми запамʼятовуємо перед зміною;
-* **«Тримати поверх усіх вікон»** — вікно піднімається нагору, коли попереду
-  зʼявляється нове. Саме коли зʼявляється, а не щосекунди: постійне смикання
-  SetWindowPos і є причиною мерехтіння, на яке скаржаться в старих іграх. Якщо
-  все одно мерехтить — вимкніть галочку.
-
-У саму гру ми нічого не встановлюємо. Справжній оверлей усередині кадру вимагає
-підвантажити свою DLL у процес гри й перехопити Present — так роблять OBS,
-Discord і Steam; це окрема тема з окремими наслідками (античити, антивіруси), і
-в програмі її немає.
-
-**Linux.** X11: вікну ставиться `_NET_WM_BYPASS_COMPOSITOR = 2` — прохання до
-композитора не вимикатися під повноекранною грою, — і `_NET_WM_STATE_ABOVE`.
-Wayland: підняти вікно поверх повноекранного неможливо в принципі (це вміє лише
-шар `overlay` протоколу wlr-layer-shell, якого в PySide6 немає) — грайте у вікні
-або запускайте гру через gamescope.
-
-## Свій CSS для чату
-
-**⚙ → Вигляд → «Свій CSS для чату…»** відкриває окреме вікно: ліворуч редактор
-з нумерацією рядків, праворуч — живий приклад чату (усі площадки, значки,
-емоут, донат, системне повідомлення), поруч вкладки «Типовий CSS» (звідки
-копіювати правило, щоб перебити) і «Класи» — усе, що можна стилізувати, з
-поясненнями. Синтаксис перевіряється на ходу: незакрита дужка, оголошення без
-двокрапки чи порожнє значення показуються з номером рядка, клік по помилці
-веде до неї.
-
-Правила пишуться ПОВЕРХ типових, тож досить описати те, що змінюєте.
-«Скинути до типових» просто прибирає ваш CSS.
-
-Окрема вкладка **«Приклади»** — готові шматки на найчастіші бажання: крупніший
-текст, компактні рядки, підкладка під рядком, смуга кольору площадки, свій
-колір ніків, помітніші донати, тихіші системні, без анімації. Наведення показує
-код, подвійний клік вставляє і одразу показує в перегляді.
-
-Окремо є те, чого немає в чужих оверлеях: площадка кожного повідомлення
-доступна селектором.
-
-```css
-.m[data-platform="twitch"] { border-left: 3px solid #9146ff; padding-left: 6px; }
-.m[data-platform="kick"]   { border-left: 3px solid #53fc18; padding-left: 6px; }
-.m[data-kind="money"]      { background: rgba(251,191,36,.28); }
-.n                         { font-weight: 800; }
-```
-
-Вікно так само сховане від захоплення екрана — редактор можна відкрити прямо
-під час ефіру.
-
-## Керування
-
-| Дія | Як |
-| --- | --- |
-| Перетягнути | тягни за **верхню панель** |
-| Змінити розмір | тягни за **куточок унизу праворуч** (або край) |
-| Прозорість | **повзунок** на панелі (показує %) |
-| Клік-крізь (миша йде в гру) | кнопка **🔓/🔒** або **Ctrl+Alt+Space** |
-| Закрити | **✕** |
-
-Розмір, позиція і прозорість запам'ятовуються (`config.json`).
-
-**Клік-крізь (🔒):** вікно перестає ловити мишу — кліки йдуть у гру, рамка стає
-зеленою. Щоб вимкнути назад (коли миша вже проходить крізь і кнопку не натиснути)
-— тисни **Ctrl+Alt+Space**.
-
-## Що лежить поруч із програмою
-
-Сама програма — **один файл** `Hominka.exe`. Поруч вона створює:
-
-- `config.json` — ваші налаштування (можна відкривати й правити);
-- `profile/` — кеш браузера (прихована; у Linux просто лежить поруч).
-
-Теки `_internal` більше немає: колись PyInstaller клав туди ~340 МБ потрухів
-збірки, і їх доводилося ховати атрибутом «прихований». Тепер вони всередині
-.exe. Якщо ви оновилися зі старої версії, підмінник видалить `_internal` сам.
-
-## Вимоги
-
-- **Windows 10 версії 2004 (build 19041)+ / Windows 11** — саме там працює
-  приховування від захоплення (`WDA_EXCLUDEFROMCAPTURE`). На старіших Windows
-  вікно працюватиме, але OBS зможе його бачити (у консолі буде попередження).
-- **Linux (Ubuntu 22.04 і новіше)** — працює все, крім приховування від
-  захоплення: такого вміння немає ні в X11, ні у Wayland. Знімайте не екран, а
-  гру — Window Capture (Xcomposite / PipeWire) або obs-vkcapture, — і оверлей у
-  кадр не потрапить. Ctrl+Alt+Space там теж немає (системні гарячі клавіші —
-  справа менеджера вікон), клік-крізь вмикається кнопкою 🔓.
-- Для збірки/запуску з коду — Python 3.9+ (для готового .exe Python не потрібен).
-
-## Перевірка, що OBS не бачить оверлей
-
-1. Запусти оверлей поверх гри.
-2. В OBS додай **Display Capture** або **Game Capture**.
-3. Оверлей у прев'ю OBS **не з'явиться**, а на твоєму екрані буде видимий. ✔
+The name comes from Ukrainian *гомін* — the hum of many voices.

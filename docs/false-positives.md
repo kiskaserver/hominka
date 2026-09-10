@@ -17,7 +17,7 @@ SmartScreen і Chrome не «впізнають вірус», вони кажу�
   сам факт UPX — це майже гарантоване спрацювання;
 * **звичайна збірка** — `-O2`, статичне лінкування рантайму mingw, без
   саморозпакування й без коду, що пишеться в себе;
-* **відкритий код** — github.com/kiskaserver/FuckThisStream;
+* **відкритий код** — github.com/kiskaserver/hominka;
 * **підписані оновлення** — маніфест випуску підписаний Ed25519, програма не
   ставить непідписане (це наш власний підпис, не Authenticode).
 
@@ -58,7 +58,7 @@ Hominka is an open-source chat overlay for live streamers. It shows Twitch,
 Kick and YouTube chat in a transparent always-on-top window, so the streamer
 can read chat while playing full-screen games.
 
-Source code: https://github.com/kiskaserver/FuckThisStream
+Source code: https://github.com/kiskaserver/hominka
 Download:    https://update.svitix.com/hominka/files/Hominka-X.Y.Z-win64.zip
 SHA-256:     <hash>
 
@@ -121,7 +121,7 @@ https://update.svitix.com/hominka/files/Hominka-X.Y.Z-win64.zip
 
 ```
 This file is a release of Hominka, an open-source chat overlay for live
-streamers (https://github.com/kiskaserver/FuckThisStream). It is served from
+streamers (https://github.com/kiskaserver/hominka). It is served from
 our own update server and is not bundled with anything.
 
 The warning appears because each release is a newly built, unsigned Windows
@@ -154,7 +154,7 @@ Google Search Console → властивість `svitix.com` → **Security Iss
 
 ## Рутина після кожного випуску
 
-1. Порахувати sha256 архіву — його друкує сам `release.py`.
+1. Порахувати sha256 архіву — його друкує сам `tools/release.py`.
 2. Надіслати форму Microsoft (пункт 1) із доданим архівом.
 3. Якщо Chrome лається — форма Google (пункт 2).
 4. Відповідь Microsoft приходить зазвичай за добу; після неї Defender
