@@ -1,0 +1,85 @@
+name: Build
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  windows:
+    name: Windows (mingw-w64)
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      # Third-party libraries are compiled in their own image layers; the GitHub
+      # Actions cache keeps them, so only Hominka itself is rebuilt on a change.
+      - name: Build
+        uses: docker/build-push-action@v6
+        with:
+          context: native
+          tags: hominka-native:ci
+          load: true
+          cache-from: type=gha,scope=native
+          cache-to: type=gha,scope=native,mode=max
+
+      - name: Collect binaries
+        run: |
+          id=$(docker create hominka-native:ci)
+          docker cp "$id:/out/." out
+          docker rm "$id"
+          ls -l out
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: hominka-windows
+          path: out/
+          if-no-files-found: error
+
+  linux:
+    name: Linux (AppImage)
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Build image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: linux/Dockerfile
+          tags: hominka-linux:ci
+          load: true
+          cache-from: type=gha,scope=linux
+          cache-to: type=gha,scope=linux,mode=max
+
+      - name: Build AppImage
+        run: docker run --rm -v "$PWD:/src" hominka-linux:ci
+
+      # Start it on a clean Ubuntu 22.04 under Xvfb and wait for the window: the
+      # build image has compilers and dev packages that a user's system does not,
+      # so a forgotten dependency would otherwise go unnoticed.
+      - name: Smoke test on a clean system
+        run: |
+          docker build -t hominka-appcheck -f linux/Dockerfile.check .
+          docker run --rm -v "$PWD/dist:/dist:ro" hominka-appcheck
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: hominka-linux
+          path: dist/*.AppImage
+          if-no-files-found: error

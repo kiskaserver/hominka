@@ -1,0 +1,71 @@
+name: Bug report
+description: Something does not work as it should.
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time. A bug that can be reproduced gets fixed fast —
+        the more precise the steps, the better. Українською чи російською теж можна.
+  - type: input
+    id: version
+    attributes:
+      label: Hominka version
+      description: Gear → «Про програму», e.g. 3.1.4
+      placeholder: 3.1.4
+    validations:
+      required: true
+  - type: dropdown
+    id: os
+    attributes:
+      label: System
+      options:
+        - Windows 11
+        - Windows 10
+        - Linux
+    validations:
+      required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: Where
+      options:
+        - Chat window (on top of the game)
+        - In-game overlay (chat inside the game)
+        - Chat sources (Twitch / Kick / YouTube / site)
+        - Custom CSS / themes
+        - Settings
+        - Updates
+        - Other
+    validations:
+      required: true
+  - type: input
+    id: game
+    attributes:
+      label: Game and display mode
+      description: Only if the problem is about a game. Include the graphics API if you know it.
+      placeholder: The Forest, exclusive full-screen, DirectX 11
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. …
+        2. …
+        3. …
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected, and what happened instead
+    validations:
+      required: true
+  - type: textarea
+    id: log
+    attributes:
+      label: Log
+      description: |
+        Windows: %TEMP%\hominka-overlay.log (last 50 lines are usually enough).
+        Please check it for anything private before pasting.
+      render: text
