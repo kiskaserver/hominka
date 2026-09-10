@@ -4,13 +4,13 @@
 Що робить: збирає програму (Windows і Linux), пакує, рахує sha256 і розмір,
 оновлює маніфест каналу разом з історією і кладе все на сервер.
 
-    python release.py --version 1.1.0 --channel stable --kind minor \
+    python tools/release.py --version 1.1.0 --channel stable --kind minor \
         --notes "Панель реакцій, автооновлення"
 
-    python release.py --version 1.1.1 --channel stable --kind hotfix \
+    python tools/release.py --version 1.1.1 --channel stable --kind hotfix \
         --notes "Виправлено вилітання на старті" --mandatory
 
-    python release.py --version 1.2.0-dev --channel dev --kind minor \
+    python tools/release.py --version 1.2.0-dev --channel dev --kind minor \
         --notes "Пробне" --no-build      (використати вже зібране в dist/)
 
 Канали — це просто три маніфести поруч. Один і той самий архів можна виставити
@@ -40,7 +40,8 @@ from datetime import date
 
 import signing
 
-HERE = os.path.dirname(os.path.abspath(__file__))
+# Скрипт лежить у tools/, а все шляхи нижче — від кореня репозиторію.
+HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DIST = os.path.join(HERE, "dist")
 EXE = os.path.join(DIST, "Hominka.exe")
 

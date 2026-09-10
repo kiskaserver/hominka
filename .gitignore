@@ -1,16 +1,26 @@
-.venv/
-config.json
-__pycache__/
-*.pyc
-build/
+# Build output
 dist/
+dist-render/
+native/dist/
+build/
 build-linux/
 dist-linux/
-# Нативний рендер, зібраний контейнером linux/ по дорозі до AppImage.
-dist-render/
-# Специи PyInstaller генерирует сам при сборке по флагам — эти не нужны.
-# Hominka_one.spec, наоборот, и ЕСТЬ описание сборки (один файл, заставка,
-# отброшенные локали Chromium), и без него release.py собрать нечего.
-Hominka.spec
-profile/
+
+# Local state
+config.json
+*.log
+
+# Release signing key and deployment address. Never committed.
 .keys/
+
+# Python helpers (tools/)
+__pycache__/
+*.pyc
+.venv/
+
+# Editors / OS
+.vscode/
+.idea/
+*.swp
+.DS_Store
+Thumbs.db

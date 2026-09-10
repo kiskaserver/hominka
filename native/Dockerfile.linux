@@ -8,7 +8,7 @@
 # Береться готовий hominka-native: сторонні бібліотеки в ньому вже зібрані,
 # тож новий шар — це рівно наші файли.
 #
-# Збирати ТРЕБА з кореня chat-overlay:
+# Збирати ТРЕБА з кореня репозиторію:
 #     docker build -f native/Dockerfile.linux -t hominka-lin .
 FROM hominka-native
 

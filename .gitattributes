@@ -1,0 +1,17 @@
+# Normalise line endings in the repository; check out native to the platform.
+* text=auto
+
+# Files that Linux executes or reads must stay LF even on Windows. With
+# core.autocrlf=true git would check them out with CRLF, docker would copy them
+# into the image as-is, and dash would choke on the invisible \r ("set -e\r":
+# "Illegal option -"). Patches likewise: a context line with \r never matches.
+*.sh      text eol=lf
+*.patch   text eol=lf
+Dockerfile*  text eol=lf
+
+# Windows-only build inputs keep CRLF.
+*.bat     text eol=crlf
+*.rc      text eol=crlf
+
+*.ico  binary
+*.png  binary

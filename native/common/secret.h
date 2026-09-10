@@ -14,9 +14,9 @@
 // планка, яка відсікає звичайне зловживання.
 #pragma once
 
-// Мусить збігатися з рядком, який повертає HominkaOverlayMarker() в overlay.dll,
-// і з міткою в hominka/inject.py.
+// Мусить збігатися з рядком, який повертає HominkaOverlayMarker() в overlay.dll
+// (overlay/dllmain.cpp): інжектор перевіряє його, перш ніж вкладати бібліотеку.
 #define HOMINKA_OVERLAY_MARKER "HOMINKA-OVERLAY-D7A1F3E9-b2c4-4a6e-9f10-chat-in-game"
 
-// Токен, без якого інжектор не працює. Дзеркало в hominka/inject.py.
+// Токен, без якого інжектор не працює. Дзеркало в render/src/platform/gamewin.cpp.
 #define HOMINKA_INJECT_TOKEN "HMK-INJ-7F3A9C21-64bd-4e0a-choose-your-game"

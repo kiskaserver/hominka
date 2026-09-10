@@ -61,11 +61,11 @@ cp "$APPDIR/hominka.desktop" "$APPDIR/usr/share/applications/hominka.desktop" \
     2>/dev/null || { mkdir -p "$APPDIR/usr/share/applications"; \
     cp "$APPDIR/hominka.desktop" "$APPDIR/usr/share/applications/"; }
 
-# Значок: той самий hominka.png, що йде і в Windows-збірку (Hominka_one.spec).
+# Значок: той самий, що й у заголовку програми (assets/hominka.png).
 # AppImage хоче PNG у корені AppDir і однойменний із Icon= у .desktop.
-cp hominka.png "$APPDIR/hominka.png"
+cp assets/hominka.png "$APPDIR/hominka.png"
 mkdir -p "$APPDIR/usr/share/icons/hicolor/256x256/apps"
-cp hominka.png "$APPDIR/usr/share/icons/hicolor/256x256/apps/hominka.png"
+cp assets/hominka.png "$APPDIR/usr/share/icons/hicolor/256x256/apps/hominka.png"
 
 mkdir -p dist
 OUT="dist/Hominka-${VERSION}-linux64.AppImage"
