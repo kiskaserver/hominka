@@ -42,7 +42,7 @@ jobs:
           docker rm "$id"
           ls -l out
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: hominka-windows
           path: out/
@@ -78,7 +78,7 @@ jobs:
           docker build -t hominka-appcheck -f linux/Dockerfile.check .
           docker run --rm -v "$PWD/dist:/dist:ro" hominka-appcheck
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: hominka-linux
           path: dist/*.AppImage
