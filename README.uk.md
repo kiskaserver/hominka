@@ -6,8 +6,8 @@
 
 **Чат твого стріму поверх гри — видно тобі, не видно OBS.**
 
-Twitch, Kick, YouTube і чат твого сайту в одній стрічці, у твоєму власному CSS,
-у нативній програмі на 6 МБ, яка не потрапляє в ефір.
+Twitch, Kick і YouTube в одній стрічці, у твоєму власному CSS, у нативній
+програмі на 6 МБ, яка не потрапляє в ефір.
 
 [![Build](https://github.com/kiskaserver/hominka/actions/workflows/build.yml/badge.svg)](https://github.com/kiskaserver/hominka/actions/workflows/build.yml)
 [![Release](https://img.shields.io/github/v/release/kiskaserver/hominka?color=a855f7&label=release)](https://github.com/kiskaserver/hominka/releases/latest)
@@ -33,8 +33,8 @@ Twitch, Kick, YouTube і чат твого сайту в одній стрічц
 
 - **Невидима для захоплення.** Це не фокус із порядком вікон: система сама
   не віддає вікно жодному способу запису екрана.
-- **Одна стрічка — чотири джерела.** Twitch, Kick, YouTube і чат твого сайту:
-  значки площадок і глядачів, відповіді, донати, Super Chat, рейди, підписки.
+- **Одна стрічка.** Twitch, Kick і YouTube разом: значки площадок і глядачів,
+  відповіді, донати, Super Chat, рейди, підписки.
 - **Живі емоути.** 7TV, BetterTTV і FrankerFaceZ — анімовані, або застиглі на
   першому кадрі, або приховані, як тобі зручніше.
 - **Свій CSS.** Кожне повідомлення розкладає справжній CSS-рушій. Вбудований

@@ -6,8 +6,8 @@
 
 **Your stream chat on top of the game — visible to you, invisible to OBS.**
 
-Twitch, Kick, YouTube and your own site in one feed, styled with your own CSS,
-drawn by a 6 MB native app that stays out of your stream.
+Twitch, Kick and YouTube in one feed, styled with your own CSS, drawn by a
+6 MB native app that stays out of your stream.
 
 [![Build](https://github.com/kiskaserver/hominka/actions/workflows/build.yml/badge.svg)](https://github.com/kiskaserver/hominka/actions/workflows/build.yml)
 [![Release](https://img.shields.io/github/v/release/kiskaserver/hominka?color=a855f7&label=release)](https://github.com/kiskaserver/hominka/releases/latest)
@@ -34,8 +34,8 @@ game without it, even while it sits on top of everything.
 
 - **Hidden from capture.** `WDA_EXCLUDEFROMCAPTURE` — the OS leaves the window
   out of every capture API. Not a window-ordering trick.
-- **One feed, four sources.** Twitch, Kick, YouTube and your own site's chat,
-  with platform icons, badges, replies, donations, Super Chats, raids and subs.
+- **One feed.** Twitch, Kick and YouTube at once, with platform icons, badges,
+  replies, donations, Super Chats, raids and subs.
 - **Emotes that move.** 7TV, BetterTTV and FrankerFaceZ, animated — or frozen
   on the first frame, or hidden, if you prefer.
 - **Your own CSS.** A real CSS engine lays out every message. The built-in
