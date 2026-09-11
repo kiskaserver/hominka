@@ -16,6 +16,7 @@
 
 #include <atomic>
 #include <condition_variable>
+#include <deque>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -56,6 +57,10 @@ private:
     std::string chatroom_id_;
     std::string error_;
     std::atomic<bool> connected_{false};
+
+    // Останні побачені id повідомлень — захист від двійників. Живуть лише в
+    // потоці сокета, тому без замка.
+    std::deque<std::string> recent_;
 
     // Власний стукіт у Pusher. Чекаємо на змінній, а не спимо шматками: тоді
     // stop() завершується миттєво, а не за хвилину з гаком.

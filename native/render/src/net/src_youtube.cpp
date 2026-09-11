@@ -299,7 +299,67 @@ bool parse_item(const json& item, const std::string& channel_id, ChatEvent* ev) 
         ev->msg.text = trimmed(text);
         return !ev->msg.text.empty();
     }
+
+    // Збір коштів: YouTube оголошує донат окремим рядком, не суперчатом.
+    const json& donate = jget(item, {"liveChatDonationAnnouncementRenderer"});
+    if (donate.is_object()) {
+        std::string text, sub;
+        std::vector<Emote> ignore;
+        runs_to_text(jget(donate, {"text", "runs"}), &text, &ignore);
+        runs_to_text(jget(donate, {"subtext", "runs"}), &sub, &ignore);
+        ev->msg.event = "donate";
+        ev->msg.text = trimmed(trimmed(text) + (sub.empty() ? "" : " — " + trimmed(sub)));
+        return !ev->msg.text.empty();
+    }
+
+    // Службові підказки самого YouTube («чат у режимі повтору», «будьте
+    // ввічливі»). Показуємо їх окремим приводом, щоб легко було сховати.
+    const json& note = jget(item, {"liveChatViewerEngagementMessageRenderer"});
+    if (note.is_object()) {
+        std::string text;
+        std::vector<Emote> ignore;
+        runs_to_text(jget(note, {"message", "runs"}), &text, &ignore);
+        ev->msg.event = "info";
+        ev->msg.text = trimmed(text);
+        return !ev->msg.text.empty();
+    }
+
+    // Порожнє місце під повідомлення, яке ще їде, — не подія.
+    if (jget(item, {"liveChatPlaceholderItemRenderer"}).is_object()) return false;
+
+    // YouTube міняє внутрішні назви без попередження. Замість мовчазної
+    // прогалини — рядок у журналі з іменем того, чого ми не знаємо.
+    if (getenv("HOMINKA_YT_DEBUG") && item.is_object() && !item.empty())
+        fprintf(stderr, "[yt] незнайомий елемент: %s\n", item.begin().key().c_str());
     return false;
+}
+
+// Закріплене згори (банер): або повідомлення, або оголошення про рейд.
+bool parse_banner(const json& banner, const std::string& channel_id, ChatEvent* ev) {
+    const json& contents = jget(banner, {"contents"});
+    ev->msg.platform = "youtube";
+    ev->msg.kind = "system";
+
+    const json& redirect = jget(contents, {"liveChatBannerRedirectRenderer"});
+    if (redirect.is_object()) {
+        std::string text;
+        std::vector<Emote> ignore;
+        runs_to_text(jget(redirect, {"bannerMessage", "runs"}), &text, &ignore);
+        ev->msg.event = "raid";
+        ev->msg.text = trimmed(text);
+        return !ev->msg.text.empty();
+    }
+
+    // Звичайне закріплене повідомлення. Показуємо окремим системним рядком, а
+    // не тим самим id: сам рядок у стрічці вже є, і підмінити його означало б
+    // або втратити оригінал, або показати двійника.
+    ChatEvent inner;
+    if (!parse_item(contents, channel_id, &inner)) return false;
+    const std::string who = inner.msg.name;
+    ev->msg.event = "pin";
+    ev->msg.text = trimmed("Закріплено" + (who.empty() ? "" : " (" + who + ")") + ": " +
+                           inner.msg.text);
+    return !ev->msg.text.empty();
 }
 
 void parse_actions(const json& actions, const std::string& channel_id,
@@ -314,6 +374,39 @@ void parse_actions(const json& actions, const std::string& channel_id,
             if (parse_item(item, channel_id, &ev)) out->push_back(ev);
             continue;
         }
+        // Заміна рядка: старий прибираємо, новий показуємо як звичайний.
+        const json& repl = jget(a, {"replaceChatItemAction"});
+        if (repl.is_object()) {
+            const std::string target = jstr(repl, {"targetItemId"});
+            if (!target.empty()) {
+                ChatEvent gone;
+                gone.type = ChatEvent::Type::Delete;
+                gone.id = target;
+                out->push_back(gone);
+            }
+            ChatEvent ev;
+            if (parse_item(jget(repl, {"replacementItem"}), channel_id, &ev))
+                out->push_back(ev);
+            continue;
+        }
+
+        const json& banner = jget(a, {"addBannerToLiveChatCommand", "bannerRenderer",
+                                      "liveChatBannerRenderer"});
+        if (banner.is_object()) {
+            ChatEvent ev;
+            if (parse_banner(banner, channel_id, &ev)) out->push_back(ev);
+            continue;
+        }
+        if (jget(a, {"removeBannerForLiveChatCommand"}).is_object()) {
+            ChatEvent ev;
+            ev.msg.platform = "youtube";
+            ev.msg.kind = "system";
+            ev.msg.event = "unpin";
+            ev.msg.text = "Закріплення знято";
+            out->push_back(ev);
+            continue;
+        }
+
         const std::string mid = jstr(a, {"markChatItemAsDeletedAction", "targetItemId"});
         if (!mid.empty()) {
             ChatEvent ev;

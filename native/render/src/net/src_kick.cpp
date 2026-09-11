@@ -1,6 +1,8 @@
 #include "net/src_kick.h"
 
 #include <chrono>
+#include <cstdio>
+#include <cstdlib>
 #include <map>
 #include <thread>
 
@@ -31,6 +33,17 @@ const char* kEvtBanned  = "App\\Events\\UserBannedEvent";
 const char* kEvtPinned  = "App\\Events\\PinnedMessageCreatedEvent";
 const char* kEvtReward  = "App\\Events\\RewardRedeemedEvent";
 const char* kEvtHost    = "App\\Events\\StreamHostEvent";
+const char* kEvtUnbanned = "App\\Events\\UserUnbannedEvent";
+const char* kEvtClear    = "App\\Events\\ChatroomClearEvent";
+const char* kEvtUnpinned = "App\\Events\\PinnedMessageDeletedEvent";
+const char* kEvtLucky    = "App\\Events\\LuckyUsersWhoGotGiftSubscriptionsEvent";
+const char* kEvtMove     = "App\\Events\\ChatMoveToSupportedChannelEvent";
+const char* kEvtRoom     = "App\\Events\\ChatroomUpdatedEvent";
+const char* kEvtPoll     = "App\\Events\\PollUpdateEvent";
+const char* kEvtPollEnd  = "App\\Events\\PollDeleteEvent";
+const char* kEvtLive     = "App\\Events\\StreamerIsLive";
+const char* kEvtOffline  = "App\\Events\\StopStreamBroadcast";
+const char* kEvtKicks    = "App\\Events\\KicksGifted";
 
 std::string str_of(const json& j, const char* key) {
     auto it = j.find(key);
@@ -115,6 +128,35 @@ std::string nick_of(const json& sender) {
     return slug;
 }
 
+// Прапорець, який Kick іноді шле числом, а іноді булевим.
+bool bool_of(const json& j, const char* key) {
+    auto it = j.find(key);
+    if (it == j.end()) return false;
+    if (it->is_boolean()) return it->get<bool>();
+    if (it->is_number_integer()) return it->get<long long>() != 0;
+    return false;
+}
+
+// Перелічити кількох людей одним рядком: «A, B і ще 3». Повний список у чаті
+// нечитабельний, а перші імена — саме те, що ведучий назве вголос.
+std::string few(const json& list, size_t show = 3) {
+    if (!list.is_array() || list.empty()) return "";
+    std::string out;
+    size_t shown = 0;
+    for (const auto& one : list) {
+        std::string name;
+        if (one.is_string()) name = one.get<std::string>();
+        else if (one.is_object()) name = str_of(one, "username");
+        if (name.empty()) continue;
+        if (shown) out += ", ";
+        out += name;
+        if (++shown == show) break;
+    }
+    if (list.size() > shown)
+        out += " і ще " + std::to_string(list.size() - shown);
+    return out;
+}
+
 // Прибрати пробіли з обох боків.
 std::string trimmed(const std::string& s) {
     size_t a = 0, b = s.size();
@@ -179,10 +221,25 @@ bool KickSource::start(const std::string& channel, ChatSink sink) {
 
     ws_->setOnMessageCallback([this](const ix::WebSocketMessagePtr& msg) {
         if (msg->type == ix::WebSocketMessageType::Open) {
-            json sub;
-            sub["event"] = "pusher:subscribe";
-            sub["data"] = {{"auth", ""}, {"channel", "chatrooms." + chatroom_id_ + ".v2"}};
-            ws_->send(sub.dump());
+            // Три підписки, бо Kick розкладає події по різних каналах:
+            // повідомлення й модерація — у кімнаті «.v2», режими чату й
+            // закріплення — у кімнаті без суфікса, а «стрім почався» й переїзд
+            // чату — у каналі. Підписані лише на перший, ми половини не бачили.
+            const char* kRooms[] = {"chatrooms.%s.v2", "chatrooms.%s", nullptr};
+            for (int i = 0; kRooms[i]; ++i) {
+                char room[96];
+                snprintf(room, sizeof room, kRooms[i], chatroom_id_.c_str());
+                json sub;
+                sub["event"] = "pusher:subscribe";
+                sub["data"] = {{"auth", ""}, {"channel", room}};
+                ws_->send(sub.dump());
+            }
+            if (!channel_id_.empty()) {
+                json sub;
+                sub["event"] = "pusher:subscribe";
+                sub["data"] = {{"auth", ""}, {"channel", "channel." + channel_id_}};
+                ws_->send(sub.dump());
+            }
             connected_ = true;
             return;
         }
@@ -248,6 +305,15 @@ void KickSource::on_frame(const std::string& raw) {
     if (!sink_) return;
 
     if (name == kEvtMessage) {
+        // Кімната підписана двічі (v1 і v2), тож той самий рядок може прийти
+        // двома кадрами. Пам'ятаємо останні id — дешевше, ніж показати двійника.
+        const std::string mid = str_of(data, "id");
+        if (!mid.empty()) {
+            for (const std::string& old : recent_)
+                if (old == mid) return;
+            recent_.push_back(mid);
+            if (recent_.size() > 64) recent_.pop_front();
+        }
         auto sender = data.find("sender");
         if (sender == data.end() || !sender->is_object()) return;
         const std::string user = str_of(*sender, "username");
@@ -298,7 +364,28 @@ void KickSource::on_frame(const std::string& raw) {
         ChatEvent ev;
         ev.type = ChatEvent::Type::Purge;
         ev.nick = nick_of(*u);
-        if (!ev.nick.empty()) sink_(ev);
+        if (ev.nick.empty()) return;
+        sink_(ev);
+
+        // Після чистки — рядок про саму дію: інакше повідомлення просто
+        // зникають, і ведучий не бачить, що модератор когось спинив.
+        const std::string who = str_of(*u, "username");
+        // Тайм-аут відрізняється від бана лише тим, що в нього є кінець.
+        const bool forever = str_of(data, "expires_at").empty();
+        ChatEvent note;
+        note.msg.platform = "kick";
+        note.msg.kind = "system";
+        note.msg.event = "ban";
+        note.msg.text = (who.empty() ? ev.nick : who) +
+                        (forever ? " — бан" : " — тайм-аут");
+        sink_(note);
+        return;
+    }
+    if (name == kEvtClear) {
+        // Модератор почистив увесь чат.
+        ChatEvent ev;
+        ev.type = ChatEvent::Type::Clear;
+        sink_(ev);
         return;
     }
 
@@ -342,7 +429,96 @@ void KickSource::on_frame(const std::string& raw) {
         if (host.empty()) return;
         ev.msg.event = "raid";
         ev.msg.text = host + " привів рейд: " + str_of(data, "number_viewers") + " глядачів";
+    } else if (name == kEvtLucky) {
+        // Кому саме дісталися подарункові підписки з купи.
+        auto lst = data.find("usernames");
+        if (lst == data.end()) lst = data.find("gifted_usernames");
+        const std::string who = lst == data.end() ? "" : few(*lst);
+        if (who.empty()) return;
+        ev.msg.event = "gift";
+        ev.msg.text = "Подарункові підписки дісталися: " + who;
+    } else if (name == kEvtUnbanned) {
+        auto u = data.find("user");
+        const std::string who = u != data.end() && u->is_object() ? str_of(*u, "username") : "";
+        if (who.empty()) return;
+        ev.msg.event = "unban";
+        ev.msg.text = who + " — бан знято";
+    } else if (name == kEvtUnpinned) {
+        ev.msg.event = "unpin";
+        ev.msg.text = "Закріплене повідомлення знято";
+    } else if (name == kEvtMove) {
+        const std::string slug = str_of(data, "channel");
+        ev.msg.event = "redirect";
+        ev.msg.text = slug.empty() ? "Чат переїхав на інший канал"
+                                   : "Чат переїхав на канал " + slug;
+    } else if (name == kEvtRoom) {
+        // Режими чату приходять усі разом, станом «як зараз». Показуємо лише
+        // ввімкнені: рядок «повільний вимкнено, лише підписники вимкнено…»
+        // нікому не потрібен.
+        struct Mode { const char* key; const char* what; const char* unit; };
+        static const Mode kModes[] = {
+            {"emotes_mode", "лише емоути", ""},
+            {"subscribers_mode", "лише для підписників", ""},
+            {"followers_mode", "лише для тих, хто стежить", " хв"},
+            {"slow_mode", "повільний режим", " с"},
+            {"advanced_bot_protection", "захист від ботів", ""},
+            {"account_age", "обмеження за віком акаунта", " хв"},
+        };
+        std::string on;
+        for (const Mode& m : kModes) {
+            auto it = data.find(m.key);
+            if (it == data.end() || !it->is_object()) continue;
+            if (!bool_of(*it, "enabled")) continue;
+            if (!on.empty()) on += ", ";
+            on += m.what;
+            const std::string n = str_of(*it, m.unit[0] ? "min_duration" : "value");
+            if (*m.unit && !n.empty() && n != "0") on += " (" + n + m.unit + ")";
+        }
+        ev.msg.event = "mode";
+        ev.msg.text = on.empty() ? "Режими чату вимкнено" : "Режими чату: " + on;
+    } else if (name == kEvtPoll) {
+        auto poll = data.find("poll");
+        if (poll == data.end() || !poll->is_object()) return;
+        const std::string title = trimmed(str_of(*poll, "title"));
+        if (title.empty()) return;
+        ev.msg.event = "poll";
+        ev.msg.text = "Опитування: " + title;
+    } else if (name == kEvtPollEnd) {
+        ev.msg.event = "poll";
+        ev.msg.text = "Опитування завершено";
+    } else if (name == kEvtKicks) {
+        // Kicks — власна валюта Kick, місцевий відповідник бітів. Поля шукаємо
+        // обережно й у кількох місцях: подія молода, і Kick уже міняв її вигляд.
+        auto sender = data.find("sender");
+        std::string who = sender != data.end() && sender->is_object()
+                              ? str_of(*sender, "username")
+                              : str_of(data, "username");
+        std::string n = str_of(data, "amount");
+        auto gift = data.find("gift");
+        if (gift != data.end() && gift->is_object()) {
+            if (n.empty()) n = str_of(*gift, "amount");
+            if (n.empty()) n = str_of(*gift, "quantity");
+        }
+        if (n.empty()) n = str_of(data, "kicks");
+        if (n.empty() || n == "0") {
+            if (getenv("HOMINKA_KICK_DEBUG"))
+                fprintf(stderr, "[kick] KicksGifted без суми: %s\n", data.dump().c_str());
+            return;
+        }
+        ev.msg.event = "bits";
+        ev.msg.amount = n + " kicks";
+        ev.msg.text = (who.empty() ? "Хтось" : who) + " надіслав " + n + " kicks";
+        const std::string note = trimmed(str_of(data, "message"));
+        if (!note.empty()) ev.msg.text += ": " + note;
+    } else if (name == kEvtLive || name == kEvtOffline) {
+        ev.msg.event = "live";
+        ev.msg.text = name == kEvtLive ? "Трансляція почалася" : "Трансляція завершилася";
     } else {
+        // Kick додає події мовчки й без оголошень. Щоб наступна прогалина
+        // знайшлася за хвилину, а не за реліз, незнайоме ім'я видно одразу.
+        // Службові кадри самого Pusher подіями чату, звісно, не є.
+        if (getenv("HOMINKA_KICK_DEBUG") && name.compare(0, 6, "pusher") != 0)
+            fprintf(stderr, "[kick] незнайома подія: %s\n", name.c_str());
         return;
     }
     sink_(ev);

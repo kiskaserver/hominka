@@ -230,6 +230,7 @@ bool pump_chat(ChatNet* net, Feed* feed, ImageCache* images, ImageFetch* fetch, 
             break;
         case ChatEvent::Type::Delete: feed->remove_id(ev.id); break;
         case ChatEvent::Type::Purge: feed->purge_nick(ev.nick); break;
+        case ChatEvent::Type::Clear: feed->clear(); break;
         }
         changed = true;
     }

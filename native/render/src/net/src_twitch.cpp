@@ -19,6 +19,7 @@ namespace {
 
 const char* kIrcUrl = "wss://irc-ws.chat.twitch.tv:443";
 const char* kEmoteCdn = "https://static-cdn.jtvnw.net/emoticons/v2/";
+const char* kCheerCdn = "https://d3aqoihi2n8ty8.cloudfront.net/actions/";
 
 // Значення тегів екрановані власним способом (\s — пробіл, \: — крапка з
 // комою). Не розкодувати їх означало б показувати «Nice\sname».
@@ -200,11 +201,70 @@ bool blank(const std::string& s) {
     return true;
 }
 
+// Twitch щоразу вигадує нові приводи: ювілей модератора, віха глядача, біти
+// за значок. Ловити кожен окремо — гнатися за рухомою ціллю, тож незнайому
+// подію ми все одно показуємо (текстом самого Twitch), а оформлення підбираємо
+// за назвою. Гірше, ніж влучне ім'я, але незрівнянно краще за мовчання.
+std::string event_of(const std::string& kind) {
+    const auto has = [&kind](const char* s) { return kind.find(s) != std::string::npos; };
+    if (has("raid")) return "raid";
+    if (has("bits")) return "bits";
+    if (has("milestone") || has("versary")) return "milestone";
+    if (has("gift")) return "gift";
+    if (has("sub") || has("pay") || has("member")) return "sub";
+    if (has("announce")) return "announce";
+    return "";
+}
+
 std::string trimmed(const std::string& s) {
     size_t a = 0, b = s.size();
     while (a < b && (unsigned char)s[a] <= ' ') ++a;
     while (b > a && (unsigned char)s[b - 1] <= ' ') --b;
     return s.substr(a, b - a);
+}
+
+// Черимоути: «Cheer100», «Party1000» — це не слова, а картинки, і без них
+// повідомлення з бітами читається як набір літер із числом. У тегу emotes їх
+// немає: Twitch віддає набір черимоутів окремо, за ключем застосунку, якого в
+// нас немає й не буде — ми читаємо чат анонімно. Зате самі картинки лежать
+// відкрито, а ім'я файлу складається за простим правилом «префікс + рівень»,
+// тож адресу збираємо самі.
+//
+// Рівнів рівно п'ять, і сума округлюється вниз до найближчого: за «/3/» CDN
+// віддає 403. Якщо префікс усе-таки виявиться чужим (канали заводять власні),
+// картинка не завантажиться — і в рядку лишиться сам код, як було до того.
+std::vector<EmoteRef> cheermotes(const std::string& text) {
+    std::vector<EmoteRef> out;
+    size_t i = 0;
+    while (i < text.size()) {
+        while (i < text.size() && (unsigned char)text[i] <= ' ') ++i;
+        const size_t start = i;
+        while (i < text.size() && (unsigned char)text[i] > ' ') ++i;
+        const std::string word = text.substr(start, i - start);
+
+        // Слово має бути рівно «літери + число».
+        size_t d = 0;
+        while (d < word.size() && !(word[d] >= '0' && word[d] <= '9')) ++d;
+        if (d == 0 || d == word.size() || !digits(word.substr(d))) continue;
+        bool letters = true;
+        for (size_t k = 0; k < d; ++k)
+            if (!((word[k] >= 'a' && word[k] <= 'z') || (word[k] >= 'A' && word[k] <= 'Z')))
+                letters = false;
+        if (!letters) continue;
+        const long n = strtol(word.c_str() + d, nullptr, 10);
+        if (n <= 0) continue;
+
+        bool have = false;
+        for (const EmoteRef& r : out) if (r.code == word) have = true;
+        if (have) continue;
+
+        static const long kTiers[] = {10000, 5000, 1000, 100, 1};
+        long tier = 1;
+        for (long t : kTiers) if (n >= t) { tier = t; break; }
+        out.push_back({word, std::string(kCheerCdn) + lower(word.substr(0, d)) +
+                                 "/dark/static/" + std::to_string(tier) + "/2.png"});
+    }
+    return out;
 }
 
 }  // namespace
@@ -308,11 +368,23 @@ void TwitchSource::handle_line(const std::string& line) {
         if (!ev.id.empty()) sink_(ev);
         return;
     }
-    if (cmd == "CLEARCHAT" && params.size() > 1) {
+    if (cmd == "CLEARCHAT") {
+        // З іменем — бан або тайм-аут одного глядача; без імені — модератор
+        // почистив увесь чат. Друге ми раніше мовчки пропускали, і стрічка
+        // лишалася з рядками, яких у чаті вже немає.
+        const std::string who = params.size() > 1 ? lower(trimmed(params[1])) : "";
         ChatEvent ev;
-        ev.type = ChatEvent::Type::Purge;
-        ev.nick = lower(params[1]);
-        if (!ev.nick.empty()) sink_(ev);
+        if (who.empty()) {
+            ev.type = ChatEvent::Type::Clear;
+        } else {
+            ev.type = ChatEvent::Type::Purge;
+            ev.nick = who;
+        }
+        sink_(ev);
+        return;
+    }
+    if (cmd == "ROOMSTATE") {
+        room_state(tags);
         return;
     }
 
@@ -356,7 +428,13 @@ void TwitchSource::handle_line(const std::string& line) {
         ev.msg.text = text;
         ev.msg.reply = tag(tags, "reply-parent-display-name");
         ev.msg.amount = amount;
+        // Порядок навмисний: у платного рядка гроші переважають усе інше, а
+        // «перше повідомлення» цікаве лише тоді, коли іншого приводу немає.
         if (!amount.empty()) ev.msg.event = "bits";
+        else if (tag(tags, "msg-id") == "highlighted-message") ev.msg.event = "highlight";
+        else if (!tag(tags, "custom-reward-id").empty()) ev.msg.event = "points";
+        else if (tag(tags, "first-msg") == "1") ev.msg.event = "first";
+        else if (tag(tags, "returning-chatter") == "1") ev.msg.event = "returning";
         ev.msg.badges = map_badges(tag(tags, "badges"));
         ev.msg.badge_icons = badges().twitch(room, tag(tags, "badges"));
 
@@ -364,6 +442,10 @@ void TwitchSource::handle_line(const std::string& line) {
         std::vector<EmoteRef> refs;
         for (const auto& e : parse_emotes(tag(tags, "emotes"), text))
             refs.push_back({e.code, e.url});
+        // Черимоути шукаємо лише там, де біти справді є: інакше будь-яке
+        // «Kappa100» у звичайному рядку перетворилося б на картинку.
+        if (!tag(tags, "bits").empty())
+            for (const EmoteRef& c : cheermotes(text)) refs.push_back(c);
         refs = emotes().append(refs, "twitch", room, text);
         for (const auto& r : refs) ev.msg.emotes.push_back({r.code, r.url});
 
@@ -377,35 +459,103 @@ void TwitchSource::handle_line(const std::string& line) {
         if (user.empty()) user = tag(tags, "login");
         if (user.empty()) user = "Anonymous";
         const std::string kind = tag(tags, "msg-id");
-        const std::string body = params.size() > 1 ? params[1] : "";
+        const std::string body = trimmed(params.size() > 1 ? params[1] : "");
 
         ChatEvent ev;
         ev.msg.platform = "twitch";
         ev.msg.kind = "system";
+        // Свій текст події Twitch майже завжди складає сам (system-msg), і він
+        // уже перекладений мовою каналу. Складаємо самі лише там, де його немає.
+        const std::string msg = trimmed(tag(tags, "system-msg"));
         if (kind == "raid") {
             const std::string n = tag(tags, "msg-param-viewerCount");
             ev.msg.event = "raid";
-            ev.msg.text = user + " привів рейд: " + (n.empty() ? "?" : n) + " глядачів";
+            ev.msg.text = msg.empty()
+                              ? user + " привів рейд: " + (n.empty() ? "?" : n) + " глядачів"
+                              : msg;
+        } else if (kind == "unraid") {
+            ev.msg.event = "raid";
+            ev.msg.text = msg.empty() ? user + " скасував рейд" : msg;
         } else if (kind == "announcement") {
             if (body.empty()) return;
             ev.msg.event = "announce";
             ev.msg.text = user + ": " + body;
+        } else if (kind == "viewermilestone" || kind == "modiversary") {
+            // Віха глядача (тижні поспіль) і річниця модератора. Текст у них
+            // свій, а привід спільний — обидва варто помітити, не переплутавши
+            // з підпискою.
+            ev.msg.event = "milestone";
+            ev.msg.text = msg.empty() ? user + ": віха" : msg;
+            if (!body.empty()) ev.msg.text += ": " + body;
+        } else if (kind == "bitsbadgetier") {
+            ev.msg.event = "bits";
+            ev.msg.text = msg.empty() ? user + ": новий значок за біти" : msg;
+        } else if (kind == "rewardgift") {
+            ev.msg.event = "gift";
+            ev.msg.text = msg.empty() ? user + ": подарунок глядачам" : msg;
         } else if (kind == "sub" || kind == "resub" || kind == "subgift" ||
                    kind == "anonsubgift" || kind == "submysterygift" ||
                    kind == "anonsubmysterygift" || kind == "primepaidupgrade" ||
-                   kind == "giftpaidupgrade" || kind == "anongiftpaidupgrade") {
-            // Свій текст події Twitch уже зібрав — беремо його, а не переказуємо.
-            ev.msg.text = tag(tags, "system-msg");
-            if (ev.msg.text.empty()) ev.msg.text = user + ": підписка";
+                   kind == "giftpaidupgrade" || kind == "anongiftpaidupgrade" ||
+                   kind == "standardpayforward" || kind == "communitypayforward") {
+            ev.msg.text = msg.empty() ? user + ": підписка" : msg;
+            // Підписник часто пише кілька слів «від себе» — вони приходять
+            // тілом рядка, і саме їх читає ведучий уголос.
+            if (!blank(body)) ev.msg.text += ": " + trimmed(body);
             // Подарунок і власна підписка — різні приводи, і оформлюють їх
             // по-різному: одне вітають, друге дякують.
-            ev.msg.event = kind.find("gift") != std::string::npos ? "gift" : "sub";
+            ev.msg.event = kind.find("gift") != std::string::npos ||
+                                   kind.find("forward") != std::string::npos
+                               ? "gift"
+                               : "sub";
         } else {
-            ev.msg.text = tag(tags, "system-msg");
+            ev.msg.event = event_of(kind);
+            ev.msg.text = msg;
+            if (msg.empty() && !blank(body)) ev.msg.text = user + ": " + trimmed(body);
+            if (getenv("HOMINKA_IRC_DEBUG"))
+                fprintf(stderr, "[irc] незнайома подія USERNOTICE: %s\n", kind.c_str());
         }
         ev.msg.text = trimmed(ev.msg.text);
         if (!ev.msg.text.empty()) sink_(ev);
         return;
+    }
+}
+
+// Режими чату (лише емоути, лише підписники, повільний, без повторів, лише
+// для тих, хто стежить). Перший ROOMSTATE приходить одразу після входу й
+// описує весь стан — його ми лише запам'ятовуємо: розповідати про те, що й так
+// було, нема сенсу. Далі Twitch шле тільки те, що змінилося, і ось про це вже
+// варто сказати. Викликається з потоку сокета, як і решта розбору.
+void TwitchSource::room_state(const Tags& tags) {
+    struct Mode { const char* tag; const char* what; const char* unit; };
+    static const Mode kModes[] = {
+        {"emote-only", "лише емоути", ""},
+        {"subs-only", "лише для підписників", ""},
+        {"r9k", "без повторів", ""},
+        {"followers-only", "лише для тих, хто стежить", " хв"},
+        {"slow", "повільний режим", " с"},
+    };
+    for (const Mode& m : kModes) {
+        const std::string now = tag(tags, m.tag);
+        if (now.empty()) continue;  // цього разу не змінювалося
+        auto it = modes_.find(m.tag);
+        const bool known = it != modes_.end();
+        if (known && it->second == now) continue;
+        modes_[m.tag] = now;
+        if (!known) continue;  // перший ROOMSTATE — просто запам'ятали
+
+        const long n = strtol(now.c_str(), nullptr, 10);
+        // Нуль і -1 однаково означають «вимкнено»; додатне число в режимах з
+        // мірою — саму міру (хвилини стеження, секунди затримки).
+        std::string text = n <= 0 ? std::string("Вимкнено: ") + m.what
+                                  : std::string("Увімкнено: ") + m.what;
+        if (n > 0 && *m.unit) text += " (" + now + m.unit + ")";
+        ChatEvent ev;
+        ev.msg.platform = "twitch";
+        ev.msg.kind = "system";
+        ev.msg.event = "mode";
+        ev.msg.text = text;
+        if (sink_) sink_(ev);
     }
 }
 

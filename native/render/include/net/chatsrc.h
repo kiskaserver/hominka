@@ -16,11 +16,12 @@ namespace hominka {
 // Що прийшло з площадки. Повідомлення — окремо, бо їх найбільше; решта —
 // вказівки прибрати вже показане.
 struct ChatEvent {
-    enum class Type { Message, Delete, Purge };
+    enum class Type { Message, Delete, Purge, Clear };
     Type type = Type::Message;
     ChatMessage msg;             // для Message
     std::string id;              // для Delete
     std::string nick;            // для Purge
+    // Clear — модератор почистив увесь чат: стрічка спорожняється.
 };
 
 // Джерело кличе це на кожну подію, з ЧУЖОГО потоку. Той, хто передає sink,

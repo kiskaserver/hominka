@@ -12,6 +12,7 @@
 #pragma once
 
 #include <atomic>
+#include <map>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -39,6 +40,7 @@ public:
 private:
     void on_text(const std::string& frame);
     void handle_line(const std::string& line);
+    void room_state(const std::map<std::string, std::string>& tags);
 
     std::unique_ptr<ix::WebSocket> ws_;
     ChatSink sink_;
@@ -50,6 +52,10 @@ private:
     std::string tail_;        // недочитаний хвіст останнього кадру
     std::string room_id_;
     bool warmed_ = false;     // набори тягнемо один раз, коли взнали канал
+
+    // Режими чату, як їх бачив останній ROOMSTATE. Живуть лише в потоці
+    // сокета, тому без замка: назовні їх ніхто не питає.
+    std::map<std::string, std::string> modes_;
 };
 
 }  // namespace hominka

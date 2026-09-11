@@ -117,6 +117,12 @@ void ChatNet::push(const ChatEvent& ev) {
 
 void ChatNet::drop_pending(const ChatEvent& ev) {
     if (waiting_.empty()) return;
+    // Чистка чату забирає й те, що ще чекає своєї черги через затримку:
+    // інакше прибрані повідомлення виїхали б у стрічку через пів хвилини.
+    if (ev.type == ChatEvent::Type::Clear) {
+        waiting_.clear();
+        return;
+    }
     std::deque<Delayed> keep;
     for (auto& d : waiting_) {
         const bool hit = ev.type == ChatEvent::Type::Delete

@@ -21,7 +21,7 @@ void print(const ChatEvent& ev, std::atomic<int>* count) {
         ++*count;
         const ChatMessage& m = ev.msg;
         if (m.kind == "system") {
-            printf("  * %s\n", m.text.c_str());
+            printf("  * [%s] %s\n", m.event.empty() ? "-" : m.event.c_str(), m.text.c_str());
         } else {
             printf("  %-20s %s", m.name.empty() ? m.nick.c_str() : m.name.c_str(),
                    m.text.c_str());
@@ -29,6 +29,7 @@ void print(const ChatEvent& ev, std::atomic<int>* count) {
             if (!m.badge_icons.empty()) printf("   [значків: %d]", (int)m.badge_icons.size());
             else if (!m.badges.empty()) printf("   [плашок: %d]", (int)m.badges.size());
             if (!m.amount.empty()) printf("   [%s]", m.amount.c_str());
+            if (!m.event.empty()) printf("   [%s]", m.event.c_str());
             printf("\n");
         }
         break;
@@ -38,6 +39,9 @@ void print(const ChatEvent& ev, std::atomic<int>* count) {
         break;
     case ChatEvent::Type::Purge:
         printf("  (прибрано все від %s)\n", ev.nick.c_str());
+        break;
+    case ChatEvent::Type::Clear:
+        printf("  (чат почищено)\n");
         break;
     }
     fflush(stdout);

@@ -318,6 +318,28 @@
    "color": "#c4b5fd",
    "text": "тримай бітсів на розвиток каналу",
    "amount": "1000 bits"
+  },
+  {
+   "platform": "twitch",
+   "name": "Lazar1n",
+   "nick": "lazar1n",
+   "color": "#a855f7",
+   "event": "highlight",
+   "text": "виділив повідомлення за бали — щоб точно помітили"
+  },
+  {
+   "platform": "kick",
+   "name": "Newbie",
+   "nick": "newbie",
+   "color": "#38bdf8",
+   "event": "first",
+   "text": "привіт! вперше тут"
+  },
+  {
+   "platform": "twitch",
+   "kind": "system",
+   "event": "milestone",
+   "text": "GoodTheme дивиться 10 тижнів поспіль"
   }
  ]
 }
