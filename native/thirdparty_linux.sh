@@ -127,6 +127,22 @@ rm -rf stb
 git clone -q https://github.com/nothings/stb.git stb
 (cd stb && git checkout -q "$STB_REF")
 cp stb/stb_image.h "$TPL/include/"
+# Латка на дефект у самому stb (він там і досі, у найсвіжішому коміті).
+#
+# У stbi__load_gif_main кадр «два тому» — той, до якого GIF повертається за
+# способом затирання 3, — рахується як out - 2 * stride. Тобто на два кадри
+# ПЕРЕД початком буфера: читання чужої (часто вже звільненої) памʼяті на кожній
+# такій гіфці. Знайшов Valgrind, коли з чату Twitch поїхали справжні гіфки:
+# «Invalid read of size 4 у stbi__gif_load_next». Кадр два тому лежить, ясна
+# річ, за адресою out + (layers - 2) * stride.
+#
+# Латка через sed, а не через patches/: там латки litehtml, і цикл кладе кожну
+# на кожен репозиторій. Перевірка нижче зчиняє галас, якщо рядок у stb колись
+# зміниться й заміна тихо не спрацює.
+sed -i 's|two_back = out - 2 \* stride;|two_back = out + (layers - 2) * stride;|' \
+    "$TPL/include/stb_image.h"
+grep -q 'two_back = out + (layers - 2) \* stride;' "$TPL/include/stb_image.h" \
+    || { echo "stb: рядок two_back не знайдено — латка не лягла"; exit 1; }
 
 # --- mbedTLS --------------------------------------------------------------
 #
@@ -138,6 +154,24 @@ echo ">> mbedtls $MBEDTLS_REF"
 rm -rf mbedtls ixws
 git clone -q --depth 1 --recurse-submodules -b "$MBEDTLS_REF" \
     https://github.com/Mbed-TLS/mbedtls.git
+# Вмикаємо замки ВСЕРЕДИНІ mbedTLS — і робимо це до збірки, правкою самого
+# конфігу, а не ключем компілятора.
+#
+# Навіщо. Ми ходимо в мережу з восьми потоків одразу: три сокети чату,
+# лічильник глядачів, оновлення й чотири качальники картинок. Контексти TLS у
+# кожного свої, і здавалося, що цього досить. Ні: у 3.6 увімкнено TLS 1.3, а
+# його рукостискання смикає psa_crypto_init(), і це ГЛОБАЛЬНИЙ стан. Сама
+# mbedTLS каже про це прямо: «у багатопотокових застосунках треба вмикати
+# MBEDTLS_THREADING_C, навіть якщо контексти не спільні». Без цього два
+# рукостискання, що почалися разом, псують купу — і програма падає геть в
+# іншому місці, за хвилину-дві, щоразу по-новому.
+#
+# Чому правкою файлу, а не -DMBEDTLS_THREADING_C: прапорець змінює РОЗМІР
+# структур (у них з'являються мьютекси), тож бачити його мусять усі, хто
+# вмикає заголовки mbedTLS, — і сама бібліотека, і IXWebSocket. Файл бачать
+# усі; ключ довелося б не забути передати в кожну збірку окремо.
+sed -i 's|^//#define MBEDTLS_THREADING_C|#define MBEDTLS_THREADING_C|; s|^//#define MBEDTLS_THREADING_PTHREAD|#define MBEDTLS_THREADING_PTHREAD|'     mbedtls/include/mbedtls/mbedtls_config.h
+grep -q '^#define MBEDTLS_THREADING_C' mbedtls/include/mbedtls/mbedtls_config.h     || { echo "не вийшло увімкнути MBEDTLS_THREADING_C"; exit 1; }
 cmake -S mbedtls -B mbedtls/build \
       -DCMAKE_BUILD_TYPE=Release \
       -DCMAKE_INSTALL_PREFIX="$TPL" \

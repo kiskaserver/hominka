@@ -171,6 +171,24 @@ rm -rf "$IMGUI_OBJ"
 echo ">> mbedtls $MBEDTLS_REF"
 git clone -q --depth 1 --recurse-submodules -b "$MBEDTLS_REF" \
     https://github.com/Mbed-TLS/mbedtls.git
+# Вмикаємо замки ВСЕРЕДИНІ mbedTLS — і робимо це до збірки, правкою самого
+# конфігу, а не ключем компілятора.
+#
+# Навіщо. Ми ходимо в мережу з восьми потоків одразу: три сокети чату,
+# лічильник глядачів, оновлення й чотири качальники картинок. Контексти TLS у
+# кожного свої, і здавалося, що цього досить. Ні: у 3.6 увімкнено TLS 1.3, а
+# його рукостискання смикає psa_crypto_init(), і це ГЛОБАЛЬНИЙ стан. Сама
+# mbedTLS каже про це прямо: «у багатопотокових застосунках треба вмикати
+# MBEDTLS_THREADING_C, навіть якщо контексти не спільні». Без цього два
+# рукостискання, що почалися разом, псують купу — і програма падає геть в
+# іншому місці, за хвилину-дві, щоразу по-новому.
+#
+# Чому правкою файлу, а не -DMBEDTLS_THREADING_C: прапорець змінює РОЗМІР
+# структур (у них з'являються мьютекси), тож бачити його мусять усі, хто
+# вмикає заголовки mbedTLS, — і сама бібліотека, і IXWebSocket. Файл бачать
+# усі; ключ довелося б не забути передати в кожну збірку окремо.
+sed -i 's|^//#define MBEDTLS_THREADING_C|#define MBEDTLS_THREADING_C|; s|^//#define MBEDTLS_THREADING_PTHREAD|#define MBEDTLS_THREADING_PTHREAD|'     mbedtls/include/mbedtls/mbedtls_config.h
+grep -q '^#define MBEDTLS_THREADING_C' mbedtls/include/mbedtls/mbedtls_config.h     || { echo "не вийшло увімкнути MBEDTLS_THREADING_C"; exit 1; }
 cmake -S mbedtls -B mbedtls/build $TC \
       -DCMAKE_BUILD_TYPE=Release \
       -DCMAKE_INSTALL_PREFIX="$TP" \
