@@ -8,6 +8,12 @@ own; their changes shipped in the next stable release.
 The native C++ application starts at **3.0.0**. Earlier versions were a
 Python/Qt application with an embedded browser.
 
+## 3.1.8 — 2026-09-12 · patch
+
+Текст у чаті тепер зменшується далі, ніж дозволяли раніше.
+
+- Кнопки «A−» і «A+» — і в смужці вікна, і в налаштуваннях — доходять до 30%, а не впиралися в 50%. Під Linux вони так і працювали, під Windows ні: межі в них розійшлися, бо жили в трьох різних місцях. Тепер вони одні на всіх.
+
 ## 3.1.7 — 2026-09-12 · minor
 
 Замок більше не забирає все одразу.
