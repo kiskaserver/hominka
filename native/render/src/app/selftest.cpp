@@ -42,6 +42,8 @@ int selftest(const wchar_t* in_path, const wchar_t* out_path, int width) {
     std::string user_css;
     std::vector<std::string> layout;
     float zoom = 1.0f;
+    bool animate = false;
+    int64_t at_ms = -1;
     if (j.is_object()) {
         if (j.contains("css") && j["css"].is_string()) user_css = j["css"].get<std::string>();
         if (j.contains("layout") && j["layout"].is_array())
@@ -49,6 +51,13 @@ int selftest(const wchar_t* in_path, const wchar_t* out_path, int width) {
                 if (s.is_string()) layout.push_back(s.get<std::string>());
         if (j.contains("zoom") && j["zoom"].is_number()) zoom = j["zoom"].get<float>();
         if (j.contains("width") && j["width"].is_number()) width = j["width"].get<int>();
+        // Анімація вимкнена НАВМИСНО: знімок має виходити той самий від
+        // запуску до запуску. Але перевірити саму анімацію теж треба — для
+        // цього її вмикають і просять конкретну мить.
+        if (j.contains("animate") && j["animate"].is_boolean())
+            animate = j["animate"].get<bool>();
+        if (j.contains("timeMs") && j["timeMs"].is_number())
+            at_ms = (int64_t)j["timeMs"].get<double>();
     }
 
     IWICImagingFactory* wic = nullptr;
@@ -74,8 +83,9 @@ int selftest(const wchar_t* in_path, const wchar_t* out_path, int width) {
     ImageCache images;
     Feed feed(dwrite, &images);
     // Самоперевірка має давати однаковий PNG від запуску до запуску, тож
-    // анімовані емоути тут завмирають на першому кадрі.
-    feed.set_animate(false);
+    // анімовані емоути тут завмирають на першому кадрі — доки в зразку не
+    // сказано інакше («animate»: true, «timeMs»: коли саме).
+    feed.set_animate(animate);
     feed.set_width(width);
     feed.set_zoom(zoom);
     feed.set_layout(layout);
@@ -110,7 +120,7 @@ int selftest(const wchar_t* in_path, const wchar_t* out_path, int width) {
     }
     // Час беремо завідомо більший за анімацію появи: знімок має показувати
     // усталений вигляд, а не випадковий кадр.
-    const int64_t t = FEED_ENTER_MS * 10;
+    const int64_t t = at_ms >= 0 ? at_ms : FEED_ENTER_MS * 10;
     target.rt()->BeginDraw();
     target.rt()->Clear(D2D1::ColorF(0, 0, 0, 0));
     feed.draw(target.rt(), width, total, t);

@@ -148,7 +148,71 @@ int Image::ms_to_next(int64_t t_ms) const {
     return (int)(total_ms - at);
 }
 
+namespace {
+
+// Зменшення premultiplied BGRA усередненням по прямокутнику.
+//
+// Усереднювати premultiplied можна просто так — саме заради цього він і
+// premultiplied: колір у ньому вже помножений на прозорість, тож середнє
+// чотирьох пікселів, з яких три прозорі, не дає сірої облямівки.
+void downscale_bgra(const uint8_t* src, int sw, int sh, uint8_t* dst, int dw, int dh) {
+    for (int y = 0; y < dh; ++y) {
+        const int y0 = (int)((int64_t)y * sh / dh);
+        int y1 = (int)((int64_t)(y + 1) * sh / dh);
+        if (y1 <= y0) y1 = y0 + 1;
+        for (int x = 0; x < dw; ++x) {
+            const int x0 = (int)((int64_t)x * sw / dw);
+            int x1 = (int)((int64_t)(x + 1) * sw / dw);
+            if (x1 <= x0) x1 = x0 + 1;
+            unsigned acc[4] = {0, 0, 0, 0};
+            unsigned n = 0;
+            for (int sy = y0; sy < y1 && sy < sh; ++sy) {
+                const uint8_t* row = src + ((size_t)sy * sw + x0) * 4;
+                for (int sx = x0; sx < x1 && sx < sw; ++sx, row += 4) {
+                    acc[0] += row[0]; acc[1] += row[1];
+                    acc[2] += row[2]; acc[3] += row[3];
+                    ++n;
+                }
+            }
+            uint8_t* d = dst + ((size_t)y * dw + x) * 4;
+            if (!n) { d[0] = d[1] = d[2] = d[3] = 0; continue; }
+            for (int k = 0; k < 4; ++k) d[k] = (uint8_t)(acc[k] / n);
+        }
+    }
+}
+
+}  // namespace
+
+// Зменшує кадри анімованої картинки до ANIM_MAX_SIDE. Природний розмір не
+// чіпаємо: CSS має бачити картинку такою, якою вона є, а растр — це наша
+// внутрішня справа (так само поводиться SVG, лише в інший бік).
+void ImageCache::shrink(Image* img) const {
+    if (img->frames.size() < 2) return;
+    const int w = img->width, h = img->height;
+    const int side = w > h ? w : h;
+    if (w <= 0 || h <= 0 || side <= ANIM_MAX_SIDE) return;
+
+    int nw = (int)((int64_t)w * ANIM_MAX_SIDE / side);
+    int nh = (int)((int64_t)h * ANIM_MAX_SIDE / side);
+    if (nw < 1) nw = 1;
+    if (nh < 1) nh = 1;
+
+    for (ImageFrame& f : img->frames) {
+        if (f.width != w || f.height != h) continue;   // кадр іншого розміру не чіпаємо
+        std::vector<uint8_t> small((size_t)nw * nh * 4);
+        downscale_bgra(f.bgra.data(), w, h, small.data(), nw, nh);
+        f.bgra.swap(small);
+        f.width = nw;
+        f.height = nh;
+    }
+    img->width = nw;
+    img->height = nh;
+}
+
 void ImageCache::finish(Image* img) const {
+    // Спершу зменшуємо, потім рахуємо вагу: інакше під стелю не пролізла б
+    // жодна гіфка з чату, і всі вони стояли б нерухомо.
+    shrink(img);
     img->total_ms = 0;
     img->bytes = 0;
     for (ImageFrame& f : img->frames) {
