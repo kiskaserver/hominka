@@ -190,6 +190,26 @@ cmake --install mbedtls/build >/dev/null
 # це текстові рядки, там нема чого стискати.
 echo ">> ixwebsocket $IXWS_REF"
 git clone -q --depth 1 -b "$IXWS_REF" https://github.com/machinezone/IXWebSocket.git ixws
+# Латка: закриття ОДНОГО сокета не має зносити крипто всього процесу.
+#
+# IXWebSocket кличе psa_crypto_init() при створенні сокета й
+# mbedtls_psa_crypto_free() при його закритті. Для однієї сполуки це логічно, а
+# в нас їх вісім одночасно: три сокети чату, глядачі, оновлення й чотири
+# качальники картинок. PSA — стан ПРОЦЕСУ, а не сокета: качальник, який щойно
+# забрав емоут і закрив сполуку, звільняв таблицю ключів, поки сусідній потік
+# робив нею рукостискання. Звідси й були крахи «зіпсована купа» щоразу в
+# іншому місці ntdll, за хвилину-дві після старту.
+#
+# Показав це Valgrind під Linux, дослівно: psa_unregister_read_under_mutex
+# читає блок, звільнений із psa_wipe_all_key_slots у сусідньому потоці.
+#
+# Тому виклик прибираємо: PSA піднімається один раз і живе до кінця процесу —
+# рівно так, як задумано для глобальної підсистеми. psa_crypto_init() лишаємо,
+# він ідемпотентний, а від перегонів його береже MBEDTLS_THREADING_C вище.
+sed -i 's|^\( *\)mbedtls_psa_crypto_free();|\1// прибрано латкою Hominka: глобальне крипто не звільняємо на кожен сокет|' \
+    ixws/ixwebsocket/IXSocketMbedTLS.cpp
+grep -q '^ *mbedtls_psa_crypto_free();' ixws/ixwebsocket/IXSocketMbedTLS.cpp \
+    && { echo "ixwebsocket: mbedtls_psa_crypto_free() лишився — латка не лягла"; exit 1; }
 cmake -S ixws -B ixws/build \
       -DCMAKE_BUILD_TYPE=Release \
       -DCMAKE_INSTALL_PREFIX="$TPL" \
