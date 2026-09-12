@@ -327,10 +327,10 @@ ChromeEvents ChromeBL::draw_controls(BLContext* ctx, int w, int h, Look* look,
             look->locked = !look->locked;
             ev.lock_changed = true;
         } else if (pressed_.x == L.zoom_out.x) {
-            look->zoom = look->zoom > 0.4f ? look->zoom - 0.1f : 0.3f;
+            look->zoom = zoom_clamp(look->zoom - ZOOM_STEP);
             ev.look_changed = true;
         } else if (pressed_.x == L.zoom_in.x) {
-            look->zoom = look->zoom < 3.9f ? look->zoom + 0.1f : 4.0f;
+            look->zoom = zoom_clamp(look->zoom + ZOOM_STEP);
             ev.look_changed = true;
         } else if (pressed_.x == L.gear.x) {
             ev.open_settings = true;

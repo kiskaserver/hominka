@@ -420,7 +420,7 @@ ChromeEvents Chrome::draw_controls(int w, int h, Look* look, HWND hwnd,
 
             const Slot a = slot("##smaller", x, BTN_Y, BTN_W, BTN_H, HOT);
             if (a.pressed) {
-                look->zoom = look->zoom - 0.1f < 0.5f ? 0.5f : look->zoom - 0.1f;
+                look->zoom = zoom_clamp(look->zoom - ZOOM_STEP);
                 ev.look_changed = true;
             }
             if (a.hot) ImGui::SetTooltip("Дрібніший текст");
@@ -429,7 +429,7 @@ ChromeEvents Chrome::draw_controls(int w, int h, Look* look, HWND hwnd,
 
             const Slot b = slot("##bigger", x, BTN_Y, BTN_W, BTN_H, HOT);
             if (b.pressed) {
-                look->zoom = look->zoom + 0.1f > 3.0f ? 3.0f : look->zoom + 0.1f;
+                look->zoom = zoom_clamp(look->zoom + ZOOM_STEP);
                 ev.look_changed = true;
             }
             if (b.hot) ImGui::SetTooltip("Більший текст");

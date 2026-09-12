@@ -490,7 +490,7 @@ void page_look(Config* cfg, SettingsEvents* ev) {
     field_label("Текст");
     ImGui::SameLine(LABEL_W);
     if (ghost("A−", 40.0f)) {
-        cfg->look.zoom = cfg->look.zoom - 0.1f < 0.5f ? 0.5f : cfg->look.zoom - 0.1f;
+        cfg->look.zoom = zoom_clamp(cfg->look.zoom - ZOOM_STEP);
         ev->changed = ev->look_changed = true;
     }
     ImGui::SameLine(0, 8);
@@ -502,7 +502,7 @@ void page_look(Config* cfg, SettingsEvents* ev) {
     }
     ImGui::SameLine(0, 8);
     if (ghost("A+", 40.0f)) {
-        cfg->look.zoom = cfg->look.zoom + 0.1f > 3.0f ? 3.0f : cfg->look.zoom + 0.1f;
+        cfg->look.zoom = zoom_clamp(cfg->look.zoom + ZOOM_STEP);
         ev->changed = ev->look_changed = true;
     }
 

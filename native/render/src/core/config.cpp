@@ -121,7 +121,7 @@ void Config::load() {
     }
     look.opacity = num(raw_, "opacity", look.opacity);
     look.bg_alpha = num(raw_, "bg_alpha", look.bg_alpha);
-    look.zoom = num(raw_, "zoom", look.zoom);
+    look.zoom = zoom_clamp(num(raw_, "zoom", look.zoom));
     look.frameless = flag(raw_, "frameless", look.frameless);
     keep_top = flag(raw_, "keepTop", keep_top);
     header = flag(raw_, "header", header);
