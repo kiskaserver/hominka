@@ -110,6 +110,8 @@ std::vector<std::string> map_badges(const std::string& raw) {
             const size_t slash = part.find('/');
             const std::string name =
                 twitch_badge_name(slash == std::string::npos ? part : part.substr(0, slash));
+            // Ім'я набору порожнім більше не буває, та перевірку лишаємо:
+            // порожній «badges=» у тезі трапляється.
             if (!name.empty()) {
                 bool have = false;
                 for (const auto& n : out) if (n == name) { have = true; break; }

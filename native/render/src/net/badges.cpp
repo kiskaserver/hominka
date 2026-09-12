@@ -100,8 +100,9 @@ void fetch_channel(const std::string& room_id, std::map<std::string, std::string
 }  // namespace
 
 std::string twitch_badge_name(const std::string& set_id) {
-    // Той самий перелік, що й у текстових плашках: інакше та сама людина
-    // отримала б картинку одного значка й підпис іншого.
+    // Кілька значків ми знаємо в обличчя: у них є текстова плашка (MOD, VIP,
+    // SUB) на випадок, якщо картинка ще не приїхала, і спільне ім'я з Kick —
+    // щоб та сама людина в обох чатах виглядала однаково.
     static const std::map<std::string, std::string> kNorm = {
         {"broadcaster", "broadcaster"}, {"moderator", "mod"}, {"vip", "vip"},
         {"subscriber", "sub"}, {"founder", "sub"}, {"partner", "verified"},
@@ -109,7 +110,13 @@ std::string twitch_badge_name(const std::string& set_id) {
         {"artist-badge", "artist"},
     };
     auto it = kNorm.find(set_id);
-    return it == kNorm.end() ? std::string() : it->second;
+    if (it != kNorm.end()) return it->second;
+    // Решту — а це 360 з 370 наборів: біти, Prime, Turbo, hype train, дарувальник
+    // підписок і сотні значків за ігрові кампанії — раніше тут відсіювало, і в
+    // чаті їх не було зовсім. Картинку для них Twitch дає ту саму, тож лишаємо
+    // ім'я набору як є: воно потрібне тільки для того, щоб зіставити плашку з
+    // картинкою, і в CSS видно в alt/title.
+    return set_id;
 }
 
 const std::map<std::string, std::string>& Badges::global() {
