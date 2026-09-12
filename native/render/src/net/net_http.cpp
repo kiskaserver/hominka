@@ -53,25 +53,36 @@ std::string ca_bundle_path() {
     // Так ми, по-перше, не тягнемо файл, який через рік протухне й почне тихо
     // ламати з'єднання, а по-друге — поважаємо корені, які додав користувач
     // або його організація.
+    //
+    // Читаємо РІВНО ОДИН РАЗ і рівно одним потоком. Тут був справжній збій, і
+    // коштував він дорого: стояло «якщо порожньо — наповнити», без жодного
+    // замка. Виглядало безпечно (результат однаковий, хто б не порахував), але
+    // перші ж запити йдуть одночасно — значки, емоути, лічильник глядачів і
+    // чотири потоки, що качають картинки, — і два з них бралися дописувати той
+    // самий std::string. Два перерозподіли одного буфера — це зіпсована купа й
+    // падіння в надрах ntdll за хвилину після старту, без сліду в журналі й
+    // ніколи в тому самому місці. Обхід сховища триває десятки мілісекунд, і
+    // вікно для гонки було саме таким завширшки.
     static std::string pem;
-    if (!pem.empty()) return pem;
-
-    HCERTSTORE store = CertOpenSystemStoreW(0, L"ROOT");
-    if (!store) return "SYSTEM";
-    PCCERT_CONTEXT ctx = nullptr;
-    while ((ctx = CertEnumCertificatesInStore(store, ctx)) != nullptr) {
-        DWORD chars = 0;
-        if (!CryptBinaryToStringA(ctx->pbCertEncoded, ctx->cbCertEncoded,
-                                  CRYPT_STRING_BASE64HEADER, nullptr, &chars))
-            continue;
-        std::string one(chars, '\0');
-        if (CryptBinaryToStringA(ctx->pbCertEncoded, ctx->cbCertEncoded,
-                                 CRYPT_STRING_BASE64HEADER, &one[0], &chars)) {
-            one.resize(chars);
-            pem += one;
+    static std::once_flag once;
+    std::call_once(once, [] {
+        HCERTSTORE store = CertOpenSystemStoreW(0, L"ROOT");
+        if (!store) return;
+        PCCERT_CONTEXT ctx = nullptr;
+        while ((ctx = CertEnumCertificatesInStore(store, ctx)) != nullptr) {
+            DWORD chars = 0;
+            if (!CryptBinaryToStringA(ctx->pbCertEncoded, ctx->cbCertEncoded,
+                                      CRYPT_STRING_BASE64HEADER, nullptr, &chars))
+                continue;
+            std::string one(chars, '\0');
+            if (CryptBinaryToStringA(ctx->pbCertEncoded, ctx->cbCertEncoded,
+                                     CRYPT_STRING_BASE64HEADER, &one[0], &chars)) {
+                one.resize(chars);
+                pem += one;
+            }
         }
-    }
-    CertCloseStore(store, 0);
+        CertCloseStore(store, 0);
+    });
     // Порожньо — краще чесно віддати «SYSTEM» і дати бібліотеці сказати своє,
     // ніж мовчки лишитися без перевірки.
     return pem.empty() ? std::string("SYSTEM") : pem;

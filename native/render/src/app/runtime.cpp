@@ -12,13 +12,21 @@ namespace hominka {
 // Без цього окремий процес падав би без жодного сліду — а зсув лягає прямо в
 // addr2line на нестрипнутій збірці й дає файл із рядком. Той самий підхід, що
 // в dcomp_overlay.cpp.
+//
+// Пишемо В ЖУРНАЛ, а не в stderr. Раніше звіт ішов у stderr — і нікуди: у
+// вікна оверлея консолі немає, тож єдиний слід збою існував рівно доти, доки
+// хтось не запустить програму з термінала. Людина приходила з «у мене крашнуло»,
+// а показати їй було нічого.
 LONG CALLBACK crash_veh(EXCEPTION_POINTERS* ep) {
     const DWORD code = ep->ExceptionRecord->ExceptionCode;
     // 0xE06D7363 — кидок C++ (bad_alloc тощо). Ловимо і його: інакше про
     // невдале виділення памʼяті ми дізнаємось лише з terminate, коли стек уже
     // розкручено й місце кидка втрачено. Друкуємо тільки перший.
+    // 0xC0000374 — зіпсована купа. Windows зазвичай убиває процес на місці, не
+    // питаючи нікого, але як не спробувати.
     static LONG reported = 0;
     if (code == 0xC0000005 || code == 0xC0000409 || code == 0xC000001D ||
+        code == 0xC0000374 ||
         (code == 0xE06D7363 && InterlockedExchange(&reported, 1) == 0)) {
         void* addr = ep->ExceptionRecord->ExceptionAddress;
         HMODULE mod = nullptr;
@@ -27,16 +35,14 @@ LONG CALLBACK crash_veh(EXCEPTION_POINTERS* ep) {
                                    GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
                                (LPCSTR)addr, &mod) && mod) {
             GetModuleFileNameA(mod, name, sizeof name);
-            fprintf(stderr, "КРАШ code=0x%lX модуль=%s зсув=0x%llX\n",
-                    (unsigned long)code, name,
-                    (unsigned long long)((char*)addr - (char*)mod));
+            rlog("КРАШ code=0x%lX модуль=%s зсув=0x%llX", (unsigned long)code, name,
+                 (unsigned long long)((char*)addr - (char*)mod));
         } else {
-            fprintf(stderr, "КРАШ code=0x%lX addr=%p (модуль невідомий)\n",
-                    (unsigned long)code, addr);
+            rlog("КРАШ code=0x%lX addr=%p (модуль невідомий)", (unsigned long)code, addr);
         }
         void* frames[40];
         const USHORT n = CaptureStackBackTrace(0, 40, frames, nullptr);
-        fprintf(stderr, "ланцюжок викликів (%d):\n", (int)n);
+        rlog("ланцюжок викликів (%d):", (int)n);
         for (USHORT i = 0; i < n; ++i) {
             HMODULE m = nullptr;
             char mn[MAX_PATH] = "?";
@@ -45,13 +51,12 @@ LONG CALLBACK crash_veh(EXCEPTION_POINTERS* ep) {
                                    (LPCSTR)frames[i], &m) && m) {
                 GetModuleFileNameA(m, mn, sizeof mn);
                 const char* base = strrchr(mn, '\\');
-                fprintf(stderr, "  [%02d] %s+0x%llX\n", (int)i, base ? base + 1 : mn,
-                        (unsigned long long)((char*)frames[i] - (char*)m));
+                rlog("  [%02d] %s+0x%llX", (int)i, base ? base + 1 : mn,
+                     (unsigned long long)((char*)frames[i] - (char*)m));
             } else {
-                fprintf(stderr, "  [%02d] %p\n", (int)i, frames[i]);
+                rlog("  [%02d] %p", (int)i, frames[i]);
             }
         }
-        fflush(stderr);
     }
     return EXCEPTION_CONTINUE_SEARCH;
 }
