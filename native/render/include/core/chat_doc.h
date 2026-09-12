@@ -84,7 +84,7 @@ std::string message_html(const ChatMessage& m, const std::vector<std::string>& l
 // Повний документ під одне повідомлення: базові стилі + свій CSS користувача +
 // сам рядок. Саме його віддаємо litehtml.
 std::string message_document(const ChatMessage& m, const std::vector<std::string>& layout,
-                             const std::string& user_css,
+                             const std::string& user_css, float zoom,
                              const ImageReady& ready = ImageReady());
 
 // Екранування тексту, що йде в розмітку. Те саме, що esc() на сторінці.

@@ -95,7 +95,8 @@ std::string inject_shadow_channel(const std::string& css);
 // «filter: drop-shadow(…)» → «text-shadow: …».
 std::string translate_drop_shadow(const std::string& css);
 // Стилі, пристосовані до litehtml: обидва перетворення разом.
-std::string adapt_css(const std::string& css);
+// zoom — множник кегля («A+»/«A−»). Одиниця означає «нічого не чіпати».
+std::string adapt_css(const std::string& css, float zoom = 1.0f);
 // Дістає тінь, оголошену для всієї сторінки (правило body).
 TextShadow parse_text_shadow(const std::string& css);
 // Дістає тінь із токена, який приїхав каналом text-emphasis-style.

@@ -455,7 +455,8 @@ std::string message_html(const ChatMessage& m, const std::vector<std::string>& l
 }
 
 std::string message_document(const ChatMessage& m, const std::vector<std::string>& layout,
-                             const std::string& user_css, const ImageReady& ready) {
+                             const std::string& user_css, float zoom,
+                             const ImageReady& ready) {
     // Свій CSS іде ОКРЕМИМ тегом і НИЖЧЕ базового: так будь-яке правило
     // перебиває типове без !important, а «скинути до типових» — це просто
     // спорожнити цей тег.
@@ -471,9 +472,9 @@ std::string message_document(const ChatMessage& m, const std::vector<std::string
     // каналом, а vertical-align із довжиною перекладаємо у відносне зміщення —
     // ні того, ні того litehtml не знає (див. adapt_css).
     std::string out = "<!doctype html><html><head><meta charset=\"utf-8\"><style>";
-    out += adapt_css(BASE_CSS);
+    out += adapt_css(BASE_CSS, zoom);
     out += "</style><style id=\"userCss\">";
-    out += adapt_css(safe);
+    out += adapt_css(safe, zoom);
     out += "</style></head><body>";
     out += message_html(m, layout, ready);
     out += "</body></html>";

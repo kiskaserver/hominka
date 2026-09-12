@@ -312,7 +312,7 @@ bool Feed::ensure_layout(Item* it) {
     const ImageReady ready = [this](const std::string& url) {
         return images_->get(url) != nullptr;
     };
-    const std::string html = message_document(it->msg, layout_, css_, ready);
+    const std::string html = message_document(it->msg, layout_, css_, zoom_, ready);
 
     container_.set_text_shadow(shadow_);
     container_.set_base_font_size(20.0f * zoom_);

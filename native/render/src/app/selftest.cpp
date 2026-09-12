@@ -96,7 +96,7 @@ int selftest(const wchar_t* in_path, const wchar_t* out_path, int width) {
         if (!jm.is_object()) continue;
         const ChatMessage m = message_from_json(jm);
         if (g_dump_html) {
-            const std::string html = message_document(m, layout, user_css);
+            const std::string html = message_document(m, layout, user_css, zoom);
             fwrite(html.data(), 1, html.size(), stdout);
         }
         feed.add(m, 0);

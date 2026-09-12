@@ -375,7 +375,95 @@ std::string translate_drop_shadow(const std::string& css) {
     return out;
 }
 
-std::string adapt_css(const std::string& css) {
+// Кегль: множимо ПІКСЕЛІ в розмірах шрифта.
+//
+// Чому не досить «типового розміру шрифта» в контейнері, який ми й так
+// виставляли. Тому що і базова тема, і будь-яка чужа задає розмір абсолютним
+// числом — body { font: 20px/1.35 … }, — і типовий розмір у такому документі
+// не бере участі взагалі. Саме через це «A+» і «A−» не робили нічого: число
+// доходило до стрічки, доходило до контейнера, і там його перебивав перший же
+// рядок CSS. Видно це було й на самоперевірці: полотно з п'яти повідомлень
+// мало ту саму висоту при 0.5, 1.0 і 2.0.
+//
+// Чіпаємо лише font, font-size і line-height: підпис під кнопками каже
+// «Текст», а не «усе вікно», тож поля й скруглення лишаються як задумав автор
+// теми. Відносні одиниці (em, %) масштабуються самі — вони рахуються від
+// батька, а корінь ми вже помножили.
+std::string scale_font_px(const std::string& css, float zoom) {
+    if (zoom > 0.999f && zoom < 1.001f) return css;
+
+    static const char* kProps[] = {"font-size", "line-height", "font"};
+    std::string out;
+    out.reserve(css.size() + 64);
+
+    size_t pos = 0;
+    while (pos < css.size()) {
+        // Найближче з трьох оголошень попереду.
+        size_t at = std::string::npos;
+        size_t len = 0;
+        for (const char* p : kProps) {
+            const size_t n = strlen(p);
+            size_t i = pos;
+            for (;;) {
+                i = css.find(p, i);
+                if (i == std::string::npos) break;
+                // Саме властивість, а не хвіст іншого слова («font» у
+                // «font-family») і не частина назви.
+                const bool left = i == 0 || (!isalnum((unsigned char)css[i - 1]) &&
+                                             css[i - 1] != '-' && css[i - 1] != '_');
+                const char after = i + n < css.size() ? css[i + n] : '\0';
+                const bool right = after == ':' || after == ' ' || after == '\t';
+                if (left && right) break;
+                i += n;
+            }
+            if (i != std::string::npos && i < at) { at = i; len = n; }
+        }
+        if (at == std::string::npos) { out.append(css, pos, std::string::npos); break; }
+
+        const size_t colon = css.find(':', at + len);
+        if (colon == std::string::npos) { out.append(css, pos, std::string::npos); break; }
+        const size_t end = decl_end(css, colon);
+
+        out.append(css, pos, colon + 1 - pos);
+
+        // Значення: множимо кожне число з «px», решту лишаємо як є. Лапки
+        // пропускаємо цілком — назва шрифта може містити що завгодно.
+        const std::string val = css.substr(colon + 1, end - colon - 1);
+        size_t i = 0;
+        while (i < val.size()) {
+            const char c = val[i];
+            if (c == '"' || c == '\'') {
+                const size_t q = val.find(c, i + 1);
+                const size_t stop = q == std::string::npos ? val.size() : q + 1;
+                out.append(val, i, stop - i);
+                i = stop;
+                continue;
+            }
+            if (!isdigit((unsigned char)c) && !(c == '.' && i + 1 < val.size() &&
+                                                isdigit((unsigned char)val[i + 1]))) {
+                out += c;
+                ++i;
+                continue;
+            }
+            size_t j = i;
+            while (j < val.size() && (isdigit((unsigned char)val[j]) || val[j] == '.')) ++j;
+            if (val.compare(j, 2, "px") == 0 &&
+                (j + 2 >= val.size() || !isalnum((unsigned char)val[j + 2]))) {
+                char buf[32];
+                snprintf(buf, sizeof buf, "%.3fpx", atof(val.substr(i, j - i).c_str()) * zoom);
+                out += buf;
+                i = j + 2;
+            } else {
+                out.append(val, i, j - i);
+                i = j;
+            }
+        }
+        pos = end;
+    }
+    return out;
+}
+
+std::string adapt_css(const std::string& css, float zoom) {
     // Два перетворення, і обидва — про те, чого litehtml не знає:
     //   * filter: drop-shadow(…) стає звичайною тінню тексту;
     //   * text-shadow (і своя, і щойно зроблена) їде каналом до контейнера.
@@ -384,7 +472,7 @@ std::string adapt_css(const std::string& css) {
     // «vertical-align: <довжина>» тут колись теж перекладалася (у
     // position:relative), але тепер її розуміє сам litehtml — див. латку в
     // native/patches/.
-    return inject_shadow_channel(translate_drop_shadow(css));
+    return inject_shadow_channel(translate_drop_shadow(scale_font_px(css, zoom)));
 }
 
 TextShadow parse_text_shadow(const std::string& css) {
