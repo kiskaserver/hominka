@@ -1,5 +1,6 @@
 #include "ui/chrome.h"
 
+#include <cfloat>
 #include <cmath>
 #include <cstdio>
 
@@ -120,6 +121,10 @@ void Chrome::draw_backdrop(ID2D1DeviceContext* d2d, int w, int h, const Look& lo
     // повзунок «Тло» переставав робити будь-що — при тому, що людині якраз і
     // потрібне було тло без рамки, зокрема поверх гри. Тепер тло веде свій
     // повзунок (нуль — немає), рамку веде свій перемикач.
+    // Замкнене вікно може лишатися зовсім чистим — самі повідомлення поверх
+    // гри, без підкладки й без зеленої рамки. Це окреме налаштування, бо
+    // «не заважай мишею» й «не заважай очам» — різні бажання.
+    if (look.locked && !look.lock_bg) return;
     const bool bg = look.bg_alpha > 0.001f;
     if (!bg && look.frameless) return;
 
@@ -171,8 +176,11 @@ bool Chrome::poll_hover(HWND hwnd, bool blocked) {
 
 void Chrome::begin_intro(int ms) { intro_until_ = GetTickCount64() + (unsigned long long)ms; }
 
-bool Chrome::visible(bool locked, bool header) const {
-    if (locked) return false;          // замкнене вікно керування не показує
+bool Chrome::visible(const Look& look, bool header) const {
+    // Замкнене вікно керування зазвичай не показує: миша крізь нього проходить,
+    // і кнопки все одно не натиснути. Але побачити смужку — назву, замок, число
+    // глядачів — хочуть і під замком, тож це вмикається окремо.
+    if (look.locked) return look.lock_header;
     return header || hovered_ || intro_active();
 }
 
@@ -265,10 +273,16 @@ ChromeEvents Chrome::draw_controls(int w, int h, Look* look, HWND hwnd,
     ImGui_ImplWin32_NewFrame();
 
     // Позицію курсора віддаємо ImGui самі — див. poll_hover().
-    ImGui::GetIO().AddMousePosEvent((float)mouse_.x, (float)mouse_.y);
+    //
+    // Замкненому вікну — не віддаємо: миша крізь нього проходить, кнопки не
+    // спрацюють, і підсвітка під курсором обіцяла б те, чого не буде. Кнопка,
+    // яка світиться, але не натискається, дратує більше за кнопку, що чесно
+    // не реагує.
+    if (look->locked) ImGui::GetIO().AddMousePosEvent(-FLT_MAX, -FLT_MAX);
+    else ImGui::GetIO().AddMousePosEvent((float)mouse_.x, (float)mouse_.y);
     ImGui::NewFrame();
 
-    const bool show = visible(look->locked, header);
+    const bool show = visible(*look, header);
     // Замкнене вікно кнопок не показує — але в перші секунди після запуску воно
     // все одно має сказати, що воно тут. Інакше замкнена й порожня Hominka на
     // вигляд нічим не відрізняється від незапущеної.
@@ -613,7 +627,7 @@ ChromeEvents Chrome::draw_controls(int w, int h, Look* look, HWND hwnd,
     // Показувати їх чи ні — вибір стримера, і він не має залежати від того, чи
     // ввімкнена смужка: це два різні рішення. Тож коли смужки немає, число
     // живе своєю плашкою в правому верхньому куті.
-    if (!show && !viewers.empty() && !look->locked) {
+    if (!show && !viewers.empty() && (!look->locked || look->lock_viewers)) {
         ImDrawList* dl = ImGui::GetWindowDrawList();
         const ImVec2 org = ImGui::GetWindowPos();
         const ImVec2 sz = ImGui::CalcTextSize(viewers.c_str());

@@ -439,11 +439,16 @@ int run_overlay() {
         const bool upd_ready = updater.state() == Updater::State::Available ||
                                updater.state() == Updater::State::Ready;
         const bool chrome_visible =
-            chrome.visible(look.locked, cfg.header) || chrome.intro_active();
+            chrome.visible(look, cfg.header) || chrome.intro_active();
         char sig[320];
-        snprintf(sig, sizeof sig, "%d%d%d%d%d%d%d|%s", (int)chrome_visible,
+        snprintf(sig, sizeof sig, "%d%d%d%d%d%d%d%d%d%d|%s", (int)chrome_visible,
                  (int)chrome.hovered(), (int)look.locked, (int)look.frameless,
                  (int)(look.opacity * 100.0f), (int)(look.bg_alpha * 100.0f),
+                 // Вимикачі замка теж сюди: під замком вони не міняють ані
+                 // видимості смужки, ані рядка глядачів, і без них перемикач у
+                 // налаштуваннях не давав би жодного кадру — на екрані лишалося
+                 // б те саме, що було.
+                 (int)look.lock_bg, (int)look.lock_viewers, (int)look.lock_header,
                  (int)upd_ready, vline.c_str());
         const bool bar_changed = bar_sig != sig;
         if (bar_changed) bar_sig = sig;
@@ -472,7 +477,7 @@ int run_overlay() {
             feed.set_alpha(look.opacity);
             // Місце під смужку лишаємо лише тоді, коли вона там справді буде:
             // увімкнена — завжди, вимкнена — лише поки на вікно наведено.
-            const bool bar_now = chrome.visible(look.locked, cfg.header);
+            const bool bar_now = chrome.visible(look, cfg.header);
             feed.set_top_pad(bar_now ? (int)Chrome::bar_height() + 2 : 0);
             win.begin_draw();
             win.d2d()->Clear(D2D1::ColorF(0, 0, 0, 0));

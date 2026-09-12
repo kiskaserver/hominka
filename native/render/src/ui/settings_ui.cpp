@@ -77,14 +77,36 @@ void field_label(const char* s) {
 // Кольорова крапка стану. Малюємо самі, бо ані значка, ані картинки для цього
 // не треба — коло є коло.
 //
-// line_h — висота, ПО ЯКІЙ центруємо. Це не дрібниця: у рядку каналу поруч
-// стоїть поле вводу, і крапка, вирівняна по висоті тексту, висіла на сім
-// пікселів вище за сусідній напис.
-void dot(ImU32 color, float radius, float line_h) {
+// Порядок незвичний: спершу лишаємо під крапку місце (dot_hold), потім
+// малюємо напис — і аж тоді ставимо крапку навпроти нього (dot_at). Інакше
+// ніяк: «середину рядка» наперед не порахувати, бо висоту рядка задає
+// найвищий сусід — поле вводу, — а напис усередині неї стоїть по-своєму. Саме
+// звідси бралися ті три пікселі, на які «вимкнено» й «читаємо» сиділи нижче
+// за свої крапки.
+ImVec2 dot_hold(float radius, float line_h) {
     const ImVec2 p = ImGui::GetCursorScreenPos();
-    ImGui::GetWindowDrawList()->AddCircleFilled(
-        ImVec2(p.x + radius, p.y + line_h * 0.5f), radius, color);
     ImGui::Dummy(ImVec2(radius * 2.0f, line_h));
+    return p;
+}
+
+// Рівень, на якому око шукає крапку поруч із написом, який щойно намалювали.
+//
+// Не середина коробки шрифта, а середина малих літер: у «вимкнено» немає ні
+// виносних угору, ні хвостів униз, тож чорнило сидить нижче за ту середину —
+// і крапка, поставлена по коробці, здається задертою. Беремо коробку самої
+// літери «x»: це і є та смуга, яку бачить око, і міряється вона в поточному
+// шрифті, тож лишається правильною й тоді, коли кегль зміниться.
+float ink_center_y() {
+    const ImVec2 a = ImGui::GetItemRectMin();
+    if (ImFontBaked* baked = ImGui::GetFontBaked())
+        if (const ImFontGlyph* g = baked->FindGlyphNoFallback((ImWchar)'x'))
+            return a.y + (g->Y0 + g->Y1) * 0.5f;
+    return (a.y + ImGui::GetItemRectMax().y) * 0.5f;
+}
+
+void dot_at(const ImVec2& p, float radius, ImU32 color) {
+    ImGui::GetWindowDrawList()->AddCircleFilled(ImVec2(p.x + radius, ink_center_y()),
+                                                radius, color);
 }
 
 ImU32 dot_color(const SourceView& s) {
@@ -332,13 +354,14 @@ bool channel_row(const char* label, const char* hint, char* buf, size_t cap,
 
     ImGui::SameLine(0, 10);
     if (src) {
-        dot(dot_color(*src), 4.0f, ImGui::GetFrameHeight());
+        const ImVec2 dp = dot_hold(4.0f, ImGui::GetFrameHeight());
         ImGui::SameLine(0, 7);
         ImGui::AlignTextToFramePadding();
         if (!src->configured) text_col(TEXT_DIM, "вимкнено");
         else if (src->viewers_known) text_col(TEXT, src->viewers.c_str());
         else if (src->connected) text_col(TEXT_DIM, "читаємо");
         else text_col(TEXT_DIM, "…");
+        dot_at(dp, 4.0f, dot_color(*src));
         if (ImGui::IsItemHovered()) {
             if (src->viewers_known)
                 ImGui::SetTooltip("глядачів зараз%s%s", src->note.empty() ? "" : " · ",
@@ -444,6 +467,7 @@ void page_look(Config* cfg, SettingsEvents* ev) {
 
     const float slider_w = ImGui::GetContentRegionAvail().x - LABEL_W - 70.0f;
 
+
     ImGui::AlignTextToFramePadding();
     field_label("Прозорість");
     ImGui::SameLine(LABEL_W);
@@ -531,7 +555,38 @@ void page_look(Config* cfg, SettingsEvents* ev) {
         ev->changed = ev->look_changed = true;
     }
 
+    // Замок — це «не заважай мишею», а не «зникни». Далі думки розходяться:
+    // одному потрібне зовсім чисте вікно поверх гри, другому — число глядачів
+    // перед очима весь ефір. Тож не вгадуємо, а питаємо.
+    ImGui::Dummy(ImVec2(0, 14));
+    field_label("Коли вікно замкнене");
+    ImGui::Dummy(ImVec2(0, 2));
+    ImGui::Indent(10.0f);
+    // Свій простір імен: нижче є «Смужка згори», і такий самий підпис уже є
+    // вище, на рівні вікна. Для ImGui підпис — це ще й ідентифікатор, тож два
+    // однакові означали б два перемикачі з одним станом.
+    ImGui::PushID("lock");
+    if (toggle("Тло під чатом", &cfg->look.lock_bg,
+               "Підкладка й рамка. Вимкнено — поверх гри лишаються самі "
+               "повідомлення, без жодного прямокутника.")) {
+        ev->changed = ev->look_changed = true;
+    }
     ImGui::Dummy(ImVec2(0, 6));
+    if (toggle("Глядачі", &cfg->look.lock_viewers,
+               "Плашка з числом глядачів у кутку. Показується, лише поки "
+               "лічильник увімкнено в розділі «Канали».")) {
+        ev->changed = ev->look_changed = true;
+    }
+    ImGui::Dummy(ImVec2(0, 6));
+    if (toggle("Смужка згори", &cfg->look.lock_header,
+               "Заголовок із назвою, замком і повзунками. Видно його буде, а "
+               "натиснути — ні: під замком миша проходить крізь вікно.")) {
+        ev->changed = ev->look_changed = true;
+    }
+    ImGui::PopID();
+    ImGui::Unindent(10.0f);
+
+    ImGui::Dummy(ImVec2(0, 14));
     if (toggle("Поверх усіх вікон", &cfg->keep_top,
                "У рідкісних старих іграх це дає мерехтіння — тоді вимкніть."))
         ev->changed = true;
@@ -903,9 +958,10 @@ SettingsEvents draw_settings(SettingsState* st, Config* cfg,
         if (!s.configured) continue;
         if (!first) ImGui::SameLine(0, 16);
         first = false;
-        dot(dot_color(s), 3.5f, ImGui::GetTextLineHeight());
+        const ImVec2 dp = dot_hold(3.5f, ImGui::GetTextLineHeight());
         ImGui::SameLine(0, 7);
         text_col(s.connected ? TEXT : TEXT_DIM, s.name.c_str());
+        dot_at(dp, 3.5f, dot_color(s));
         if (ImGui::IsItemHovered() && !s.note.empty())
             ImGui::SetTooltip("%s", s.note.c_str());
     }

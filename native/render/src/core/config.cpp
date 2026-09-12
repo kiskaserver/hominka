@@ -126,6 +126,13 @@ void Config::load() {
     keep_top = flag(raw_, "keepTop", keep_top);
     header = flag(raw_, "header", header);
 
+    const json& lk = raw_.value("lock", json::object());
+    if (lk.is_object()) {
+        look.lock_bg = flag(lk, "bg", look.lock_bg);
+        look.lock_viewers = flag(lk, "viewers", look.lock_viewers);
+        look.lock_header = flag(lk, "header", look.lock_header);
+    }
+
     youtube = str(raw_, "myChannel");
     twitch = str(raw_, "twitchChannel");
     kick = str(raw_, "kickChannel");
@@ -183,6 +190,9 @@ void Config::flush(bool force) {
     raw_["frameless"] = look.frameless;
     raw_["keepTop"] = keep_top;
     raw_["header"] = header;
+    raw_["lock"] = {{"bg", look.lock_bg},
+                    {"viewers", look.lock_viewers},
+                    {"header", look.lock_header}};
     raw_["myChannel"] = youtube;
     raw_["twitchChannel"] = twitch;
     raw_["kickChannel"] = kick;

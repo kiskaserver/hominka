@@ -229,6 +229,8 @@ void ChromeBL::draw_backdrop(BLContext* ctx, int w, int h, const Look& look) con
     // Тло й рамка — ДВІ різні речі, і вимикаються окремо. Те саме рішення, що
     // й у віконної рамки: тло веде свій повзунок і лишається завжди, зокрема
     // поверх гри; рамку веде свій перемикач.
+    // Замкнене вікно може лишатися зовсім чистим — див. Look::lock_bg.
+    if (look.locked && !look.lock_bg) return;
     const uint32_t a = (uint32_t)(look.bg_alpha * 255.0f + 0.5f);
     if (a) ctx->fill_round_rect(BLRect(0, 0, (double)w, (double)h), 10.0, 10.0,
                                 BLRgba32((a << 24) | 0x101014u));
@@ -264,7 +266,7 @@ ChromeEvents ChromeBL::draw_controls(BLContext* ctx, int w, int h, Look* look,
     // Смужку видно завжди, коли її ввімкнено в налаштуваннях; вимкнену — лише
     // під курсором. Замкнене вікно керування не показує взагалі: миша крізь
     // нього проходить, і кнопки все одно не натиснути.
-    if (look->locked || (!header && !hovered_)) {
+    if ((look->locked && !look->lock_header) || (!header && !hovered_)) {
         have_pressed_ = false;
         return ev;
     }
