@@ -367,8 +367,9 @@ void ContainerD2D::get_image_size(const char* src, const char* baseurl, litehtml
     sz.height = (litehtml::pixel_t)img->nat_height;
 }
 
-ID2D1Bitmap* ContainerD2D::bitmap_for(const Image* img) {
-    for (auto& kv : bitmaps_) if (kv.first == img) return kv.second;
+ID2D1Bitmap* ContainerD2D::bitmap_for(const std::string& url, const Image* img) {
+    auto it = bitmaps_.find(url);
+    if (it != bitmaps_.end()) return it->second;
     if (!rt_ || !img || !img->ok()) return nullptr;
 
     const ImageFrame& f = img->frames[0];
@@ -378,12 +379,22 @@ ID2D1Bitmap* ContainerD2D::bitmap_for(const Image* img) {
     if (FAILED(rt_->CreateBitmap(D2D1::SizeU((UINT32)f.width, (UINT32)f.height),
                                  f.bgra.data(), (UINT32)(f.width * 4), &props, &bmp)))
         return nullptr;
-    bitmaps_.push_back({img, bmp});
+    bitmaps_[url] = bmp;
     return bmp;
 }
 
-void ContainerD2D::blit(const litehtml::background_layer& layer, const Image* img) {
-    ID2D1Bitmap* bmp = bitmap_for(img);
+// Кеш картинок викинув адресу — викидаємо й текстуру. Інакше вона лишалася б
+// висіти до кінця кадру життя вікна й показувала б старе.
+void ContainerD2D::forget_image(const std::string& url) {
+    auto it = bitmaps_.find(url);
+    if (it == bitmaps_.end()) return;
+    if (it->second) it->second->Release();
+    bitmaps_.erase(it);
+}
+
+void ContainerD2D::blit(const std::string& url, const litehtml::background_layer& layer,
+                        const Image* img) {
+    ID2D1Bitmap* bmp = bitmap_for(url, img);
     if (!bmp) return;
 
     const D2D1_RECT_F clip = to_rect(layer.clip_box);
@@ -437,7 +448,7 @@ void ContainerD2D::draw_image(litehtml::uint_ptr hdc, const litehtml::background
         if (s.w > 0 && s.h > 0) sprites_.push_back(std::move(s));
         return;
     }
-    blit(layer, img);
+    blit(url, layer, img);
 }
 
 std::vector<Sprite> ContainerD2D::take_sprites() {

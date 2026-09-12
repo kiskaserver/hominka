@@ -293,6 +293,10 @@ bool ImageCache::put(const std::string& url, const uint8_t* data, size_t len) {
     img.used = ++tick_;
     // Кладемо навіть невдалу: інакше кожен наступний кадр знову просив би в
     // Python те, що вже приходило й не розібралося.
+    //
+    // Якщо за цією адресою вже щось лежало, зроблені з нього текстури рядків
+    // показують старі пікселі — попереджаємо, доки стара картинка ще жива.
+    if (evict_ && items_.find(url) != items_.end()) evict_(url);
     items_[url] = std::move(img);
     return ok;
 }

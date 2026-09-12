@@ -61,6 +61,11 @@ public:
     const char* get_default_font_name() const override;
     void draw_list_marker(litehtml::uint_ptr hdc, const litehtml::list_marker& marker) override;
     void load_image(const char* src, const char* baseurl, bool redraw_on_ready) override;
+
+    // Пара до такого самого в D2D-контейнері. Тут текстур немає — малюємо
+    // прямо з кадрів картинки, — тож і забувати нічого. Метод лишається, бо
+    // стрічка одна на дві системи.
+    void forget_image(const std::string&) {}
     void get_image_size(const char* src, const char* baseurl, litehtml::size& sz) override;
     void draw_image(litehtml::uint_ptr hdc, const litehtml::background_layer& layer,
                     const std::string& url, const std::string& base_url) override;

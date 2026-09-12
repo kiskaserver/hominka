@@ -21,6 +21,7 @@
 #include <dwrite.h>
 
 #include <functional>
+#include <map>
 #include <string>
 #include <vector>
 
@@ -78,6 +79,10 @@ public:
     const char* get_default_font_name() const override;
     void draw_list_marker(litehtml::uint_ptr hdc, const litehtml::list_marker& marker) override;
     void load_image(const char* src, const char* baseurl, bool redraw_on_ready) override;
+
+    // Забути текстуру за адресою — кличе стрічка, коли кеш картинок викинув
+    // або замінив саму картинку.
+    void forget_image(const std::string& url);
     void get_image_size(const char* src, const char* baseurl, litehtml::size& sz) override;
     void draw_image(litehtml::uint_ptr hdc, const litehtml::background_layer& layer,
                     const std::string& url, const std::string& base_url) override;
@@ -139,8 +144,9 @@ private:
     IDWriteTextLayout* layout_for(const std::wstring& w, const Font* f);
     ID2D1SolidColorBrush* brush(const D2D1_COLOR_F& c);
     // Малює картинку в origin_box, обрізаючи по clip_box; повторення враховує.
-    void blit(const litehtml::background_layer& layer, const Image* img);
-    ID2D1Bitmap* bitmap_for(const Image* img);
+    void blit(const std::string& url, const litehtml::background_layer& layer,
+              const Image* img);
+    ID2D1Bitmap* bitmap_for(const std::string& url, const Image* img);
 
     IDWriteFactory* dw_ = nullptr;          // не володіємо
     ImageCache* images_ = nullptr;          // не володіємо
@@ -164,7 +170,14 @@ private:
     std::vector<Font*> fonts_;
     // Кеш «картинка → текстура D2D». Прив'язаний до render target, тому
     // скидається в begin(), якщо target змінився.
-    std::vector<std::pair<const Image*, ID2D1Bitmap*>> bitmaps_;
+    // Ключ — АДРЕСА картинки, а не вказівник на неї.
+    //
+    // Вказівник тут був пасткою: картинки живуть у std::map всередині кешу, і
+    // коли запис звідти викидають (скінчилася межа памʼяті) або замінюють
+    // новими байтами, наступна картинка цілком може лягти за тією ж адресою —
+    // і рядок дістав би чужу текстуру. Адреса ж унікальна й переживає будь-яке
+    // перекладання в кеші.
+    std::map<std::string, ID2D1Bitmap*> bitmaps_;
     ID2D1RenderTarget* bitmaps_owner_ = nullptr;
 };
 

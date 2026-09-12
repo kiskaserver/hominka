@@ -263,6 +263,8 @@ std::set<std::string> Feed::animated_in_use() const {
 }
 
 void Feed::forget_image(const std::string& url) {
+    // Текстура рядка — теж копія картинки, і вона так само застаріла.
+    container_.forget_image(url);
     for (auto it = anim_.begin(); it != anim_.end(); ) {
         if (it->first.url == url) {
             gfx_release(it->second);
