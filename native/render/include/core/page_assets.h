@@ -90,6 +90,8 @@ body {
 .t { }
 .re { color:#a1a1aa; font-size:.8em; margin-right:.3em; }
 .em { height:1.5em; width:auto; vertical-align:-0.35em; margin:0 1px; }
+.gif { max-width:100%; max-height:4.5em; width:auto; height:auto;
+       vertical-align:-0.35em; margin:0 2px; border-radius:.35em; }
 .at { background:rgba(250,204,21,.22); color:#fde68a; border-radius:.3em; padding:0 .2em; }
 .sys { color:#e9d5ff; font-style:italic; font-size:.85em; }
 .paid { background:rgba(251,191,36,.16); border-left:3px solid #fbbf24;

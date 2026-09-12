@@ -133,6 +133,47 @@ std::vector<size_t> cp_offsets(const std::string& s) {
     return out;
 }
 
+// Тег gifs: «0-33|joSNxeswxuc74Juo8X|https://media4.giphy.com/…» → картинка.
+//
+// Гіфки в чаті Twitch з'явилися пізніше за все інше, і в тексті від них
+// лишається сама назва в дужках — те, що показує Twitch там, де картинку
+// намалювати нічим. Доки ми не читали цей тег, назва й лишалася: замість
+// гіфки в рядку стояло «[In Love hearts GIF by SpongeBob SquarePants]».
+//
+// Адресу беремо як є: документація окремо просить не чіпати її, бо в ній
+// підписані параметри.
+std::vector<Emote> parse_gifs(const std::string& raw, const std::string& text) {
+    std::vector<Emote> out;
+    if (raw.empty() || text.empty()) return out;
+    const std::vector<size_t> cp = cp_offsets(text);
+    const size_t len = cp.size() - 1;
+
+    size_t pos = 0;
+    while (pos <= raw.size()) {
+        size_t end = raw.find(',', pos);
+        const bool last = end == std::string::npos;
+        if (last) end = raw.size();
+        const std::string item = raw.substr(pos, end - pos);
+        pos = end + 1;
+
+        const size_t bar1 = item.find('|');
+        const size_t bar2 = bar1 == std::string::npos ? bar1 : item.find('|', bar1 + 1);
+        if (bar2 != std::string::npos) {
+            const std::string range = item.substr(0, bar1);
+            const std::string url = item.substr(bar2 + 1);
+            const size_t dash = range.find('-');
+            if (dash != std::string::npos && !url.empty()) {
+                const long a = strtol(range.substr(0, dash).c_str(), nullptr, 10);
+                const long b = strtol(range.substr(dash + 1).c_str(), nullptr, 10);
+                if (a >= 0 && b >= a && (size_t)b < len)
+                    out.push_back({text.substr(cp[a], cp[b + 1] - cp[a]), url, true});
+            }
+        }
+        if (last) break;
+    }
+    return out;
+}
+
 // Тег emotes: «25:0-4,12-16/1902:6-10» → картинки.
 std::vector<Emote> parse_emotes(const std::string& raw, const std::string& text) {
     std::vector<Emote> out;
@@ -441,6 +482,11 @@ void TwitchSource::handle_line(const std::string& line) {
         ev.msg.badge_icons = badges().twitch(room, tag(tags, "badges"));
 
         // Рідні емоути Twitch (тег emotes) плюс сторонні, знайдені в тексті.
+        // Гіфка йде повз набори сторонніх емоутів: її адреса вже повна, а
+        // шукати її код у тексті ще раз нема потреби — ми знаємо, де він.
+        for (const auto& g : parse_gifs(tag(tags, "gifs"), text))
+            ev.msg.emotes.push_back({g.code, g.url, true});
+
         std::vector<EmoteRef> refs;
         for (const auto& e : parse_emotes(tag(tags, "emotes"), text))
             refs.push_back({e.code, e.url});

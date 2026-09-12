@@ -31,9 +31,16 @@ namespace hominka {
 using ImageReady = std::function<bool(const std::string& url)>;
 
 // Емоут у тексті: код («Kappa») і адреса картинки.
+//
+// gif — це не емоут, а гіфка з чату Twitch: у тезі gifs приходить адреса на
+// Giphy, а замість неї в тексті стоїть назва в дужках («[In Love hearts GIF by
+// SpongeBob SquarePants]»). Різниця для нас лише в двох речах: код у неї з
+// кількох слів, а розмір — не з рядок заввишки, а з картинку. Тому окремий
+// прапорець, а не окремий список: усе інше з нею робиться так само.
 struct Emote {
     std::string code;
     std::string url;
+    bool gif = false;
 };
 
 // Значок автора зі справжньою іконкою (Twitch/Kick/YouTube). Якщо іконки для

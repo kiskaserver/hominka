@@ -180,9 +180,9 @@ std::string text_part(const std::string& s) {
     return out;
 }
 
-std::string emote_img(const std::string& url, const std::string& code) {
-    return "<img class=\"em\" src=\"" + html_escape(url) + "\" alt=\"" +
-           html_escape(code) + "\">";
+std::string emote_img(const std::string& url, const std::string& code, bool gif) {
+    return std::string("<img class=\"") + (gif ? "gif" : "em") + "\" src=\"" +
+           html_escape(url) + "\" alt=\"" + html_escape(code) + "\">";
 }
 
 // Тіло повідомлення: текст плюс емоути. Порт body().
@@ -199,17 +199,37 @@ std::string message_body(const std::string& text, const std::vector<Emote>& emot
     // буває, а коли картинка приїде, наступний кадр намалює вже її.
     auto url_for = [&](const std::string& code) -> const std::string* {
         for (const auto& e : emotes) {
-            if (e.code.empty() || e.code != code) continue;
+            if (e.gif || e.code.empty() || e.code != code) continue;
             if (ready && !ready(e.url)) return nullptr;
             return &e.url;
         }
         return nullptr;
     };
 
+    // Гіфка займає в тексті не слово, а цілий шматок із пробілами («[In Love
+    // hearts GIF by SpongeBob SquarePants]»), тож шукати її по словах марно:
+    // порівнюємо весь залишок рядка з її назвою. Беремо найдовший збіг — назви
+    // бувають вкладені, і коротша з'їла б хвіст довшої.
+    auto gif_at = [&](size_t at) -> const Emote* {
+        const Emote* best = nullptr;
+        for (const auto& e : emotes) {
+            if (!e.gif || e.code.empty()) continue;
+            if (text.compare(at, e.code.size(), e.code) != 0) continue;
+            if (ready && !ready(e.url)) continue;
+            if (!best || e.code.size() > best->code.size()) best = &e;
+        }
+        return best;
+    };
+
     std::string out;
     out.reserve(text.size() + 64);
     size_t i = 0;
     while (i < text.size()) {
+        if (const Emote* g = gif_at(i)) {
+            out += emote_img(g->url, g->code, true);
+            i += g->code.size();
+            continue;
+        }
         // Проміжки віддаємо як є — вони теж частина розкладки рядка.
         int len = 0;
         unsigned cp = utf8_next(text, i, &len);
@@ -224,7 +244,7 @@ std::string message_body(const std::string& text, const std::vector<Emote>& emot
         }
         const std::string token = text.substr(start, i - start);
 
-        if (const std::string* u = url_for(token)) { out += emote_img(*u, token); continue; }
+        if (const std::string* u = url_for(token)) { out += emote_img(*u, token, false); continue; }
 
         // Відриваємо хвіст пунктуації і пробуємо ще раз.
         size_t b = token.size();
@@ -237,7 +257,7 @@ std::string message_body(const std::string& text, const std::vector<Emote>& emot
         const std::string core = token.substr(0, b);
         if (b < token.size() && !core.empty()) {
             if (const std::string* u = url_for(core)) {
-                out += emote_img(*u, core);
+                out += emote_img(*u, core, false);
                 out += text_part(token.substr(b));
                 continue;
             }
@@ -361,6 +381,14 @@ std::vector<std::string> clean_layout(const std::vector<std::string>& layout) {
 
 // Рядкове поле JSON. Числа й булеві теж зводимо до рядка: Python могла
 // прислати «amount: 200», і це так само сума.
+// Прапорець із чужого JSON: усе, що не булеве, — «ні». value() тут не годиться,
+// бо на полі іншого типу він кидає, а падати через одне зайве поле в чужому
+// повідомленні нам нема за що.
+bool get_flag(const nlohmann::json& j, const char* key) {
+    auto it = j.find(key);
+    return it != j.end() && it->is_boolean() && it->get<bool>();
+}
+
 std::string get_str(const nlohmann::json& j, const char* key) {
     auto it = j.find(key);
     if (it == j.end() || it->is_null()) return "";
@@ -394,7 +422,9 @@ ChatMessage message_from_json(const nlohmann::json& j) {
     auto emotes = j.find("emotes");
     if (emotes != j.end() && emotes->is_array())
         for (const auto& e : *emotes)
-            if (e.is_object()) m.emotes.push_back({get_str(e, "code"), get_str(e, "url")});
+            if (e.is_object())
+                m.emotes.push_back({get_str(e, "code"), get_str(e, "url"),
+                                    get_flag(e, "gif")});
     return m;
 }
 
