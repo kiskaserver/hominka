@@ -462,8 +462,69 @@ void page_channels(SettingsState* st, Config* cfg, const std::vector<SourceView>
     ImGui::Unindent(LABEL_W);
 }
 
-void page_look(Config* cfg, SettingsEvents* ev) {
+// Тема з сайту: картка з назвою й двома кнопками.
+//
+// Малюємо її вгорі «Вигляду», а не окремим віконцем: модальне вікно поверх
+// чату під час стріму — останнє, чого хочеться, а тут воно лежить рівно там,
+// де людина й так міняє вигляд, і нікуди не поспішає.
+void theme_offer_card(const ThemeOffer& offer, SettingsEvents* ev) {
+    if (!offer.pending && !offer.installed) return;
+
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    const ImVec2 p0 = ImGui::GetCursorScreenPos();
+    const float width = ImGui::GetContentRegionAvail().x;
+
+    ImGui::BeginGroup();
+    ImGui::Dummy(ImVec2(0, 8));
+    ImGui::Indent(14.0f);
+
+    if (offer.installed) {
+        ImGui::AlignTextToFramePadding();
+        char line[256];
+        snprintf(line, sizeof line, "Тему «%s» встановлено.", offer.name.c_str());
+        text_col(TEXT, line);
+        if (offer.can_undo) {
+            ImGui::SameLine(0, 12);
+            if (ghost("Повернути попередній CSS", 220.0f)) ev->undo_theme = true;
+        }
+        ImGui::SameLine(0, 8);
+        if (ghost("Гаразд", 90.0f)) ev->cancel_theme = true;
+    } else if (offer.loading) {
+        ImGui::AlignTextToFramePadding();
+        text_col(TEXT_DIM, "hominka.app: беру тему…");
+    } else if (!offer.error.empty()) {
+        ImGui::AlignTextToFramePadding();
+        text_col(IM_COL32(248, 113, 113, 255), offer.error.c_str());
+        ImGui::SameLine(0, 12);
+        if (ghost("Закрити", 100.0f)) ev->cancel_theme = true;
+    } else {
+        char line[256];
+        snprintf(line, sizeof line, "Сайт пропонує тему «%s».", offer.name.c_str());
+        ImGui::AlignTextToFramePadding();
+        text_col(TEXT, line);
+        dim_wrapped("Вона замінить твій нинішній CSS — його можна буде повернути, "
+                    "доки програма не закрита.");
+        ImGui::Dummy(ImVec2(0, 6));
+        if (ghost("Встановити", 140.0f)) ev->install_theme = true;
+        ImGui::SameLine(0, 8);
+        if (ghost("Не треба", 120.0f)) ev->cancel_theme = true;
+    }
+
+    ImGui::Unindent(14.0f);
+    ImGui::Dummy(ImVec2(0, 10));
+    ImGui::EndGroup();
+
+    // Підкладку малюємо ПІСЛЯ вмісту: до нього ми ще не знаємо, якої вона
+    // висоти, а знати треба — картка має обіймати саме те, що в ній лежить.
+    const ImVec2 p1(p0.x + width, ImGui::GetItemRectMax().y);
+    dl->AddRectFilled(p0, p1, IM_COL32(168, 85, 247, 28), 10.0f);
+    dl->AddRect(p0, p1, IM_COL32(168, 85, 247, 90), 10.0f);
+    ImGui::Dummy(ImVec2(0, 14));
+}
+
+void page_look(Config* cfg, const ThemeOffer& offer, SettingsEvents* ev) {
     page_title("Вигляд", "Як виглядає вікно чату. Змінюється одразу — дивіться на нього.");
+    theme_offer_card(offer, ev);
 
     const float slider_w = ImGui::GetContentRegionAvail().x - LABEL_W - 70.0f;
 
@@ -867,6 +928,7 @@ void settings_style() {
 SettingsEvents draw_settings(SettingsState* st, Config* cfg,
                              const std::vector<SourceView>& sources,
                              const UpdateView& upd, const GameView& game,
+                             const ThemeOffer& offer,
                              const std::string& facts, int w, int h) {
     SettingsEvents ev;
     if (!st->synced) st->sync(*cfg);
@@ -940,7 +1002,7 @@ SettingsEvents draw_settings(SettingsState* st, Config* cfg,
                                     : ImGuiWindowFlags_None);
     switch (st->page) {
     case 0: page_channels(st, cfg, sources, &ev); break;
-    case 1: page_look(cfg, &ev); break;
+    case 1: page_look(cfg, offer, &ev); break;
     case 2: page_game(st, cfg, game, &ev); break;
     case 3: page_update(cfg, upd, &ev); break;
     default: page_about(facts); break;

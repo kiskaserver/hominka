@@ -140,6 +140,7 @@ RENDER_SRC="
     $SRC/render/src/net/viewers.cpp
 
     $SRC/render/src/platform/gamewin.cpp
+    $SRC/render/src/platform/urlscheme.cpp
     $SRC/render/src/platform/vklayer.cpp
 
     $SRC/render/src/ui/chrome.cpp

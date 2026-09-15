@@ -87,6 +87,23 @@ struct GameView {
     bool injected = false;
 };
 
+// Тема, яку пропонує сайт: людина клацнула «Встановити» на hominka.app, і
+// Windows передала нам посилання hominka://theme/<ім'я>.
+//
+// Ставимо не мовчки. Тема — це весь вигляд чату, і підмінити його без питання
+// означало б зробити з посилання зброю: досить підсунути його стрімеру в чат.
+// Тому показуємо картку з назвою й двома кнопками, а попередній CSS тримаємо
+// напохваті, доки програма працює.
+struct ThemeOffer {
+    bool pending = false;      // є що показати
+    bool loading = false;      // ще качаємо з hominka.app
+    std::string id;
+    std::string name;          // «Аніме» — як її звуть на сайті
+    std::string error;         // не викачалася: покажемо причину, а не тишу
+    bool installed = false;    // щойно поставили
+    bool can_undo = false;     // є що повертати
+};
+
 // Що людина зробила.
 struct SettingsEvents {
     bool changed = false;          // налаштування змінилися — зберегти
@@ -100,6 +117,10 @@ struct SettingsEvents {
     bool check_update = false;
     bool start_download = false;
     bool do_install = false;
+
+    bool install_theme = false;    // «Встановити» в картці теми
+    bool cancel_theme = false;     // «Не треба»
+    bool undo_theme = false;       // «Повернути попередній CSS»
 
     bool refresh_games = false;
     bool make_borderless = false;
@@ -119,6 +140,7 @@ void settings_style();
 SettingsEvents draw_settings(SettingsState* st, Config* cfg,
                              const std::vector<SourceView>& sources,
                              const UpdateView& upd, const GameView& game,
+                             const ThemeOffer& offer,
                              const std::string& facts, int w, int h);
 
 }  // namespace hominka

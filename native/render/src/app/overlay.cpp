@@ -2,9 +2,15 @@
 
 #include <psapi.h>
 
+#include <atomic>
 #include <cstdio>
+#include <cstdlib>
+#include <mutex>
 #include <string>
+#include <thread>
 #include <vector>
+
+#include <nlohmann/json.hpp>
 
 #include "app/offscreen.h"
 #include "app/runtime.h"
@@ -15,10 +21,12 @@
 #include "core/version.h"
 #include "gfx/imgcache.h"
 #include "net/chatnet.h"
+#include "net/net_http.h"
 #include "net/imgfetch.h"
 #include "net/viewers.h"
 #include "platform/frame_writer.h"
 #include "platform/gamewin.h"
+#include "platform/urlscheme.h"
 #include "ui/chrome.h"
 #include "ui/cssedit_ui.h"
 #include "ui/gui_win.h"
@@ -30,6 +38,93 @@
 namespace hominka {
 
 namespace {
+
+// Гачок повідомлень вікна чату.
+//
+// Гачок у вікна один, а бажаючих двоє: рамка (ImGui) і посилання hominka://,
+// яке нам передає інша копія програми. Тож спершу дивимося, чи це не воно, а
+// решту віддаємо рамці — як і було.
+LRESULT CALLBACK window_msg_hook(HWND h, UINT m, WPARAM w, LPARAM l, bool* handled) {
+    if (handle_copydata(m, (void*)l)) {
+        *handled = true;
+        return 1;              // ненуль: той бік по ньому й розуміє, що дійшло
+    }
+    return Chrome::msg_hook(h, m, w, l, handled);
+}
+
+// Качання теми з hominka.app в окремому потоці.
+//
+// Окремим — бо це мережа, а стрічка малюється тут же: чекати на відповідь
+// посеред кадру означало б підвісити чат на секунду-другу.
+class ThemeFetch {
+public:
+    ~ThemeFetch() { if (worker_.joinable()) worker_.join(); }
+
+    void start(const std::string& id) {
+        if (worker_.joinable()) worker_.join();
+        done_ = false;
+        id_ = id;
+        {
+            std::lock_guard<std::mutex> lock(mx_);
+            name_.clear();
+            css_.clear();
+            error_.clear();
+        }
+        worker_ = std::thread([this, id] { run(id); });
+    }
+
+    bool done() const { return done_; }
+    bool busy() const { return worker_.joinable() && !done_; }
+
+    void take(std::string* name, std::string* css, std::string* error) {
+        std::lock_guard<std::mutex> lock(mx_);
+        *name = name_;
+        *css = css_;
+        *error = error_;
+    }
+
+private:
+    void run(const std::string& id) {
+        // Адреса складається в нас, а не приходить у посиланні: з чужої
+        // сторінки можна попросити лише те, що лежить у нас на сайті.
+        //
+        // HOMINKA_SITE — для розробки: підставити свій сайт можна лише зі
+        // змінної середовища на власній машині, з мережі так не дотягнешся.
+        const char* site = getenv("HOMINKA_SITE");
+        const std::string base = site && *site ? site : "https://hominka.app";
+        const HttpResult r = http_get(base + "/api/theme/" + id + ".json", 20);
+        std::string name, css, error;
+        if (!r.ok()) {
+            error = r.status == 404
+                        ? "hominka.app такої теми не знає"
+                        : "не вийшло взяти тему з hominka.app: " +
+                              (r.status ? std::to_string(r.status) : r.error);
+        } else {
+            try {
+                const nlohmann::json d = nlohmann::json::parse(r.body);
+                if (d.contains("name") && d["name"].is_string())
+                    name = d["name"].get<std::string>();
+                if (d.contains("css") && d["css"].is_string())
+                    css = d["css"].get<std::string>();
+            } catch (const std::exception&) {
+            }
+            if (css.empty()) error = "відповідь hominka.app не розібралася";
+            if (name.empty()) name = id;
+        }
+        {
+            std::lock_guard<std::mutex> lock(mx_);
+            name_ = name;
+            css_ = css;
+            error_ = error;
+        }
+        done_ = true;
+    }
+
+    std::thread worker_;
+    std::atomic<bool> done_{false};
+    std::mutex mx_;
+    std::string id_, name_, css_, error_;
+};
 
 // --- самостійний режим ------------------------------------------------------
 //
@@ -286,7 +381,9 @@ int run_overlay() {
     // Рамка вікна. Обробник миші ставимо ДО показу вікна: інакше перші рухи
     // курсора повз ImGui, і перше натискання «не рахується».
     Chrome chrome;
-    DCompWindow::set_msg_hook(&Chrome::msg_hook);
+    // Ланцюжок: спершу дивимося, чи це не посилання від іншої копії, а вже
+    // потім віддаємо повідомлення рамці. Гачок у вікна один, тож інакше ніяк.
+    DCompWindow::set_msg_hook(&window_msg_hook);
     if (!chrome.init(win.hwnd(), win.d3d(), win.d3d_ctx())) {
         rlog("ImGui не піднявся — вихід");
         return 5;
@@ -329,6 +426,10 @@ int run_overlay() {
         // Замок вимикають і з клавіатури: вікно чату фокусу не бере, тож
         // єдиний спосіб — глобальне сполучення. Те саме, що було в Python.
         RegisterHotKey(nullptr, 1, MOD_CONTROL | MOD_ALT, VK_SPACE);
+        // «Встановити тему» на сайті — це посилання hominka://, і відкривати
+        // його має та копія, що зараз на диску. Тому щоразу: після оновлення
+        // шлях до програми інший.
+        register_url_scheme();
         rlog("самостійний режим: %s", net.status().c_str());
     }
 
@@ -367,6 +468,11 @@ int run_overlay() {
     bool force_frame = false;
     std::string bar_sig;
     InjectState inject;
+    ThemeOffer offer;
+    ThemeFetch theme_fetch;
+    std::string theme_css;             // приїхала, але ще не поставлена
+    std::string css_before_theme;      // що було до теми — щоб було куди вернутися
+    bool css_before_kept = false;
     FrameWriter writer;
     bool inject_was_on = false;
     std::vector<uint8_t> frame_px;
@@ -391,6 +497,39 @@ int run_overlay() {
             TranslateMessage(&msg);
             DispatchMessageW(&msg);
         }
+        // Посилання з сайту: або нас ним щойно підняли, або передала інша
+        // копія. Качаємо тему й показуємо картку в налаштуваннях — ставити
+        // чи ні, вирішує людина.
+        {
+            const std::string url = take_delivered_url();
+            const std::string id = url.empty() ? std::string() : theme_id_from_url(url);
+            if (!id.empty() && !theme_fetch.busy()) {
+                rlog("тема з сайту: %s", id.c_str());
+                offer = ThemeOffer();
+                offer.pending = true;
+                offer.loading = true;
+                offer.id = id;
+                offer.name = id;
+                theme_fetch.start(id);
+                // Показуємо саме там, де це відбувається, — на «Вигляді».
+                sstate.page = 1;
+                if (!gui.created())
+                    gui.create(L"HominkaSettings", L"Hominka — налаштування", 760, 560);
+                gui.show_beside(win.screen_rect());
+            } else if (!url.empty() && id.empty()) {
+                rlog("посилання не розібралося: %s", url.c_str());
+            }
+        }
+        if (offer.loading && theme_fetch.done()) {
+            std::string name, css, error;
+            theme_fetch.take(&name, &css, &error);
+            offer.loading = false;
+            offer.name = name;
+            offer.error = error;
+            theme_css = css;
+            if (!error.empty()) rlog("тема не приїхала: %s", error.c_str());
+        }
+
         bool changed = false;
         changed |= pump_chat(&net, &feed, &images, &fetch, now_ms());
         changed |= pump_images(&fetch, &images, &feed);
@@ -636,7 +775,7 @@ int run_overlay() {
                 const SettingsEvents sev =
                     draw_settings(&sstate, &cfg, source_view(net, viewers),
                                   update_view(updater),
-                                  game_view(games), about_facts(net, win),
+                                  game_view(games), offer, about_facts(net, win),
                                   gui.width(), gui.height());
                 // Знімок — ДО показу: у flip-моделі після Present задній буфер
                 // уже інший, і в PNG потрапила б порожнеча.
@@ -671,6 +810,32 @@ int run_overlay() {
                     look.zoom = cfg.look.zoom;
                     look.frameless = cfg.look.frameless;
                     feed.set_zoom(look.zoom);
+                }
+                // Тема з сайту: ставимо, відмовляємося, повертаємо назад.
+                if (sev.install_theme && !theme_css.empty()) {
+                    css_before_theme = cfg.custom_css;
+                    css_before_kept = true;
+                    cfg.custom_css = theme_css;
+                    cfg.save();
+                    feed.set_css(cfg.custom_css);
+                    force_frame = true;
+                    offer.pending = false;
+                    offer.installed = true;
+                    offer.can_undo = true;
+                    rlog("тему «%s» встановлено", offer.name.c_str());
+                }
+                if (sev.undo_theme && css_before_kept) {
+                    cfg.custom_css = css_before_theme;
+                    cfg.save();
+                    feed.set_css(cfg.custom_css);
+                    force_frame = true;
+                    offer = ThemeOffer();
+                    css_before_kept = false;
+                    rlog("попередній CSS повернуто");
+                }
+                if (sev.cancel_theme) {
+                    offer = ThemeOffer();
+                    theme_css.clear();
                 }
                 if (sev.sources_changed) {
                     net.apply(cfg);

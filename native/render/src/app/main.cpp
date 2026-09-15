@@ -34,6 +34,7 @@
 #include "app/overlay.h"
 #include "app/runtime.h"
 #include "app/selftest.h"
+#include "platform/urlscheme.h"
 #include "gfx/cssbits.h"
 
 namespace hominka {
@@ -71,6 +72,25 @@ int run(int argc, wchar_t** argv) {
                    !wcscmp(argv[i + 1], L"none")) {
             hominka::g_backdrop = false;
         }
+    }
+
+    // Посилання hominka://theme/<ім'я> — кнопка «Встановити» на сайті.
+    //
+    // Якщо програма вже працює, друге вікно тут ні до чого: передаємо
+    // посилання тій копії й тихо виходимо. Якщо не працює — піднімаємося як
+    // звичайно, а посилання обробимо, щойно буде кому.
+    for (int i = 1; i < argc; ++i) {
+        if (wcsncmp(argv[i], L"hominka://", 10) != 0) continue;
+        char url[1024] = {0};
+        narrow(argv[i], url, sizeof url);
+        if (hominka::forward_to_running(url)) {
+            CoUninitialize();
+            return 0;
+        }
+        hominka::deliver_url(url);
+        const int rc = hominka::run_overlay();
+        CoUninitialize();
+        return rc;
     }
 
     // Ключів немає — це звичайний запуск програми.

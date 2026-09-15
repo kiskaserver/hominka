@@ -58,6 +58,7 @@ SRCS="
     $SRC/render/src/update/updater_unix.cpp
 
     $SRC/render/src/platform/x11_window.cpp
+    $SRC/render/src/platform/urlscheme.cpp
 
     $SRC/render/src/ui/chrome_bl.cpp
     $SRC/render/src/ui/cssedit_ui.cpp
