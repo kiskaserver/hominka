@@ -506,8 +506,12 @@ int run_app() {
         if (gui.begin()) {
             const UpdateView upd = update_view(updater);
             GameView game;                  // чат усередині гри під Linux немає
+            // Теми з сайту ставляться посиланням hominka://, а його реєструє
+            // не програма, а .desktop у системі — під AppImage цього поки
+            // немає. Тож картка порожня, і панель її просто не малює.
+            ThemeOffer offer;
             const SettingsEvents sev =
-                draw_settings(&sstate, &cfg, source_view(net), upd, game,
+                draw_settings(&sstate, &cfg, source_view(net), upd, game, offer,
                               "Linux · нативний рендер", gui.width(), gui.height());
             gui.end();
             gui.drag(sev.title_active);
