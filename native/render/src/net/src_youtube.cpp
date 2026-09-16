@@ -428,28 +428,100 @@ void parse_actions(const json& actions, const std::string& channel_id,
     }
 }
 
+// Що людина вписала в поле «YouTube» → шлях на самому youtube.com.
+//
+// Вписати можуть що завгодно, і це нормально: «@нік», сам нік, UC-id,
+// посилання на канал, посилання на трансляцію, зі «/streams» у хвості й без.
+// Раніше все, що не починалося з «@» і не було рівно UC-id, приклеювалося до
+// «youtube.com/@» як є — і вставлене посилання перетворювалося на
+// «youtube.com/@https://www.youtube.com/@Нік/streams». Тобто поле, яке саме
+// обіцяє «@нік, посилання або UC…», приймало лише перше.
+std::string channel_path(const std::string& raw) {
+    std::string s = trimmed(raw);
+    if (s.empty()) return "";
+
+    // Відрізаємо схему й хост, якщо вони є.
+    const size_t scheme = s.find("://");
+    if (scheme != std::string::npos) s.erase(0, scheme + 3);
+    for (const char* host : {"www.youtube.com/", "m.youtube.com/", "youtube.com/"}) {
+        const size_t n = strlen(host);
+        if (s.size() > n && s.compare(0, n, host) == 0) { s.erase(0, n); break; }
+    }
+    while (!s.empty() && s[0] == '/') s.erase(0, 1);
+    // Хвіст на кшталт «?si=…» до шляху не належить.
+    const size_t q = s.find_first_of("?#");
+    if (q != std::string::npos) s.erase(q);
+
+    auto first_segment = [](const std::string& v) {
+        const size_t slash = v.find('/');
+        return slash == std::string::npos ? v : v.substr(0, slash);
+    };
+
+    // «channel/UC…», «c/Ім'я», «user/Ім'я» — залишаємо як є, лише без хвоста.
+    for (const char* kind : {"channel/", "c/", "user/"}) {
+        const size_t n = strlen(kind);
+        if (s.size() > n && s.compare(0, n, kind) == 0)
+            return std::string(kind) + first_segment(s.substr(n));
+    }
+
+    const std::string one = first_segment(s);
+    if (one.size() == 24 && one.compare(0, 2, "UC") == 0) return "channel/" + one;
+    if (one.empty()) return "";
+    return "@" + lstrip_at(one);
+}
+
+// Шлях у вигляді, придатному для запиту.
+//
+// Ніки на YouTube бувають будь-якими літерами, і «@ДаниилКириченко-ч8к» —
+// звичайний нік, а не крайній випадок. Сирі байти в адресі наш клієнт віддає
+// так, що YouTube відповідає 404 (curl, до речі, з тими самими байтами
+// отримує 200 — тож справа саме в нас). Кодуємо самі.
+//
+// Уже закодоване не чіпаємо: якщо людина скопіювала адресу з рядка браузера,
+// там лежить «%D0%94…», і закодувати відсоток ще раз означало б зробити з
+// нього «%25D0%2594» і той самий 404.
+std::string escape_path(const std::string& path) {
+    static const char* kHex = "0123456789ABCDEF";
+    auto is_hex = [](char c) {
+        return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F');
+    };
+    std::string out;
+    out.reserve(path.size() + 16);
+    for (size_t i = 0; i < path.size(); ++i) {
+        const unsigned char c = (unsigned char)path[i];
+        const bool safe = (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') ||
+                          (c >= '0' && c <= '9') || c == '-' || c == '.' || c == '_' ||
+                          c == '~' || c == '@' || c == '/';
+        if (safe) { out += (char)c; continue; }
+        if (c == '%' && i + 2 < path.size() && is_hex(path[i + 1]) && is_hex(path[i + 2])) {
+            out.append(path, i, 3);
+            i += 2;
+            continue;
+        }
+        out += '%';
+        out += kHex[c >> 4];
+        out += kHex[c & 15];
+    }
+    return out;
+}
+
 // Канал → адреса сторінки «зараз в ефірі».
 std::string live_url(const std::string& channel) {
-    std::string url;
-    if (channel.size() == 24 && channel.compare(0, 2, "UC") == 0) {
-        url = "https://www.youtube.com/channel/" + channel + "/live?hl=en";
-    } else if (!channel.empty() && channel[0] == '@') {
-        url = "https://www.youtube.com/" + channel + "/live?hl=en";
-    } else {
-        // Посилання на саму трансляцію: id у ньому вже є, шукати нічого.
-        for (const char* mark : {"v=", "youtu.be/", "/live/"}) {
-            const size_t i = channel.find(mark);
-            if (i == std::string::npos) continue;
-            const std::string id = channel.substr(i + strlen(mark), 11);
-            if (id.size() == 11 &&
-                id.find_first_not_of("ABCDEFGHIJKLMNOPQRSTUVWXYZ"
-                                     "abcdefghijklmnopqrstuvwxyz0123456789_-") ==
-                    std::string::npos)
-                return id;
-        }
-        url = "https://www.youtube.com/@" + lstrip_at(channel) + "/live?hl=en";
+    // Посилання на саму трансляцію: id у ньому вже є, шукати нічого.
+    for (const char* mark : {"v=", "youtu.be/", "/live/"}) {
+        const size_t i = channel.find(mark);
+        if (i == std::string::npos) continue;
+        const std::string id = channel.substr(i + strlen(mark), 11);
+        if (id.size() == 11 &&
+            id.find_first_not_of("ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+                                 "abcdefghijklmnopqrstuvwxyz0123456789_-") ==
+                std::string::npos)
+            return id;
     }
-    return url;
+
+    const std::string path = channel_path(channel);
+    if (path.empty()) return "";
+    return "https://www.youtube.com/" + escape_path(path) + "/live?hl=en";
 }
 
 // Канал → id трансляції, що ЗАРАЗ в ефірі. Порожньо, якщо ефіру немає: це

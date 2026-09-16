@@ -122,7 +122,11 @@ int run(int argc, wchar_t** argv) {
         hominka::g_draw_trace = true;
         rc = hominka::probe_litehtml();
     } else if (argc >= 4 && !wcscmp(argv[1], L"--nettest")) {
-        char plat[32] = {0}, ch[128] = {0};
+        // Канал може бути довгим: закодоване посилання на канал із кирилицею
+        // в ніку — це майже двісті байтів, і зі ста двадцятьма вісьмома воно
+        // мовчки обрізалося (перевірка на кириличному каналі саме на це й
+        // наткнулася, причому в самій перевірці, а не в програмі).
+        char plat[32] = {0}, ch[512] = {0};
         hominka::narrow(argv[2], plat, sizeof plat);
         hominka::narrow(argv[3], ch, sizeof ch);
         rc = hominka::nettest(plat, ch, argc >= 5 ? _wtoi(argv[4]) : 20);
