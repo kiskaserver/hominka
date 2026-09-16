@@ -28,7 +28,28 @@ std::wstring exe_path() {
     return buf;
 }
 
+// Те саме значення вже лежить? Тоді не чіпаємо.
+//
+// Не заради швидкості: запис у реєстр — це подія, яку бачать і антивіруси, і
+// системи поведінкового аналізу. Робити її на кожному старті, щоб записати те
+// саме, — дарма додавати собі підозрілості. А оновлення шлях міняє, тож
+// перевіряти таки треба щоразу.
+bool same_value(HKEY root, const wchar_t* path, const wchar_t* name,
+                const std::wstring& want) {
+    HKEY key = nullptr;
+    if (RegOpenKeyExW(root, path, 0, KEY_QUERY_VALUE, &key) != ERROR_SUCCESS) return false;
+    wchar_t buf[1024];
+    DWORD size = sizeof buf, type = 0;
+    const LSTATUS rc = RegQueryValueExW(key, name, nullptr, &type, (BYTE*)buf, &size);
+    RegCloseKey(key);
+    if (rc != ERROR_SUCCESS || type != REG_SZ) return false;
+    const size_t chars = size / sizeof(wchar_t);
+    std::wstring have(buf, chars ? chars - 1 : 0);   // без кінцевого нуля
+    return have == want;
+}
+
 bool set_key(HKEY root, const wchar_t* path, const wchar_t* name, const std::wstring& value) {
+    if (same_value(root, path, name, value)) return true;
     HKEY key = nullptr;
     if (RegCreateKeyExW(root, path, 0, nullptr, 0, KEY_WRITE, nullptr, &key, nullptr) !=
         ERROR_SUCCESS)
