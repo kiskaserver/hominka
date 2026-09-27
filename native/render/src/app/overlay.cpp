@@ -400,6 +400,9 @@ int run_overlay() {
     ImageFetch fetch;
     GuiWindow gui;
     SettingsState sstate;
+    // Windows уміє ховати вікно від захоплення екрана, тож перемикач «хай OBS
+    // бачить» тут доречний. На X11 такого немає — там панель його не показує.
+    sstate.can_hide_from_capture = true;
     GuiWindow css_win;
     CssEditState cstate;
     Demo demo;
@@ -426,6 +429,9 @@ int run_overlay() {
         // Замок вимикають і з клавіатури: вікно чату фокусу не бере, тож
         // єдиний спосіб — глобальне сполучення. Те саме, що було в Python.
         RegisterHotKey(nullptr, 1, MOD_CONTROL | MOD_ALT, VK_SPACE);
+        // «Хай OBS побачить» — теж із клавіатури, і з тієї ж причини: це
+        // роблять під час ефіру, не відкриваючи налаштувань.
+        RegisterHotKey(nullptr, 2, MOD_CONTROL | MOD_ALT, 'O');
         // «Встановити тему» на сайті — це посилання hominka://, і відкривати
         // його має та копія, що зараз на диску. Тому щоразу: після оновлення
         // шлях до програми інший.
@@ -490,8 +496,13 @@ int run_overlay() {
                 return 0;
             }
             if (msg.message == WM_HOTKEY) {
-                look.locked = !look.locked;
-                cfg.look.locked = look.locked;
+                if (msg.wParam == 2) {
+                    cfg.show_in_obs = !cfg.show_in_obs;
+                    rlog("OBS бачить вікно: %s", cfg.show_in_obs ? "так" : "ні");
+                } else {
+                    look.locked = !look.locked;
+                    cfg.look.locked = look.locked;
+                }
                 cfg.save();
             }
             TranslateMessage(&msg);
@@ -1029,6 +1040,10 @@ int run_overlay() {
         // не щокадру: раз на ~250 мс досить. У рідкісних старих іграх це дає
         // мерехтіння — на цей випадок є перемикач у налаштуваннях.
         if ((tick++ % 16) == 0 && cfg.keep_top) win.keep_topmost();
+        // Видимість для OBS: беремо з налаштувань щокадру, бо змінити її може
+        // і панель, і гаряча клавіша, а сам виклик нічого не робить, поки
+        // значення те саме.
+        win.set_capturable(cfg.show_in_obs);
         Sleep(16);
     }
 }

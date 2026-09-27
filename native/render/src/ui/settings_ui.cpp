@@ -522,7 +522,8 @@ void theme_offer_card(const ThemeOffer& offer, SettingsEvents* ev) {
     ImGui::Dummy(ImVec2(0, 14));
 }
 
-void page_look(Config* cfg, const ThemeOffer& offer, SettingsEvents* ev) {
+void page_look(SettingsState* st, Config* cfg, const ThemeOffer& offer,
+               SettingsEvents* ev) {
     page_title("Вигляд", "Як виглядає вікно чату. Змінюється одразу — дивіться на нього.");
     theme_offer_card(offer, ev);
 
@@ -655,6 +656,18 @@ void page_look(Config* cfg, const ThemeOffer& offer, SettingsEvents* ev) {
                "У рідкісних старих іграх це дає мерехтіння — тоді вимкніть."))
         ev->changed = true;
 
+    if (st->can_hide_from_capture) {
+        ImGui::Dummy(ImVec2(0, 6));
+        if (toggle("Хай OBS бачить це вікно", &cfg->show_in_obs,
+                   "Типово чат у кадр не потрапляє — у цьому й сенс. "
+                   "Увімкніть, якщо чат потрібен САМЕ в кадрі: у OBS додайте "
+                   "джерело «Захоплення вікна» → Hominka, метод «Windows 10 "
+                   "(1903 and up)», і кладіть чат у сцену куди хочете. "
+                   "Перемикається і з клавіатури: Ctrl+Alt+O. Вікно "
+                   "налаштувань лишається прихованим завжди."))
+            ev->changed = true;
+    }
+
     ImGui::Dummy(ImVec2(0, 12));
     if (ghost("Свій CSS для чату…", 200.0f)) ev->css_editor = true;
     ImGui::SameLine(0, 12);
@@ -664,8 +677,9 @@ void page_look(Config* cfg, const ThemeOffer& offer, SettingsEvents* ev) {
 
 void page_game(SettingsState* st, Config* cfg, const GameView& game, SettingsEvents* ev) {
     page_title("Чат поверх гри",
-               "Це вікно й так видно поверх майже будь-якої гри — і OBS його не знімає. "
-               "Нижче те, що потрібно, коли гра забирає екран собі.");
+               "Це вікно й так видно поверх майже будь-якої гри — і OBS його не знімає, "
+               "поки ви самі не дозволите. Нижче те, що потрібно, коли гра забирає "
+               "екран собі.");
 
     const float full = ImGui::GetContentRegionAvail().x;
 
@@ -1002,7 +1016,7 @@ SettingsEvents draw_settings(SettingsState* st, Config* cfg,
                                     : ImGuiWindowFlags_None);
     switch (st->page) {
     case 0: page_channels(st, cfg, sources, &ev); break;
-    case 1: page_look(cfg, offer, &ev); break;
+    case 1: page_look(st, cfg, offer, &ev); break;
     case 2: page_game(st, cfg, game, &ev); break;
     case 3: page_update(cfg, upd, &ev); break;
     default: page_about(facts); break;

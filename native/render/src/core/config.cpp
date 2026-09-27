@@ -124,6 +124,7 @@ void Config::load() {
     look.zoom = zoom_clamp(num(raw_, "zoom", look.zoom));
     look.frameless = flag(raw_, "frameless", look.frameless);
     keep_top = flag(raw_, "keepTop", keep_top);
+    show_in_obs = flag(raw_, "showInObs", show_in_obs);
     header = flag(raw_, "header", header);
 
     const json& lk = raw_.value("lock", json::object());
@@ -189,6 +190,7 @@ void Config::flush(bool force) {
     raw_["zoom"] = look.zoom;
     raw_["frameless"] = look.frameless;
     raw_["keepTop"] = keep_top;
+    raw_["showInObs"] = show_in_obs;
     raw_["header"] = header;
     raw_["lock"] = {{"bg", look.lock_bg},
                     {"viewers", look.lock_viewers},
