@@ -23,6 +23,7 @@
 #include <d2d1_1.h>
 
 #include <cstring>
+#include <string>
 #include <vector>
 
 namespace hominka {
@@ -65,6 +66,29 @@ public:
         wc.hCursor = LoadCursorW(nullptr, (LPCWSTR)IDC_ARROW);
         RegisterClassExW(&wc);
 
+        // Прихований власник. Потрібен рівно заради одного: OBS не показує
+        // в списку вікон нічого з WS_EX_TOOLWINDOW (libobs/util/windows/
+        // window-helpers.c, check_window_valid), а саме цей стиль тримає нас
+        // поза панеллю задач і Alt-Tab. Зняти стиль — і вікно з'явиться в
+        // списку, але разом із ним з'явиться кнопка в панелі задач.
+        //
+        // Власник вирішує обидва питання одразу: вікно, у якого є власник, не
+        // потрапляє ані в панель задач, ані в Alt-Tab — незалежно від
+        // TOOLWINDOW. На перелік вікон це не впливає: OBS дивиться лише на
+        // стилі. Сам власник ніколи не показується, тож і його в списку немає.
+        //
+        // Клас у власника свій: наш wnd_proc на WM_DESTROY робить
+        // PostQuitMessage, і вікно, яке нічого не малює, не повинно вміти
+        // завершити програму.
+        const std::wstring owner_cls = std::wstring(cls) + L"Owner";
+        WNDCLASSEXW oc = {sizeof(oc)};
+        oc.lpfnWndProc = DefWindowProcW;
+        oc.hInstance = inst;
+        oc.lpszClassName = owner_cls.c_str();
+        RegisterClassExW(&oc);
+        owner_ = CreateWindowExW(WS_EX_TOOLWINDOW, owner_cls.c_str(), L"", WS_POPUP,
+                                 0, 0, 0, 0, nullptr, nullptr, inst, nullptr);
+
         hwnd_ = CreateWindowExW(
             // TOPMOST      — поверх усього;
             // TOOLWINDOW   — не в панелі задач і не в Alt-Tab;
@@ -79,7 +103,7 @@ public:
             //                поверхні перенаправлення (інакше DComp не працює).
             WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE | WS_EX_TRANSPARENT
                 | WS_EX_LAYERED | WS_EX_NOREDIRECTIONBITMAP,
-            cls, title, WS_POPUP, 0, 0, 16, 16, nullptr, nullptr, inst, nullptr);
+            cls, title, WS_POPUP, 0, 0, 16, 16, owner_, nullptr, inst, nullptr);
         if (!hwnd_) return false;
         // Шарувате вікно не показується зовсім, доки йому не сказати, як себе
         // змішувати. Повна непрозорість на рівні вікна — а справжню прозорість
@@ -260,6 +284,16 @@ public:
     void set_capturable(bool on) {
         if (!hwnd_ || on == capturable_) return;
         SetWindowDisplayAffinity(hwnd_, on ? WDA_NONE : WDA_EXCLUDEFROMCAPTURE);
+        // Самої афінності мало. «Захоплення екрана» вікно після неї бачить, а
+        // от у списку вікон OBS його немає й не було: список пропускає все з
+        // WS_EX_TOOLWINDOW. Тож поки нас знімають окремим джерелом — стиль
+        // знімаємо, а поза панеллю задач і Alt-Tab нас тримає власник.
+        LONG_PTR ex = GetWindowLongPtrW(hwnd_, GWL_EXSTYLE);
+        ex = on ? (ex & ~WS_EX_TOOLWINDOW) : (ex | WS_EX_TOOLWINDOW);
+        SetWindowLongPtrW(hwnd_, GWL_EXSTYLE, ex);
+        SetWindowPos(hwnd_, nullptr, 0, 0, 0, 0,
+                     SWP_FRAMECHANGED | SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER |
+                         SWP_NOACTIVATE);
         capturable_ = on;
     }
     bool capturable() const { return capturable_; }
@@ -378,6 +412,8 @@ private:
     }
 
     HWND hwnd_ = nullptr;
+    // Прихований власник вікна — див. create(). Сам нічого не малює.
+    HWND owner_ = nullptr;
     ID3D11Device* dev_ = nullptr;
     ID3D11DeviceContext* ctx_ = nullptr;
     IDXGIFactory2* factory_ = nullptr;
