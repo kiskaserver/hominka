@@ -57,6 +57,22 @@ ENV TPL=/tpl
 COPY thirdparty_linux.sh /tmp/thirdparty_linux.sh
 RUN sh /tmp/thirdparty_linux.sh $TPL /tmp/patches
 
+# ccache - окремим шаром, і саме тут, після сторонніх бібліотек.
+#
+# Спершу він стояв у головному apt-get, і це коштувало десяти хвилин: рядок
+# змінився - і Docker перезібрав усе, що нижче, тобто litehtml, freetype,
+# mbedtls та решту. Дрібниця, яку ми міняємо, не повинна тягнути за собою те,
+# що збирається пів години.
+RUN apt-get update && apt-get install -y --no-install-recommends ccache \
+    && rm -rf /var/lib/apt/lists/*
+
 ENV SRC=/src
 COPY . /src
-RUN sh /src/build.sh /out
+
+# Кеш компілятора живе ПОЗА образом, у кеші BuildKit: інакше він зникав би
+# разом із шаром при кожній правці джерел, тобто не був би кешем узагалі.
+# Завдяки йому правка одного файлу перезбирає один файл, а не сорок.
+ENV CCACHE_DIR=/ccache
+ENV CCACHE_MAXSIZE=3G
+RUN --mount=type=cache,target=/ccache,sharing=locked \
+    sh /src/build.sh /out && ccache --show-stats | head -20

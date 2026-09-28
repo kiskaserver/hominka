@@ -11,6 +11,14 @@ SRC="${SRC:-/src}"
 OUT="${1:-$SRC/dist}"
 mkdir -p "$OUT"
 
+# Паралельна компіляція - у спільному файлі: те саме потрібне й Linux-збірці.
+. "$SRC/parallel.sh"
+
+# Компілятори кличемо через ccache: у Dockerfile його тека підмонтована як
+# кеш BuildKit і переживає збірки. Правка одного файлу перекомпілює один
+# файл, решта прилітає з кешу готовою.
+CC_="ccache "
+
 # -O2                звичайна оптимізація;
 # -s                 прибрати символи — DLL і так неофіційна, зайва вага ні до чого;
 # -static ...        вкласти рантайм GCC усередину, щоб на чужій машині не бракувало
@@ -63,32 +71,40 @@ build() {
         -o "$OUT/hominka-vklayer-$ARCH.dll" -Wl,--kill-at
 }
 
-build x86_64-w64-mingw32-g++ x64
-build i686-w64-mingw32-g++   x86
+# Дві розрядності незалежні одна від одної, як і тестові хости нижче, - тож
+# вони йдуть разом, а не одна за одною.
+bg build "${CC_}x86_64-w64-mingw32-g++" x64
+bg build "${CC_}i686-w64-mingw32-g++"   x86
 
 # Тестовий хост (лише x64): крихітна гра-макет на DX11, щоб було в що інжектити
 # під час перевірки. У випуск не входить, тому й окремо від build().
+testhost() {
+    name="$1"; shift
+    src="$1"; shift
+    ${CC_}x86_64-w64-mingw32-g++ -O2 -s -static -municode -mwindows $DLL_INC \
+        "$src" -o "$OUT/$name" "$@"
+}
+
 echo ">> x64: testhost.exe (для перевірки)"
-x86_64-w64-mingw32-g++ -O2 -s -static -municode -mwindows \
-    "$SRC/testhost/testhost.cpp" -o "$OUT/testhost-x64.exe" -ld3d11 -ldxgi
+bg testhost testhost-x64.exe "$SRC/testhost/testhost.cpp" -ld3d11 -ldxgi
 
 # DX9 збирається тим самим набором, що й решта. Джерело лежало тут від початку,
 # але в збірку не потрапляло — тому єдиний API, який ми жодного разу не
 # перевіряли на живому хості, був саме він.
 echo ">> x64: testhost-dx9.exe (для перевірки DX9)"
-x86_64-w64-mingw32-g++ -O2 -s -static -municode -mwindows     "$SRC/testhost/testhost_dx9.cpp" -o "$OUT/testhost-dx9-x64.exe" -ld3d9
+bg testhost testhost-dx9-x64.exe "$SRC/testhost/testhost_dx9.cpp" -ld3d9
 
 echo ">> x64: testhost-dx12.exe (для перевірки DX12)"
-x86_64-w64-mingw32-g++ -O2 -s -static -municode -mwindows \
-    "$SRC/testhost/testhost_dx12.cpp" -o "$OUT/testhost-dx12-x64.exe" -ld3d12 -ldxgi
+bg testhost testhost-dx12-x64.exe "$SRC/testhost/testhost_dx12.cpp" -ld3d12 -ldxgi
 
 echo ">> x64: testhost-gl.exe (для перевірки OpenGL)"
-x86_64-w64-mingw32-g++ -O2 -s -static -municode -mwindows \
-    "$SRC/testhost/testhost_gl.cpp" -o "$OUT/testhost-gl-x64.exe" -lopengl32 -lgdi32
+bg testhost testhost-gl-x64.exe "$SRC/testhost/testhost_gl.cpp" -lopengl32 -lgdi32
 
 echo ">> x64: testhost-vk.exe (для перевірки Vulkan)"
-x86_64-w64-mingw32-g++ -O2 -s -static -municode -mwindows $DLL_INC \
-    "$SRC/testhost/testhost_vk.cpp" -o "$OUT/testhost-vk-x64.exe"
+bg testhost testhost-vk-x64.exe "$SRC/testhost/testhost_vk.cpp"
+
+# Тут чекаємо: далі йде рендер, і він забере всі ядра собі.
+bg_wait
 
 # Нативний рендер чату (лише x64). Малює стрічку через litehtml + Direct2D —
 # замість Chromium. Потоки posix: litehtml користується std::mutex, а mingw за
@@ -176,14 +192,21 @@ RENDER_LIBS="/tmp/hominka-res.o -L$TP/lib -limgui -lfreetype -llitehtml -lgumbo 
 # GetCommandLineW. Ключ -municode тут НЕ ставимо: на цьому наборі компіляторів
 # він мовчки не міняє стартовий об'єкт, ld не знаходить wmainCRTStartup - і
 # .exe виходить порожнім, завершується нулем, не виконавши жодного рядка.
-echo ">> x64: hominka-render.exe (нативний рендер чату)"
-x86_64-w64-mingw32-g++-posix $COMMON -mwindows -std=c++17 $RENDER_INC $RENDER_SRC -o "$OUT/hominka-render-x64.exe" $RENDER_LIBS
+echo ">> x64: hominka-render.exe (нативний рендер чату) - $JOBS потоків"
+build_parallel "${CC_}x86_64-w64-mingw32-g++-posix" /tmp/obj-render \
+    "$COMMON -mwindows -std=c++17 $RENDER_INC" \
+    "$OUT/hominka-render-x64.exe" "$COMMON -mwindows" "$RENDER_LIBS" \
+    $RENDER_SRC
 
 # Та сама програма, але з символами й без -s: коли рендер падає, VEH друкує
 # зсув від початку модуля, а addr2line по ЦЬОМУ файлу перетворює його на
 # «файл:рядок». У випуск не входить — лише поруч у dist для розбору.
-echo ">> x64: hominka-render.debug.exe (символи для addr2line)"
-x86_64-w64-mingw32-g++-posix -O1 -g -static -static-libgcc -static-libstdc++     -mwindows -std=c++17 $RENDER_INC     $RENDER_SRC -o "$OUT/hominka-render.debug.exe" $RENDER_LIBS
+echo ">> x64: hominka-render.debug.exe (символи для addr2line) - $JOBS потоків"
+DEBUG_FLAGS="-O1 -g -static -static-libgcc -static-libstdc++"
+build_parallel "${CC_}x86_64-w64-mingw32-g++-posix" /tmp/obj-render-debug \
+    "$DEBUG_FLAGS -mwindows -std=c++17 $RENDER_INC" \
+    "$OUT/hominka-render.debug.exe" "$DEBUG_FLAGS -mwindows" "$RENDER_LIBS" \
+    $RENDER_SRC
 
 echo ""
 echo "Готово. У $OUT:"

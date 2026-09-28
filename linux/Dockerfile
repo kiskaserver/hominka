@@ -12,6 +12,7 @@ ENV DEBIAN_FRONTEND=noninteractive
 # немає — ані PySide6, ані PyInstaller, ані півсотні бібліотек Qt, які раніше
 # були умовою правильної збірки.
 RUN apt-get update && apt-get install -y --no-install-recommends \
+        ccache \
         python3 python3-pip \
         g++ make cmake git patch ca-certificates pkg-config \
         libfreetype-dev libfontconfig1-dev libx11-dev libxext-dev \
@@ -46,6 +47,12 @@ ENV APPIMAGE_EXTRACT_AND_RUN=1
 RUN wget -qO /usr/local/bin/appimagetool \
       https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-x86_64.AppImage \
  && chmod +x /usr/local/bin/appimagetool
+
+# Кеш компілятора. Ця збірка йде через docker run з bind-mount репозиторію,
+# а не через docker build, тож кеш-монта BuildKit тут не буде - зате /src
+# живе на хості й переживає контейнер. Тека в .gitignore.
+ENV CCACHE_DIR=/src/native/.ccache
+ENV CCACHE_MAXSIZE=3G
 
 WORKDIR /src
 

@@ -13,6 +13,14 @@ OUT="${1:-$SRC/dist}"
 TPL="${TPL:-/tpl}"
 mkdir -p "$OUT"
 
+# Паралельна компіляція - спільна з Windows-збіркою.
+. "$SRC/parallel.sh"
+
+# ccache тут кешує в теку самого репозиторію (див. linux/Dockerfile): ця
+# збірка йде через docker run з bind-mount, а не docker build, тож кеш-монтів
+# BuildKit тут немає, зате є /src.
+CC_="ccache "
+
 # -isystem для чужих заголовків: інакше -Wall -Wextra тонуть у попередженнях
 # litehtml і Blend2D, і серед них не видно наших.
 #
@@ -71,8 +79,10 @@ SRCS="
     $SRC/render/src/ui/uifont.cpp
 "
 
-echo ">> linux: hominka-render (нативний рендер чату)"
-g++ $COMMON $INC $SRCS -o "$OUT/hominka-render-linux" $LIBS
+echo ">> linux: hominka-render (нативний рендер чату) - $JOBS потоків"
+build_parallel "${CC_}g++" /tmp/obj-render-linux "$COMMON $INC" \
+    "$OUT/hominka-render-linux" "$COMMON" "$LIBS" \
+    $SRCS
 
 echo ""
 echo "Готово. У $OUT:"
