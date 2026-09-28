@@ -33,7 +33,9 @@ game without it, even while it sits on top of everything.
 ## Features
 
 - **Hidden from capture.** `WDA_EXCLUDEFROMCAPTURE` — the OS leaves the window
-  out of every capture API. Not a window-ordering trick.
+  out of every capture API. Not a window-ordering trick. And when you do want
+  the chat on stream, one switch (or Ctrl+Alt+O) turns it into an ordinary
+  window source you can place anywhere in your scene.
 - **One feed.** Twitch, Kick and YouTube at once, with platform icons, badges,
   replies, donations, Super Chats, raids and subs.
 - **Emotes that move.** 7TV, BetterTTV and FrankerFaceZ, animated — or frozen
